@@ -55,6 +55,8 @@ CREATE USER MAPPING FOR regress_file_fdw_superuser SERVER file_server;
 CREATE USER MAPPING FOR regress_no_priv_user SERVER file_server;
 
 -- validator tests
+CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (foo 'bar');  -- ERROR
+CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS ("a=b" 'true');  -- ERROR
 CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (format 'xml');  -- ERROR
 CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (format 'text', quote ':');          -- ERROR
 CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (format 'text', escape ':');         -- ERROR
@@ -77,6 +79,11 @@ CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (format 'csv', delimiter 
 ');       -- ERROR
 CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (format 'csv', null '
 ');       -- ERROR
+CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (on_error 'unsupported');       -- ERROR
+CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (format 'binary', on_error 'ignore');       -- ERROR
+CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (log_verbosity 'unsupported');       -- ERROR
+CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (reject_limit '1');       -- ERROR
+CREATE FOREIGN TABLE tbl () SERVER file_server OPTIONS (on_error 'ignore', reject_limit '0');       -- ERROR
 CREATE FOREIGN TABLE tbl () SERVER file_server;  -- ERROR
 
 \set filename :abs_srcdir '/data/agg.data'
@@ -150,6 +157,17 @@ SELECT * FROM agg_csv c JOIN agg_text t ON (t.a = c.a) ORDER BY c.a;
 -- error context report tests
 SELECT * FROM agg_bad;               -- ERROR
 
+-- on_error, log_verbosity and reject_limit tests
+ALTER FOREIGN TABLE agg_bad OPTIONS (ADD on_error 'ignore');
+SELECT * FROM agg_bad;
+ALTER FOREIGN TABLE agg_bad OPTIONS (ADD log_verbosity 'silent');
+SELECT * FROM agg_bad;
+ALTER FOREIGN TABLE agg_bad OPTIONS (ADD reject_limit '1'); -- ERROR
+SELECT * FROM agg_bad;
+ALTER FOREIGN TABLE agg_bad OPTIONS (SET reject_limit '2');
+SELECT * FROM agg_bad;
+ANALYZE agg_bad;
+
 -- misc query tests
 \t on
 SELECT explain_filter('EXPLAIN (VERBOSE, COSTS FALSE) SELECT * FROM agg_csv');
@@ -166,6 +184,7 @@ SELECT tableoid::regclass, b FROM agg_csv;
 INSERT INTO agg_csv VALUES(1,2.0);
 UPDATE agg_csv SET a = 1;
 DELETE FROM agg_csv WHERE a = 100;
+TRUNCATE agg_csv;
 -- but this should be allowed
 SELECT * FROM agg_csv FOR UPDATE;
 
@@ -231,6 +250,17 @@ CREATE FOREIGN TABLE gft1 (a int, b text, c text GENERATED ALWAYS AS ('foo') STO
 OPTIONS (format 'csv', filename :'filename', delimiter ',');
 SELECT a, c FROM gft1;
 DROP FOREIGN TABLE gft1;
+
+-- copy default tests
+\set filename :abs_srcdir '/data/copy_default.csv'
+CREATE FOREIGN TABLE copy_default (
+	id integer,
+	text_value text not null default 'test',
+	ts_value timestamp without time zone not null default '2022-07-05'
+) SERVER file_server
+OPTIONS (format 'csv', filename :'filename', default '\D');
+SELECT id, text_value, ts_value FROM copy_default;
+DROP FOREIGN TABLE copy_default;
 
 -- privilege tests
 SET ROLE regress_file_fdw_superuser;

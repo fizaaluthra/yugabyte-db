@@ -3,7 +3,7 @@
  * reloptions.c
  *	  Core support for relation options (pg_class.reloptions)
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -27,9 +27,7 @@
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
 #include "commands/tablespace.h"
-#include "commands/view.h"
 #include "nodes/makefuncs.h"
-#include "postmaster/postmaster.h"
 #include "utils/array.h"
 #include "utils/attoptcache.h"
 #include "utils/builtins.h"
@@ -41,15 +39,16 @@
 #include "access/transam.h"
 #include "commands/yb_tablegroup.h"
 #include "miscadmin.h"
+#include "pg_yb_utils.h"
 
 /*
  * Contents of pg_class.reloptions
  *
  * To add an option:
  *
- * (i) decide on a type (integer, real, bool, string), name, default value,
- * upper and lower bounds (if applicable); for strings, consider a validation
- * routine.
+ * (i) decide on a type (bool, integer, real, enum, string), name, default
+ * value, upper and lower bounds (if applicable); for strings, consider a
+ * validation routine.
  * (ii) add a record below (or use add_<type>_reloption).
  * (iii) add it to the appropriate options struct (perhaps StdRdOptions)
  * (iv) add it to the appropriate handling routine (perhaps
@@ -73,24 +72,24 @@
  * since they are only used by the AV procs and don't change anything
  * currently executing.
  *
- * Fillfactor can be set because it applies only to subsequent changes made to
- * data blocks, as documented in hio.c
+ * Fillfactor can be set at ShareUpdateExclusiveLock because it applies only to
+ * subsequent changes made to data blocks, as documented in hio.c
  *
  * n_distinct options can be set at ShareUpdateExclusiveLock because they
  * are only used during ANALYZE, which uses a ShareUpdateExclusiveLock,
  * so the ANALYZE will not be affected by in-flight changes. Changing those
  * values has no effect until the next ANALYZE, so no need for stronger lock.
  *
- * Planner-related parameters can be set with ShareUpdateExclusiveLock because
+ * Planner-related parameters can be set at ShareUpdateExclusiveLock because
  * they only affect planning and not the correctness of the execution. Plans
  * cannot be changed in mid-flight, so changes here could not easily result in
  * new improved plans in any case. So we allow existing queries to continue
  * and existing plans to survive, a small price to pay for allowing better
  * plans to be introduced concurrently without interfering with users.
  *
- * Setting parallel_workers is safe, since it acts the same as
- * max_parallel_workers_per_gather which is a USERSET parameter that doesn't
- * affect existing plans or queries.
+ * Setting parallel_workers at ShareUpdateExclusiveLock is safe, since it acts
+ * the same as max_parallel_workers_per_gather which is a USERSET parameter
+ * that doesn't affect existing plans or queries.
  *
  * vacuum_truncate can be set at ShareUpdateExclusiveLock because it
  * is only used during VACUUM, which uses a ShareUpdateExclusiveLock,
@@ -277,6 +276,15 @@ static relopt_int intRelOpts[] =
 	},
 	{
 		{
+			"autovacuum_vacuum_max_threshold",
+			"Maximum number of tuple updates or deletes prior to vacuum",
+			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+			ShareUpdateExclusiveLock
+		},
+		-2, -1, INT_MAX
+	},
+	{
+		{
 			"autovacuum_vacuum_insert_threshold",
 			"Minimum number of tuple inserts prior to vacuum, or -1 to disable insert vacuums",
 			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
@@ -357,8 +365,17 @@ static relopt_int intRelOpts[] =
 	{
 		{
 			"log_autovacuum_min_duration",
-			"Sets the minimum execution time above which autovacuum actions will be logged",
+			"Sets the minimum execution time above which vacuum actions by autovacuum will be logged",
 			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+			ShareUpdateExclusiveLock
+		},
+		-1, -1, INT_MAX
+	},
+	{
+		{
+			"log_autoanalyze_min_duration",
+			"Sets the minimum execution time above which analyze actions by autovacuum will be logged",
+			RELOPT_KIND_HEAP,
 			ShareUpdateExclusiveLock
 		},
 		-1, -1, INT_MAX
@@ -396,11 +413,7 @@ static relopt_int intRelOpts[] =
 			RELOPT_KIND_TABLESPACE,
 			ShareUpdateExclusiveLock
 		},
-#ifdef USE_PREFETCH
 		-1, 0, MAX_IO_CONCURRENCY
-#else
-		0, 0, 0
-#endif
 	},
 	{
 		{
@@ -409,11 +422,7 @@ static relopt_int intRelOpts[] =
 			RELOPT_KIND_TABLESPACE,
 			ShareUpdateExclusiveLock
 		},
-#ifdef USE_PREFETCH
 		-1, 0, MAX_IO_CONCURRENCY
-#else
-		0, 0, 0
-#endif
 	},
 	{
 		{
@@ -507,6 +516,16 @@ static relopt_real realRelOpts[] =
 		},
 		-1, 0.0, 100.0
 	},
+	{
+		{
+			"vacuum_max_eager_freeze_failure_rate",
+			"Fraction of pages in a relation vacuum can scan and fail to freeze before disabling eager scanning.",
+			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+			ShareUpdateExclusiveLock
+		},
+		-1, 0.0, 1.0
+	},
+
 	{
 		{
 			"seq_page_cost",
@@ -855,11 +874,11 @@ add_reloption(relopt_gen *newoption)
  * 		'relopt_struct_size'.
  */
 void
-init_local_reloptions(local_relopts *opts, Size relopt_struct_size)
+init_local_reloptions(local_relopts *relopts, Size relopt_struct_size)
 {
-	opts->options = NIL;
-	opts->validators = NIL;
-	opts->relopt_struct_size = relopt_struct_size;
+	relopts->options = NIL;
+	relopts->validators = NIL;
+	relopts->relopt_struct_size = relopt_struct_size;
 }
 
 /*
@@ -868,9 +887,9 @@ init_local_reloptions(local_relopts *opts, Size relopt_struct_size)
  *		build_local_reloptions().
  */
 void
-register_reloptions_validator(local_relopts *opts, relopts_validator validator)
+register_reloptions_validator(local_relopts *relopts, relopts_validator validator)
 {
-	opts->validators = lappend(opts->validators, validator);
+	relopts->validators = lappend(relopts->validators, validator);
 }
 
 /*
@@ -880,7 +899,7 @@ register_reloptions_validator(local_relopts *opts, relopts_validator validator)
 static void
 add_local_reloption(local_relopts *relopts, relopt_gen *newoption, int offset)
 {
-	local_relopt *opt = palloc(sizeof(*opt));
+	local_relopt *opt = palloc_object(local_relopt);
 
 	Assert(offset < relopts->relopt_struct_size);
 
@@ -1280,8 +1299,8 @@ add_local_string_reloption(local_relopts *relopts, const char *name,
  * but we declare them as Datums to avoid including array.h in reloptions.h.
  */
 Datum
-transformRelOptions(Datum oldOptions, List *defList, const char *namspace,
-					char *validnsps[], bool acceptOidsOff, bool isReset)
+transformRelOptions(Datum oldOptions, List *defList, const char *nameSpace,
+					const char *const validnsps[], bool acceptOidsOff, bool isReset)
 {
 	Datum		result;
 	ArrayBuildState *astate;
@@ -1295,20 +1314,19 @@ transformRelOptions(Datum oldOptions, List *defList, const char *namspace,
 	astate = NULL;
 
 	/* Copy any oldOptions that aren't to be replaced */
-	if (PointerIsValid(DatumGetPointer(oldOptions)))
+	if (DatumGetPointer(oldOptions) != NULL)
 	{
 		ArrayType  *array = DatumGetArrayTypeP(oldOptions);
 		Datum	   *oldoptions;
 		int			noldoptions;
 		int			i;
 
-		deconstruct_array(array, TEXTOID, -1, false, TYPALIGN_INT,
-						  &oldoptions, NULL, &noldoptions);
+		deconstruct_array_builtin(array, TEXTOID, &oldoptions, NULL, &noldoptions);
 
 		for (i = 0; i < noldoptions; i++)
 		{
-			char	   *text_str = VARDATA(oldoptions[i]);
-			int			text_len = VARSIZE(oldoptions[i]) - VARHDRSZ;
+			char	   *text_str = VARDATA(DatumGetPointer(oldoptions[i]));
+			int			text_len = VARSIZE(DatumGetPointer(oldoptions[i])) - VARHDRSZ;
 
 			/* Search for a match in defList */
 			foreach(cell, defList)
@@ -1317,14 +1335,14 @@ transformRelOptions(Datum oldOptions, List *defList, const char *namspace,
 				int			kw_len;
 
 				/* ignore if not in the same namespace */
-				if (namspace == NULL)
+				if (nameSpace == NULL)
 				{
 					if (def->defnamespace != NULL)
 						continue;
 				}
 				else if (def->defnamespace == NULL)
 					continue;
-				else if (strcmp(def->defnamespace, namspace) != 0)
+				else if (strcmp(def->defnamespace, nameSpace) != 0)
 					continue;
 
 				kw_len = strlen(def->defname);
@@ -1360,8 +1378,9 @@ transformRelOptions(Datum oldOptions, List *defList, const char *namspace,
 		}
 		else
 		{
-			text	   *t;
+			const char *name;
 			const char *value;
+			text	   *t;
 			Size		len;
 
 			/*
@@ -1393,14 +1412,14 @@ transformRelOptions(Datum oldOptions, List *defList, const char *namspace,
 			}
 
 			/* ignore if not in the same namespace */
-			if (namspace == NULL)
+			if (nameSpace == NULL)
 			{
 				if (def->defnamespace != NULL)
 					continue;
 			}
 			else if (def->defnamespace == NULL)
 				continue;
-			else if (strcmp(def->defnamespace, namspace) != 0)
+			else if (strcmp(def->defnamespace, nameSpace) != 0)
 				continue;
 
 			/*
@@ -1408,10 +1427,18 @@ transformRelOptions(Datum oldOptions, List *defList, const char *namspace,
 			 * have just "name", assume "name=true" is meant.  Note: the
 			 * namespace is not output.
 			 */
+			name = def->defname;
 			if (def->arg != NULL)
 				value = defGetString(def);
 			else
 				value = "true";
+
+			/* Insist that name not contain "=", else "a=b=c" is ambiguous */
+			if (strchr(name, '=') != NULL)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("invalid option name \"%s\": must not contain \"=\"",
+								name)));
 
 			/*
 			 * This is not a great place for this test, but there's no other
@@ -1420,7 +1447,7 @@ transformRelOptions(Datum oldOptions, List *defList, const char *namspace,
 			 * amount of ugly.
 			 */
 			if (acceptOidsOff && def->defnamespace == NULL &&
-				strcmp(def->defname, "oids") == 0)
+				strcmp(name, "oids") == 0)
 			{
 				if (defGetBoolean(def))
 					ereport(ERROR,
@@ -1430,11 +1457,11 @@ transformRelOptions(Datum oldOptions, List *defList, const char *namspace,
 				continue;
 			}
 
-			len = VARHDRSZ + strlen(def->defname) + 1 + strlen(value);
+			len = VARHDRSZ + strlen(name) + 1 + strlen(value);
 			/* +1 leaves room for sprintf's trailing null */
 			t = (text *) palloc(len + 1);
 			SET_VARSIZE(t, len);
-			sprintf(VARDATA(t), "%s=%s", def->defname, value);
+			sprintf(VARDATA(t), "%s=%s", name, value);
 
 			astate = accumArrayResult(astate, PointerGetDatum(t),
 									  false, TEXTOID,
@@ -1460,7 +1487,7 @@ ybExcludeNonPersistentReloptions(Datum options)
 	Datum		result = (Datum) 0;
 
 	/* Nothing to do if no options */
-	if (!PointerIsValid(DatumGetPointer(options)))
+	if (DatumGetPointer(options) == NULL)
 		return result;
 
 	ArrayType  *array = DatumGetArrayTypeP(options);
@@ -1528,13 +1555,12 @@ untransformRelOptions(Datum options)
 	int			i;
 
 	/* Nothing to do if no options */
-	if (!PointerIsValid(DatumGetPointer(options)))
+	if (DatumGetPointer(options) == NULL)
 		return result;
 
 	array = DatumGetArrayTypeP(options);
 
-	deconstruct_array(array, TEXTOID, -1, false, TYPALIGN_INT,
-					  &optiondatums, NULL, &noptions);
+	deconstruct_array_builtin(array, TEXTOID, &optiondatums, NULL, &noptions);
 
 	for (i = 0; i < noptions; i++)
 	{
@@ -1625,13 +1651,12 @@ parseRelOptionsInternal(Datum options, bool validate,
 	int			noptions;
 	int			i;
 
-	deconstruct_array(array, TEXTOID, -1, false, TYPALIGN_INT,
-					  &optiondatums, NULL, &noptions);
+	deconstruct_array_builtin(array, TEXTOID, &optiondatums, NULL, &noptions);
 
 	for (i = 0; i < noptions; i++)
 	{
-		char	   *text_str = VARDATA(optiondatums[i]);
-		int			text_len = VARSIZE(optiondatums[i]) - VARHDRSZ;
+		char	   *text_str = VARDATA(DatumGetPointer(optiondatums[i]));
+		int			text_len = VARSIZE(DatumGetPointer(optiondatums[i])) - VARHDRSZ;
 		int			j;
 
 		/* Search for a match in reloptions */
@@ -1723,7 +1748,7 @@ parseRelOptions(Datum options, bool validate, relopt_kind kind,
 	}
 
 	/* Done if no options */
-	if (PointerIsValid(DatumGetPointer(options)))
+	if (DatumGetPointer(options) != NULL)
 		parseRelOptionsInternal(options, validate, reloptions, numoptions);
 
 	*numrelopts = numoptions;
@@ -1735,7 +1760,7 @@ static relopt_value *
 parseLocalRelOptions(local_relopts *relopts, Datum options, bool validate)
 {
 	int			nopts = list_length(relopts->options);
-	relopt_value *values = palloc(sizeof(*values) * nopts);
+	relopt_value *values = palloc_array(relopt_value, nopts);
 	ListCell   *lc;
 	int			i = 0;
 
@@ -1974,6 +1999,17 @@ fillRelOptions(void *rdopts, Size basesize,
 				char	   *itempos = ((char *) rdopts) + elems[j].offset;
 				char	   *string_val;
 
+				/*
+				 * If isset_offset is provided, store whether the reloption is
+				 * set there.
+				 */
+				if (elems[j].isset_offset > 0)
+				{
+					char	   *setpos = ((char *) rdopts) + elems[j].isset_offset;
+
+					*(bool *) setpos = options[i].isset;
+				}
+
 				switch (options[i].gen->type)
 				{
 					case RELOPT_TYPE_BOOL:
@@ -2062,6 +2098,8 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, enabled)},
 		{"autovacuum_vacuum_threshold", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_threshold)},
+		{"autovacuum_vacuum_max_threshold", RELOPT_TYPE_INT,
+		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_max_threshold)},
 		{"autovacuum_vacuum_insert_threshold", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, vacuum_ins_threshold)},
 		{"autovacuum_analyze_threshold", RELOPT_TYPE_INT,
@@ -2081,7 +2119,9 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"autovacuum_multixact_freeze_table_age", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, multixact_freeze_table_age)},
 		{"log_autovacuum_min_duration", RELOPT_TYPE_INT,
-		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, log_min_duration)},
+		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, log_vacuum_min_duration)},
+		{"log_autoanalyze_min_duration", RELOPT_TYPE_INT,
+		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, log_analyze_min_duration)},
 		{"toast_tuple_target", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, toast_tuple_target)},
 		{"autovacuum_vacuum_cost_delay", RELOPT_TYPE_REAL,
@@ -2099,14 +2139,16 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"vacuum_index_cleanup", RELOPT_TYPE_ENUM,
 		offsetof(StdRdOptions, vacuum_index_cleanup)},
 		{"vacuum_truncate", RELOPT_TYPE_BOOL,
-		offsetof(StdRdOptions, vacuum_truncate)},
+		offsetof(StdRdOptions, vacuum_truncate), offsetof(StdRdOptions, vacuum_truncate_set)},
+		{"vacuum_max_eager_freeze_failure_rate", RELOPT_TYPE_REAL,
+		offsetof(StdRdOptions, vacuum_max_eager_freeze_failure_rate)},
 		{"colocated", RELOPT_TYPE_BOOL,
 		offsetof(StdRdOptions, colocated)},
 		/* Reuse colocated field in StdRdOptions. */
 		{"colocation", RELOPT_TYPE_BOOL, offsetof(StdRdOptions, colocated)},
 		{"colocation_id", RELOPT_TYPE_OID, offsetof(StdRdOptions, colocation_id)},
 		{"table_oid", RELOPT_TYPE_OID, offsetof(StdRdOptions, table_oid)},
-		{"row_type_oid", RELOPT_TYPE_OID, offsetof(StdRdOptions, row_type_oid)},
+		{"row_type_oid", RELOPT_TYPE_OID, offsetof(StdRdOptions, row_type_oid)}
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate, kind,
@@ -2171,7 +2213,7 @@ void *
 build_local_reloptions(local_relopts *relopts, Datum options, bool validate)
 {
 	int			noptions = list_length(relopts->options);
-	relopt_parse_elt *elems = palloc(sizeof(*elems) * noptions);
+	relopt_parse_elt *elems = palloc_array(relopt_parse_elt, noptions);
 	relopt_value *vals;
 	void	   *opts;
 	int			i = 0;
@@ -2184,6 +2226,7 @@ build_local_reloptions(local_relopts *relopts, Datum options, bool validate)
 		elems[i].optname = opt->option->name;
 		elems[i].opttype = opt->option->type;
 		elems[i].offset = opt->offset;
+		elems[i].isset_offset = 0;	/* not supported for local relopts yet */
 
 		i++;
 	}
@@ -2209,6 +2252,14 @@ build_local_reloptions(local_relopts *relopts, Datum options, bool validate)
 bytea *
 partitioned_table_reloptions(Datum reloptions, bool validate)
 {
+	/* YB_TODO_PG19
+	if (validate && reloptions)
+		ereport(ERROR,
+				errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				errmsg("cannot specify storage parameters for a partitioned table"),
+				errhint("Specify storage parameters for its leaf partitions instead."));
+	return NULL;
+	*/
 	if (IsYugaByteEnabled())
 	{
 		/* YB supports colocation_id option for partioned tables. */
@@ -2300,7 +2351,7 @@ index_reloptions(amoptions_function amoptions, Datum reloptions, bool validate)
 	Assert(amoptions != NULL);
 
 	/* Assume function is strict */
-	if (!PointerIsValid(DatumGetPointer(reloptions)))
+	if (DatumGetPointer(reloptions) == NULL)
 		return NULL;
 
 	return amoptions(reloptions, validate);

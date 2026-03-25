@@ -834,7 +834,7 @@ HeapFormTuple(void *attrs, size_t natts, uintptr_t *values, bool *nulls)
 {
 	TupleDesc	tupdesc = CreateTupleDesc(natts, attrs);
 
-	PG_RETURN_HEAPTUPLEHEADER(heap_form_tuple(tupdesc, values, nulls)->t_data);
+	PG_RETURN_HEAPTUPLEHEADER(heap_form_tuple(tupdesc, (Datum *) values, nulls)->t_data);
 }
 
 void
@@ -851,7 +851,7 @@ HeapDeformTuple(uintptr_t datum, void *attrs, size_t natts, uintptr_t *values,
 	TupleDesc	tupdesc = CreateTupleDesc(natts, attrs);
 
 	/* Break down the tuple into fields */
-	heap_deform_tuple(&tuple, tupdesc, values, nulls);
+	heap_deform_tuple(&tuple, tupdesc, (Datum *) values, nulls);
 }
 
 int

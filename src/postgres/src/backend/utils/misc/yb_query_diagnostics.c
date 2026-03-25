@@ -39,6 +39,8 @@
 #include "catalog/yb_catalog_version.h"
 #include "commands/dbcommands.h"
 #include "commands/explain.h"
+#include "commands/explain_format.h"
+#include "commands/explain_state.h"
 #include "commands/tablespace.h"
 #include "common/fe_memutils.h"
 #include "common/file_perm.h"
@@ -196,8 +198,8 @@ static void AccumulateExplain(QueryDesc *queryDesc, YbQueryDiagnosticsEntry *ent
 static inline TimestampTz BundleEndTime(const YbQueryDiagnosticsEntry *entry);
 static int	YbQueryDiagnosticsBundlesShmemSize(void);
 static Datum CreateJsonb(const YbQueryDiagnosticsParams *params);
-static void CreateJsonbInt(JsonbParseState *state, char *key, int64 value);
-static void CreateJsonbBool(JsonbParseState *state, char *key, bool value);
+static void CreateJsonbInt(JsonbInState *state, char *key, int64 value);
+static void CreateJsonbBool(JsonbInState *state, char *key, bool value);
 static void InsertBundlesIntoView(const YbQueryDiagnosticsMetadata *metadata,
 								  YbQueryDiagnosticsStatusType status, const char *description);
 static void OutputBundle(const YbQueryDiagnosticsMetadata metadata, const char *description,
@@ -398,7 +400,7 @@ InsertBundlesIntoView(const YbQueryDiagnosticsMetadata *metadata,
 }
 
 static void
-CreateJsonbInt(JsonbParseState *state, char *key, int64 value)
+CreateJsonbInt(JsonbInState *state, char *key, int64 value)
 {
 	JsonbValue	json_key;
 	JsonbValue	json_value;
@@ -410,12 +412,12 @@ CreateJsonbInt(JsonbParseState *state, char *key, int64 value)
 	json_value.type = jbvNumeric;
 	json_value.val.numeric = DatumGetNumeric(DirectFunctionCall1(int8_numeric, value));
 
-	pushJsonbValue(&state, WJB_KEY, &json_key);
-	pushJsonbValue(&state, WJB_VALUE, &json_value);
+	pushJsonbValue(state, WJB_KEY, &json_key);
+	pushJsonbValue(state, WJB_VALUE, &json_value);
 }
 
 static void
-CreateJsonbBool(JsonbParseState *state, char *key, bool value)
+CreateJsonbBool(JsonbInState *state, char *key, bool value)
 {
 	JsonbValue	json_key;
 	JsonbValue	json_value;
@@ -427,8 +429,8 @@ CreateJsonbBool(JsonbParseState *state, char *key, bool value)
 	json_value.type = jbvBool;
 	json_value.val.boolean = value;
 
-	pushJsonbValue(&state, WJB_KEY, &json_key);
-	pushJsonbValue(&state, WJB_VALUE, &json_value);
+	pushJsonbValue(state, WJB_KEY, &json_key);
+	pushJsonbValue(state, WJB_VALUE, &json_value);
 }
 
 /*
@@ -439,19 +441,20 @@ CreateJsonbBool(JsonbParseState *state, char *key, bool value)
 static Datum
 CreateJsonb(const YbQueryDiagnosticsParams *params)
 {
-	JsonbParseState *state = NULL;
+	JsonbInState state = {0};
 	JsonbValue *result;
 
 	Assert(params != NULL);
 
 	pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
 
-	CreateJsonbInt(state, "explain_sample_rate", params->explain_sample_rate);
-	CreateJsonbBool(state, "explain_analyze", params->explain_analyze);
-	CreateJsonbBool(state, "explain_dist", params->explain_dist);
-	CreateJsonbBool(state, "explain_debug", params->explain_debug);
+	CreateJsonbInt(&state, "explain_sample_rate", params->explain_sample_rate);
+	CreateJsonbBool(&state, "explain_analyze", params->explain_analyze);
+	CreateJsonbBool(&state, "explain_dist", params->explain_dist);
+	CreateJsonbBool(&state, "explain_debug", params->explain_debug);
 
-	result = pushJsonbValue(&state, WJB_END_OBJECT, NULL);
+	pushJsonbValue(&state, WJB_END_OBJECT, NULL);
+	result = state.result;
 
 	PG_RETURN_POINTER(JsonbValueToJsonb(result));
 }
@@ -577,9 +580,6 @@ yb_get_query_diagnostics_status(PG_FUNCTION_ARGS)
 
 	ProcessActiveBundles(tupstore, tupdesc);
 	ProcessCompletedBundles(tupstore, tupdesc);
-
-	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
 
 	return (Datum) 0;
 }
@@ -1102,8 +1102,14 @@ YbQueryDiagnosticsAccumulatePgss(int64 query_id, YbQdPgssStoreKind kind,
 		entry->pgss.counters.local_blks_written += bufusage->local_blks_written;
 		entry->pgss.counters.temp_blks_read += bufusage->temp_blks_read;
 		entry->pgss.counters.temp_blks_written += bufusage->temp_blks_written;
-		entry->pgss.counters.blk_read_time += INSTR_TIME_GET_MILLISEC(bufusage->blk_read_time);
-		entry->pgss.counters.blk_write_time += INSTR_TIME_GET_MILLISEC(bufusage->blk_write_time);
+		entry->pgss.counters.blk_read_time +=
+			INSTR_TIME_GET_MILLISEC(bufusage->shared_blk_read_time) +
+			INSTR_TIME_GET_MILLISEC(bufusage->local_blk_read_time) +
+			INSTR_TIME_GET_MILLISEC(bufusage->temp_blk_read_time);
+		entry->pgss.counters.blk_write_time +=
+			INSTR_TIME_GET_MILLISEC(bufusage->shared_blk_write_time) +
+			INSTR_TIME_GET_MILLISEC(bufusage->local_blk_write_time) +
+			INSTR_TIME_GET_MILLISEC(bufusage->temp_blk_write_time);
 		entry->pgss.counters.wal_records += walusage->wal_records;
 		entry->pgss.counters.wal_fpi += walusage->wal_fpi;
 		entry->pgss.counters.wal_bytes += walusage->wal_bytes;
@@ -1159,14 +1165,14 @@ PgssToString(int64 query_id, char *pgss_str, YbQueryDiagnosticsPgss pgss, const 
 			 "temp_blk_read_time,temp_blk_write_time,wal_records,wal_fpi,wal_bytes,"
 			 "jit_functions,jit_generation_time,jit_inlining_count,jit_inlining_time,"
 			 "jit_optimization_count,jit_optimization_time,jit_emission_count,jit_emission_time\n"
-			 "%ld,\"%s\",%ld,%lf,%lf,%lf,%lf,"
+			 INT64_FORMAT ",\"%s\"," INT64_FORMAT ",%lf,%lf,%lf,%lf,"
 			 "%lf,%lf,%lf,%lf,%lf,%lf,"
-			 "%ld,%ld,%ld,%ld,%ld,"
-			 "%ld,%ld,%ld,%ld,"
-			 "%ld,%ld,%lf,%lf,"
-			 "%lf,%lf,%ld,%ld,%ld,"
-			 "%ld,%lf,%ld,%lf,"
-			 "%ld,%lf,%ld,%lf\n",
+			 INT64_FORMAT "," INT64_FORMAT "," INT64_FORMAT "," INT64_FORMAT "," INT64_FORMAT ","
+			 INT64_FORMAT "," INT64_FORMAT "," INT64_FORMAT "," INT64_FORMAT ","
+			 INT64_FORMAT "," INT64_FORMAT ",%lf,%lf,"
+			 "%lf,%lf," INT64_FORMAT "," INT64_FORMAT "," UINT64_FORMAT ","
+			 INT64_FORMAT ",%lf," INT64_FORMAT ",%lf,"
+			 INT64_FORMAT ",%lf," INT64_FORMAT ",%lf\n",
 			 query_id, query_str,
 			 pgss.counters.calls[YB_QD_PGSS_EXEC],
 			 pgss.counters.total_time[YB_QD_PGSS_PLAN],
@@ -1367,7 +1373,7 @@ InsertNewBundleInfo(YbQueryDiagnosticsMetadata *metadata)
 	if (found)
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
-				 errmsg("query diagnostics for %ld is already being generated",
+				 errmsg("query diagnostics for " INT64_FORMAT " is already being generated",
 						metadata->params.query_id)));
 }
 
@@ -2535,7 +2541,7 @@ YbQueryDiagnosticsMain(Datum main_arg)
 		if (rc & WL_POSTMASTER_DEATH)
 			proc_exit(1);
 
-		HandleMainLoopInterrupts();
+		ProcessMainLoopInterrupts();
 
 		/* Check for expired entries within the shared hash table */
 		FlushAndCleanBundles();
@@ -2696,7 +2702,8 @@ DumpAndFormatStatistics(const YbQueryDiagnosticsEntry *entry, char *description,
 		if (!ExecuteQuery(&buffer, query.data, YB_QD_CSV))
 		{
 
-			YbQueryDiagnosticsAppendToDescription("Failed to execute query for %s",
+			YbQueryDiagnosticsAppendToDescription(description,
+												  "Failed to execute query for %s",
 												  json_key_names[i] + 1);	/* Skip the leading
 																			 * quote */
 			status = YB_DIAGNOSTICS_ERROR;
@@ -2930,9 +2937,9 @@ ConstructDiagnosticsPath(YbQueryDiagnosticsMetadata *metadata)
 	uint32		rand_num = DatumGetUInt32(hash_any((unsigned char *) &metadata->start_time,
 												   sizeof(metadata->start_time)));
 #ifdef WIN32
-	const char *format = "%s\\%s\\%ld\\%u\\";
+	const char *format = "%s\\%s\\" INT64_FORMAT "\\%u\\";
 #else
-	const char *format = "%s/%s/%ld/%u/";
+	const char *format = "%s/%s/" INT64_FORMAT "/%u/";
 #endif
 	if (snprintf(metadata->path, MAXPGPATH, format,
 				 DataDir, "query-diagnostics", metadata->params.query_id, rand_num) >= MAXPGPATH)
@@ -3056,7 +3063,7 @@ yb_cancel_query_diagnostics(PG_FUNCTION_ARGS)
 		LWLockRelease(bundles_in_progress_lock);
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("query diagnostics is not enabled for query_id %ld", query_id)));
+				 errmsg("query diagnostics is not enabled for query_id " INT64_FORMAT, query_id)));
 	}
 
 	PG_RETURN_VOID();

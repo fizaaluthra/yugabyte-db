@@ -305,11 +305,13 @@ InsertIntoReplicatedDDLs(int64 ddl_end_time, int64 query_id)
 
 	INIT_MEM_CONTEXT_AND_SPI_CONNECT("yb_xcluster_ddl_replication.InsertIntoReplicatedDDLs context");
 
-	JsonbParseState *state = NULL;
+	/* YB: PG19 uses JsonbInState instead of JsonbParseState */
+	JsonbInState state = {0};
 
-	(void) pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
-	(void) AddNStringJsonEntry(state, "query", query_string, query_len);
-	JsonbValue *jsonb_val = pushJsonbValue(&state, WJB_END_OBJECT, NULL);
+	pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
+	AddNStringJsonEntry(&state, "query", query_string, query_len);
+	pushJsonbValue(&state, WJB_END_OBJECT, NULL);
+	JsonbValue *jsonb_val = state.result;
 	Jsonb	   *jsonb = JsonbValueToJsonb(jsonb_val);
 
 	InsertIntoTable(REPLICATED_DDLS_TABLE_NAME, ddl_end_time, query_id, jsonb);
@@ -329,39 +331,41 @@ HandleSourceDDLEnd(EventTriggerData *trig_data)
 	INIT_MEM_CONTEXT_AND_SPI_CONNECT("yb_xcluster_ddl_replication.HandleSourceDDLEnd context");
 
 	/* Begin constructing json, fill common fields first. */
-	JsonbParseState *state = NULL;
+	/* YB: PG19 uses JsonbInState instead of JsonbParseState */
+	JsonbInState state = {0};
 
-	(void) pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
-	(void) AddNumericJsonEntry(state, "version", 1);
-	(void) AddNStringJsonEntry(state, "query", query_string, query_len);
-	(void) AddStringJsonEntry(state, "command_tag",
-							  GetCommandTagName(trig_data->tag));
+	pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
+	AddNumericJsonEntry(&state, "version", 1);
+	AddNStringJsonEntry(&state, "query", query_string, query_len);
+	AddStringJsonEntry(&state, "command_tag",
+					   GetCommandTagName(trig_data->tag));
 
 	const char *current_user = GetUserNameFromId(save_userid, false);
 
 	if (current_user)
-		(void) AddStringJsonEntry(state, "user", current_user);
+		AddStringJsonEntry(&state, "user", current_user);
 
 	LOCAL_FCINFO(fcinfo, 0);
 	InitFunctionCallInfoData(*fcinfo, NULL, 0, InvalidOid, NULL, NULL);
 	const char *cur_schema = DatumGetCString(current_schema(fcinfo));
 
 	if (cur_schema)
-		(void) AddStringJsonEntry(state, "schema", cur_schema);
+		AddStringJsonEntry(&state, "schema", cur_schema);
 
 	if (enable_manual_ddl_replication)
 	{
-		(void) AddBoolJsonEntry(state, "manual_replication", true);
+		AddBoolJsonEntry(&state, "manual_replication", true);
 	}
 	else
 	{
-		yb_should_replicate_ddl |= ProcessSourceEventTriggerDDLCommands(state);
+		yb_should_replicate_ddl |= ProcessSourceEventTriggerDDLCommands(&state);
 	}
 
 	if (yb_should_replicate_ddl)
 	{
 		/* Construct the jsonb and insert completed row into ddl_queue table. */
-		JsonbValue *jsonb_val = pushJsonbValue(&state, WJB_END_OBJECT, NULL);
+		pushJsonbValue(&state, WJB_END_OBJECT, NULL);
+		JsonbValue *jsonb_val = state.result;
 		Jsonb	   *jsonb = JsonbValueToJsonb(jsonb_val);
 
 		/*

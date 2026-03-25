@@ -258,8 +258,8 @@ YbPreloadPgInheritsCache()
 	}
 
 	elog(yb_debug_log_catcache_events ? LOG : DEBUG3,
-		 "YbPgInheritsCache: preload complete. Parent cache has %ld entries, "
-		 " child cache has %ld entries.",
+		 "YbPgInheritsCache: preload complete. Parent cache has " INT64_FORMAT " entries, "
+		 " child cache has " INT64_FORMAT " entries.",
 		 hash_get_num_entries(YbPgInheritsCacheByParent),
 		 hash_get_num_entries(YbPgInheritsCacheByChild));
 }

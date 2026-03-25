@@ -1,12 +1,17 @@
 DIRS = \
 	documentdb \
-	hypopg \
-	orafce \
-	pg_cron \
-	pg_hint_plan \
+	# YB_TODO_PG19_MERGE: hypopg needs PG19 API updates
+	# hypopg \
+	# YB_TODO_PG19_MERGE: orafce needs PG19 API updates
+	# orafce \
+	# YB_TODO_PG19_MERGE: pg_cron needs PG19 API updates
+	# pg_cron \
+	# YB_TODO_PG19_MERGE: pg_hint_plan needs PG19 API updates
+	# pg_hint_plan \
 	$(if $(filter 1,$(YB_SKIP_PG_PARQUET_BUILD)),,pg_parquet) \
 	pg_partman \
-	pg_stat_monitor \
+	# YB_TODO_PG19_MERGE: pg_stat_monitor needs PG19 API updates
+	# pg_stat_monitor \
 	pgaudit \
 	pgtap \
 	pgvector \

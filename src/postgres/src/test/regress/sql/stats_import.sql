@@ -21,13 +21,14 @@ SELECT
         'relname', 'test',
         'relpages', 18::integer,
         'reltuples', 21::real,
-        'relallvisible', 24::integer);
+        'relallvisible', 24::integer,
+	'relallfrozen', 27::integer);
 
 -- CREATE INDEX on a table with autovac disabled should not overwrite
 -- stats
 CREATE INDEX test_i ON stats_import.test(id);
 
-SELECT relname, relpages, reltuples, relallvisible
+SELECT relname, relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'stats_import.test'::regclass
 ORDER BY relname;
@@ -79,7 +80,7 @@ SELECT pg_restore_relation_stats(
         NULL, '17'::integer);
 
 -- starting stats
-SELECT relpages, reltuples, relallvisible
+SELECT relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'stats_import.test_i'::regclass;
 
@@ -149,9 +150,10 @@ SELECT pg_restore_relation_stats(
         'version', 150000::integer,
         'relpages', '-17'::integer,
         'reltuples', 400::real,
-        'relallvisible', 4::integer);
+        'relallvisible', 4::integer,
+        'relallfrozen', 2::integer);
 
-SELECT relpages, reltuples, relallvisible
+SELECT relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'stats_import.test'::regclass;
 
@@ -161,7 +163,7 @@ SELECT pg_restore_relation_stats(
         'relname', 'test',
         'relpages', '16'::integer);
 
-SELECT relpages, reltuples, relallvisible
+SELECT relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'stats_import.test'::regclass;
 
@@ -171,7 +173,7 @@ SELECT pg_restore_relation_stats(
         'relname', 'test',
         'reltuples', '500'::real);
 
-SELECT relpages, reltuples, relallvisible
+SELECT relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'stats_import.test'::regclass;
 
@@ -181,7 +183,18 @@ SELECT pg_restore_relation_stats(
         'relname', 'test',
         'relallvisible', 5::integer);
 
-SELECT relpages, reltuples, relallvisible
+SELECT relpages, reltuples, relallvisible, relallfrozen
+FROM pg_class
+WHERE oid = 'stats_import.test'::regclass;
+
+-- ok: just relallfrozen
+SELECT pg_restore_relation_stats(
+        'schemaname', 'stats_import',
+        'relname', 'test',
+        'version', 150000::integer,
+        'relallfrozen', 3::integer);
+
+SELECT relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'stats_import.test'::regclass;
 
@@ -191,9 +204,10 @@ SELECT pg_restore_relation_stats(
         'relname', 'test',
         'relpages', 'nope'::text,
         'reltuples', 400.0::real,
-        'relallvisible', 4::integer);
+        'relallvisible', 4::integer,
+        'relallfrozen', 3::integer);
 
-SELECT relpages, reltuples, relallvisible
+SELECT relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'stats_import.test'::regclass;
 
@@ -933,9 +947,10 @@ SELECT pg_restore_relation_stats(
         'relname', 'stats_temp',
         'relpages', '-19'::integer,
         'reltuples', 401::real,
-        'relallvisible', 5::integer);
+        'relallvisible', 5::integer,
+        'relallfrozen', 3::integer);
 
-SELECT relname, relpages, reltuples, relallvisible
+SELECT relname, relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'pg_temp.stats_temp'::regclass
 ORDER BY relname;

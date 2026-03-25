@@ -20,14 +20,21 @@
 #endif
 #include <limits.h>				/* for CLK_TCK */
 
+#ifndef RUSAGE_SELF
 #define RUSAGE_SELF		0
+#endif
+#ifndef RUSAGE_CHILDREN
 #define RUSAGE_CHILDREN (-1)
+#endif
 
+#if !defined(__rusage_defined) && !defined(_STRUCT_RUSAGE) && !defined(__APPLE__)
+#define __rusage_defined
 struct rusage
 {
 	struct timeval ru_utime;	/* user time used */
 	struct timeval ru_stime;	/* system time used */
 };
+#endif
 
 extern int	getrusage(int who, struct rusage *rusage);
 

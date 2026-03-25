@@ -51,7 +51,7 @@
  * arrays holding the elements.
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/array.h
@@ -65,8 +65,8 @@
 #include "utils/expandeddatum.h"
 
 /* avoid including execnodes.h here */
-struct ExprState;
-struct ExprContext;
+typedef struct ExprState ExprState;
+typedef struct ExprContext ExprContext;
 
 
 /*
@@ -352,8 +352,8 @@ extern PGDLLIMPORT bool Array_nulls;
  * prototypes for functions defined in arrayfuncs.c
  */
 extern void CopyArrayEls(ArrayType *array,
-						 Datum *values,
-						 bool *nulls,
+						 const Datum *values,
+						 const bool *nulls,
 						 int nitems,
 						 int typlen,
 						 bool typbyval,
@@ -384,7 +384,7 @@ extern ArrayType *array_set(ArrayType *array, int nSubscripts, int *indx,
 							int arraytyplen, int elmlen, bool elmbyval, char elmalign);
 
 extern Datum array_map(Datum arrayd,
-					   struct ExprState *exprstate, struct ExprContext *econtext,
+					   ExprState *exprstate, ExprContext *econtext,
 					   Oid retType, ArrayMapState *amstate);
 
 extern void array_bitmap_copy(bits8 *destbitmap, int destoffset,
@@ -405,14 +405,20 @@ extern ArrayType *construct_empty_array(Oid elmtype);
 extern ExpandedArrayHeader *construct_empty_expanded_array(Oid element_type,
 														   MemoryContext parentcontext,
 														   ArrayMetaState *metacache);
-extern void deconstruct_array(ArrayType *array,
+extern void deconstruct_array(const ArrayType *array,
 							  Oid elmtype,
 							  int elmlen, bool elmbyval, char elmalign,
 							  Datum **elemsp, bool **nullsp, int *nelemsp);
-extern bool array_contains_nulls(ArrayType *array);
+extern void deconstruct_array_builtin(const ArrayType *array,
+									  Oid elmtype,
+									  Datum **elemsp, bool **nullsp, int *nelemsp);
+extern bool array_contains_nulls(const ArrayType *array);
 
 extern ArrayBuildState *initArrayResult(Oid element_type,
 										MemoryContext rcontext, bool subcontext);
+extern ArrayBuildState *initArrayResultWithSize(Oid element_type,
+												MemoryContext rcontext,
+												bool subcontext, int initsize);
 extern ArrayBuildState *accumArrayResult(ArrayBuildState *astate,
 										 Datum dvalue, bool disnull,
 										 Oid element_type,
@@ -449,9 +455,12 @@ extern void array_free_iterator(ArrayIterator iterator);
  */
 
 extern int	ArrayGetOffset(int n, const int *dim, const int *lb, const int *indx);
-extern int	ArrayGetOffset0(int n, const int *tup, const int *scale);
 extern int	ArrayGetNItems(int ndim, const int *dims);
+extern int	ArrayGetNItemsSafe(int ndim, const int *dims,
+							   struct Node *escontext);
 extern void ArrayCheckBounds(int ndim, const int *dims, const int *lb);
+extern bool ArrayCheckBoundsSafe(int ndim, const int *dims, const int *lb,
+								 struct Node *escontext);
 extern void mda_get_range(int n, int *span, const int *st, const int *endp);
 extern void mda_get_prod(int n, const int *range, int *prod);
 extern void mda_get_offset_values(int n, int *dist, const int *prod, const int *span);

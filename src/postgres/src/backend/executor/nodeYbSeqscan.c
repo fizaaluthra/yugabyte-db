@@ -333,11 +333,6 @@ ExecEndYbSeqScan(YbSeqScanState *node)
 	tsdesc = node->ss.ss_currentScanDesc;
 
 	/*
-	 * Free the exprcontext
-	 */
-	ExecFreeExprContext(&node->ss.ps);
-
-	/*
 	 * clean out the tuple table
 	 */
 	if (node->ss.ps.ps_ResultTupleSlot)
@@ -396,7 +391,7 @@ void
 ExecYbSeqScanEstimate(YbSeqScanState *node,
 					  ParallelContext *pcxt)
 {
-	node->pscan_len = yb_estimate_parallel_size();
+	node->pscan_len = yb_estimate_parallel_size(NULL, 0, 0);
 	shm_toc_estimate_chunk(&pcxt->estimator, node->pscan_len);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 }

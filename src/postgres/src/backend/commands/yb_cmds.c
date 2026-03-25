@@ -337,6 +337,7 @@ CreateTableAddColumns(YbcPgStatement handle, TupleDesc desc,
 														  colocated,
 														  is_tablegroup,
 														  is_first_key);
+
 					bool		is_desc = false;
 					bool		is_nulls_first = false;
 
@@ -677,8 +678,8 @@ YBCCreateTable(CreateStmt *stmt, char *tableName, char relkind, TupleDesc desc,
 			IndexStmt  *idxstmt;
 			Oid			constraintOid;
 
-			attmap = build_attrmap_by_name(RelationGetDescr(rel), RelationGetDescr(parentRel),
-										   false /* yb_ignore_type_mismatch */ );
+		attmap = build_attrmap_by_name(RelationGetDescr(rel), RelationGetDescr(parentRel),
+									   false, false /* yb_ignore_type_mismatch */ );
 			idxstmt = generateClonedIndexStmt(NULL, idxRel, attmap, &constraintOid);
 
 			primary_key = makeNode(Constraint);
@@ -1216,7 +1217,7 @@ void
 YBCCreateIndex(const char *indexName,
 			   IndexInfo *indexInfo,
 			   TupleDesc indexTupleDesc,
-			   int16 *coloptions,
+			   const int16 *coloptions,
 			   Datum reloptions,
 			   Oid indexId,
 			   Relation rel,
@@ -1228,7 +1229,7 @@ YBCCreateIndex(const char *indexName,
 			   Oid tablespaceId,
 			   Oid indexRelfileNodeId,
 			   Oid oldRelfileNodeId,
-			   Oid *opclassOids)
+			   const Oid *opclassOids)
 {
 	Oid			namespaceId = RelationGetNamespace(rel);
 	char	   *db_name = get_database_name(YBCGetDatabaseOid(rel));
@@ -1264,17 +1265,19 @@ YBCCreateIndex(const char *indexName,
 									   oldRelfileNodeId,
 									   &handle));
 
-	IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(indexInfo->ii_Am,
+	IndexAmRoutine *amroutine = (IndexAmRoutine *) GetIndexAmRoutineByAmId(indexInfo->ii_Am,
 														true);
 
 	Assert(amroutine != NULL && amroutine->yb_ambindschema != NULL);
-	amroutine->yb_ambindschema(handle, indexInfo, indexTupleDesc, coloptions,
-							   opclassOids, reloptions);
+	amroutine->yb_ambindschema(handle, indexInfo, indexTupleDesc,
+							   (int16 *) coloptions,
+							   (Oid *) opclassOids, reloptions);
 
 	/* Handle SPLIT statement, if present */
 	if (split_options)
-		CreateIndexHandleSplitOptions(handle, indexTupleDesc, split_options, coloptions,
-									  indexInfo->ii_NumIndexKeyAttrs);
+		CreateIndexHandleSplitOptions(handle, indexTupleDesc, split_options,
+								  (int16 *) coloptions,
+								  indexInfo->ii_NumIndexKeyAttrs);
 
 	/* Create the index. */
 	HandleYBStatus(YBCPgExecCreateIndex(handle));
@@ -1321,12 +1324,12 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 		 */
 		switch (cmd->subtype)
 		{
-			case AT_AddColumnRecurse:
-			case AT_DropColumnRecurse:
-			case AT_AddConstraintRecurse:
-			case AT_DropConstraintRecurse:
-			case AT_ValidateConstraintRecurse:
-			case AT_DropExpression:
+		case AT_AddColumn:
+		case AT_DropColumn:
+		case AT_AddConstraint:
+		case AT_DropConstraint:
+		case AT_ValidateConstraint:
+		case AT_DropExpression:
 				break;
 			default:
 				/*
@@ -1341,7 +1344,6 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 	{
 		case AT_AddColumn:
 		case AT_AddColumnToView:
-		case AT_AddColumnRecurse:
 			{
 				ColumnDef  *colDef = (ColumnDef *) cmd->def;
 				Oid			typeOid;
@@ -1449,7 +1451,6 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 			}
 
 		case AT_DropColumn:
-		case AT_DropColumnRecurse:
 			{
 				HeapTuple	tuple = SearchSysCacheAttName(relationId, cmd->name);
 
@@ -1496,10 +1497,9 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 
 		case AT_AddIndex:
 		case AT_AddConstraint:
-		case AT_AddConstraintRecurse:
 		case AT_AlterColumnType:
+		case AT_SetExpression:
 		case AT_DropConstraint:
-		case AT_DropConstraintRecurse:
 		case AT_DropOids:
 		case AT_EnableTrig:
 		case AT_EnableAlwaysTrig:
@@ -1526,11 +1526,9 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 		case AT_DetachPartition:
 		case AT_SetTableSpace:
 		case AT_ValidateConstraint:
-		case AT_ValidateConstraintRecurse:
 		case AT_DropExpression:
 			{
-				Assert(cmd->subtype != AT_DropConstraint);
-				if (cmd->subtype == AT_AlterColumnType)
+			if (cmd->subtype == AT_AlterColumnType)
 				{
 					HeapTuple	typeTuple;
 
@@ -1629,8 +1627,8 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 				 * For add foreign key case, assigning the primary key table
 				 * as dependent relation.
 				 */
-				else if (cmd->subtype == AT_AddConstraintRecurse &&
-						 ((Constraint *) cmd->def)->contype == CONSTR_FOREIGN)
+			else if (cmd->subtype == AT_AddConstraint &&
+					 ((Constraint *) cmd->def)->contype == CONSTR_FOREIGN)
 				{
 					dependent_rels = lappend(dependent_rels,
 											 table_openrv(((Constraint *) cmd->def)->pktable,
@@ -1644,7 +1642,7 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 				 * dependent relation is the same as the parent. For inheritance, foreign key
 				 * constraints do not recurse down to children.
 				 */
-				else if (cmd->subtype == AT_DropConstraintRecurse && !isPartitionOfAlteredTable)
+				else if (cmd->subtype == AT_DropConstraint && !isPartitionOfAlteredTable)
 				{
 					Oid			constraint_oid = get_relation_constraint_oid(relationId,
 																			 cmd->name,
@@ -1718,7 +1716,7 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 				 * ADD PRIMARY KEY/UNIQUE USING INDEX.
 				 */
 				if (YBCIsInitDbModeEnvVarSet() &&
-					cmd->subtype == AT_AddConstraintRecurse &&
+					cmd->subtype == AT_AddConstraint &&
 					(((Constraint *) cmd->def)->contype == CONSTR_UNIQUE ||
 					 ((Constraint *) cmd->def)->contype ==
 					 CONSTR_PRIMARY) &&

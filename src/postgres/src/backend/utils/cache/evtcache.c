@@ -3,7 +3,7 @@
  * evtcache.c
  *	  Special-purpose cache for event trigger data.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -28,7 +28,6 @@
 #include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
-#include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
 /* YB includes */
@@ -38,7 +37,7 @@ typedef enum
 {
 	ETCS_NEEDS_REBUILD,
 	ETCS_REBUILD_STARTED,
-	ETCS_VALID
+	ETCS_VALID,
 } EventTriggerCacheStateType;
 
 typedef struct
@@ -82,7 +81,6 @@ BuildEventTriggerCache(void)
 {
 	HASHCTL		ctl;
 	HTAB	   *cache;
-	MemoryContext oldcontext;
 	Relation	rel;
 	SysScanDesc scan;
 
@@ -93,7 +91,7 @@ BuildEventTriggerCache(void)
 		 * This can happen either because a previous rebuild failed, or
 		 * because an invalidation happened before the rebuild was complete.
 		 */
-		MemoryContextResetAndDeleteChildren(EventTriggerCacheContext);
+		MemoryContextReset(EventTriggerCacheContext);
 	}
 	else
 	{
@@ -113,9 +111,6 @@ BuildEventTriggerCache(void)
 									  (Datum) 0);
 	}
 
-	/* Switch to correct memory context. */
-	oldcontext = MemoryContextSwitchTo(EventTriggerCacheContext);
-
 	/* Prevent the memory context from being nuked while we're rebuilding. */
 	EventTriggerCacheState = ETCS_REBUILD_STARTED;
 
@@ -123,7 +118,7 @@ BuildEventTriggerCache(void)
 	ctl.keysize = sizeof(EventTriggerEvent);
 	ctl.entrysize = sizeof(EventTriggerCacheEntry);
 	ctl.hcxt = EventTriggerCacheContext;
-	cache = hash_create("Event Trigger Cache", 32, &ctl,
+	cache = hash_create("EventTriggerCacheHash", 32, &ctl,
 						HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 
 	/*
@@ -152,6 +147,7 @@ BuildEventTriggerCache(void)
 		bool		evttags_isnull;
 		EventTriggerCacheEntry *entry;
 		bool		found;
+		MemoryContext oldcontext;
 
 		/* Get next tuple. */
 		/* YB: see above explanation for why not systable_getnext_ordered */
@@ -174,11 +170,16 @@ BuildEventTriggerCache(void)
 			event = EVT_SQLDrop;
 		else if (strcmp(evtevent, "table_rewrite") == 0)
 			event = EVT_TableRewrite;
+		else if (strcmp(evtevent, "login") == 0)
+			event = EVT_Login;
 		else
 			continue;
 
+		/* Switch to correct memory context. */
+		oldcontext = MemoryContextSwitchTo(EventTriggerCacheContext);
+
 		/* Allocate new cache item. */
-		item = palloc0(sizeof(EventTriggerCacheItem));
+		item = palloc0_object(EventTriggerCacheItem);
 		item->fnoid = form->evtfoid;
 		item->enabled = form->evtenabled;
 
@@ -194,6 +195,9 @@ BuildEventTriggerCache(void)
 			entry->triggerlist = lappend(entry->triggerlist, item);
 		else
 			entry->triggerlist = list_make1(item);
+
+		/* Restore previous memory context. */
+		MemoryContextSwitchTo(oldcontext);
 	}
 
 	/* Done with pg_event_trigger scan. */
@@ -210,9 +214,6 @@ BuildEventTriggerCache(void)
 	EventTriggerCacheContext->yb_memctx = NULL;
 
 	relation_close(rel, AccessShareLock);
-
-	/* Restore previous memory context. */
-	MemoryContextSwitchTo(oldcontext);
 
 	/* Install new cache. */
 	EventTriggerCache = cache;
@@ -245,8 +246,7 @@ DecodeTextArrayToBitmapset(Datum array)
 
 	if (ARR_NDIM(arr) != 1 || ARR_HASNULL(arr) || ARR_ELEMTYPE(arr) != TEXTOID)
 		elog(ERROR, "expected 1-D text array");
-	deconstruct_array(arr, TEXTOID, -1, false, TYPALIGN_INT,
-					  &elems, NULL, &nelems);
+	deconstruct_array_builtin(arr, TEXTOID, &elems, NULL, &nelems);
 
 	for (bms = NULL, i = 0; i < nelems; ++i)
 	{
@@ -257,6 +257,8 @@ DecodeTextArrayToBitmapset(Datum array)
 	}
 
 	pfree(elems);
+	if (arr != DatumGetPointer(array))
+		pfree(arr);
 
 	return bms;
 }
@@ -278,7 +280,7 @@ InvalidateEventCacheCallback(Datum arg, int cacheid, uint32 hashvalue)
 	 */
 	if (EventTriggerCacheState == ETCS_VALID)
 	{
-		MemoryContextResetAndDeleteChildren(EventTriggerCacheContext);
+		MemoryContextReset(EventTriggerCacheContext);
 		EventTriggerCache = NULL;
 	}
 

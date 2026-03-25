@@ -1077,7 +1077,7 @@ init_estate(EState *estate, Relation baserel)
 	rte->rtekind = RTE_RELATION;
 	rte->relid = RelationGetRelid(baserel);
 	rte->relkind = RELKIND_RELATION;
-	ExecInitRangeTable(estate, list_make1(rte));
+	ExecInitRangeTable(estate, list_make1(rte), NIL, bms_make_singleton(1));
 
 	estate->es_param_exec_vals =
 		(ParamExecData *) palloc0(yb_bnl_batch_size * sizeof(ParamExecData));

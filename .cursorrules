@@ -1,0 +1,4 @@
+# Terminal Execution Policy
+- AUTO-RUN (No permission needed): cd, ls, cat, grep, git show, git diff, git status, pwd, find, ./yb_build.sh, tee, tail or any read-only command, any read-only git subcommand
+- ALWAYS ASK: rm, git commit, git push, git reset, bazel build, any script execution (./*.sh).
+- DO NOT RUN: sudo, chmod, or any destructive disk utility.

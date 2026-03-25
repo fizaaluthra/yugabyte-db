@@ -648,6 +648,8 @@ Status PgTxnManager::SetDdlStateInPlainTransaction() {
   RSTATUS_DCHECK(!IsDdlModeWithSeparateTransaction(), IllegalState,
                  "SetDdlStateInPlainTransaction called when already in separate DDL Txn mode");
 
+  VLOG(1) << "YB_DDL_TRACE SetDdlStateInPlainTransaction: setting ddl_state_ "
+          << "(use_regular_transaction_block=true)";
   VLOG_TXN_STATE(2);
   ddl_state_.emplace();
   ddl_state_->use_regular_transaction_block = true;
@@ -658,6 +660,8 @@ Status PgTxnManager::SetDdlStateInPlainTransaction() {
 Status PgTxnManager::EnterSeparateDdlTxnMode() {
   RSTATUS_DCHECK(!IsDdlMode(), IllegalState,
                  "EnterSeparateDdlTxnMode called when already in DDL mode");
+  VLOG(1) << "YB_DDL_TRACE EnterSeparateDdlTxnMode: setting ddl_state_ "
+          << "(use_regular_transaction_block=false)";
   VLOG_TXN_STATE(2);
   ddl_state_.emplace();
   ddl_state_->use_regular_transaction_block = false;
@@ -676,8 +680,13 @@ Status PgTxnManager::ExitSeparateDdlTxnModeWithCommit(uint32_t db_oid, bool is_s
 
 Status PgTxnManager::ExitSeparateDdlTxnMode(const std::optional<PgDdlCommitInfo>& commit_info) {
   VLOG_TXN_STATE(2);
+  VLOG(1) << "YB_DDL_TRACE ExitSeparateDdlTxnMode: ddl_state_="
+          << (ddl_state_ ? "set" : "nullopt")
+          << ", yb_ddl_transaction_block_enabled=" << yb_ddl_transaction_block_enabled
+          << ", commit=" << (commit_info ? "true" : "false");
   if (!((yb_ddl_transaction_block_enabled && IsDdlModeWithSeparateTransaction()) ||
           (!yb_ddl_transaction_block_enabled && IsDdlMode()))) {
+    VLOG(1) << "YB_DDL_TRACE ExitSeparateDdlTxnMode: not in expected DDL mode, returning OK";
     RSTATUS_DCHECK(
         !commit_info, IllegalState,
         "Commit separate ddl txn called when not in a separate DDL transaction");
@@ -690,8 +699,7 @@ Status PgTxnManager::ExitSeparateDdlTxnMode(const std::optional<PgDdlCommitInfo>
       GetDdlModeFromDdlState(ddl_state_, commit_info));
   WARN_NOT_OK(status, Format("Failed to $0 DDL transaction", commit ? "commit" : "abort"));
   if (PREDICT_TRUE(status.ok() || !commit)) {
-    // In case of an abort, reset the DDL mode here as we may later re-enter this function and retry
-    // the abort as part of transaction error recovery if the status is not ok.
+    VLOG(1) << "YB_DDL_TRACE ExitSeparateDdlTxnMode: resetting ddl_state_";
     ddl_state_.reset();
   }
 
@@ -723,6 +731,8 @@ void PgTxnManager::SetDdlHasSyscatalogChanges() {
     return;
   }
 
+  VLOG(1) << "YB_DDL_TRACE SetDdlHasSyscatalogChanges: "
+          << "use_regular_txn_block=" << ddl_state_->use_regular_transaction_block;
   ddl_state_->has_docdb_schema_changes = true;
 }
 

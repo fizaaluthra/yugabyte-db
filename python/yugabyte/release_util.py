@@ -153,7 +153,15 @@ class ReleaseUtil:
             # This replicates the solution that made the macOS build work prior to D25109.
             # This may have unintended side effects of copying Postgres libraries to the "bin"
             # directory. A proper solution will be implemented in a future diff.
-            seed_executables.append('$BUILD_ROOT/postgres/lib/*.so')
+            # PG19 changed DLSUFFIX from .so to .dylib on macOS (upstream commit b55f62abb2c).
+            # We must only pick up extension modules, not shared libraries (lib*.dylib) which
+            # are already handled by the postgres/* manifest entry and cause collisions.
+            postgres_lib_dir = os.path.join(self.build_root, 'postgres', 'lib')
+            if os.path.isdir(postgres_lib_dir):
+                for f in sorted(os.listdir(postgres_lib_dir)):
+                    if f.endswith('.dylib') and not f.startswith('lib'):
+                        seed_executables.append(os.path.join(
+                            '$BUILD_ROOT', 'postgres', 'lib', f))
         return seed_executables
 
     def expand_value(self, old_value: str) -> str:

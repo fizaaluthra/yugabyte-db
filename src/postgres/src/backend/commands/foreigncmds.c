@@ -3,7 +3,7 @@
  * foreigncmds.c
  *	  foreign-data wrapper/server creation/manipulation commands
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -77,15 +77,26 @@ optionListToArray(List *options)
 	foreach(cell, options)
 	{
 		DefElem    *def = lfirst(cell);
+		const char *name;
 		const char *value;
 		Size		len;
 		text	   *t;
 
+		name = def->defname;
 		value = defGetString(def);
-		len = VARHDRSZ + strlen(def->defname) + 1 + strlen(value);
+
+		/* Insist that name not contain "=", else "a=b=c" is ambiguous */
+		if (strchr(name, '=') != NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("invalid option name \"%s\": must not contain \"=\"",
+							name)));
+
+		len = VARHDRSZ + strlen(name) + 1 + strlen(value);
+		/* +1 leaves room for sprintf's trailing null */
 		t = palloc(len + 1);
 		SET_VARSIZE(t, len);
-		sprintf(VARDATA(t), "%s=%s", def->defname, value);
+		sprintf(VARDATA(t), "%s=%s", name, value);
 
 		astate = accumArrayResult(astate, PointerGetDatum(t),
 								  false, TEXTOID,
@@ -366,15 +377,15 @@ AlterForeignServerOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 			srvId = form->oid;
 
 			/* Must be owner */
-			if (!pg_foreign_server_ownercheck(srvId, GetUserId()))
+			if (!object_ownercheck(ForeignServerRelationId, srvId, GetUserId()))
 				aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_FOREIGN_SERVER,
 							   NameStr(form->srvname));
 
 			/* Must be able to become new owner */
-			check_is_member_of_role(GetUserId(), newOwnerId);
+			check_can_set_role(GetUserId(), newOwnerId);
 
 			/* New owner must have USAGE privilege on foreign-data wrapper */
-			aclresult = pg_foreign_data_wrapper_aclcheck(form->srvfdw, newOwnerId, ACL_USAGE);
+			aclresult = object_aclcheck(ForeignDataWrapperRelationId, form->srvfdw, newOwnerId, ACL_USAGE);
 			if (aclresult != ACLCHECK_OK)
 			{
 				ForeignDataWrapper *fdw = GetForeignDataWrapper(form->srvfdw);
@@ -630,7 +641,7 @@ CreateForeignDataWrapper(ParseState *pstate, CreateFdwStmt *stmt)
 										 stmt->options,
 										 fdwvalidator);
 
-	if (PointerIsValid(DatumGetPointer(fdwoptions)))
+	if (DatumGetPointer(fdwoptions) != NULL)
 		values[Anum_pg_foreign_data_wrapper_fdwoptions - 1] = fdwoptions;
 	else
 		nulls[Anum_pg_foreign_data_wrapper_fdwoptions - 1] = true;
@@ -782,7 +793,7 @@ AlterForeignDataWrapper(ParseState *pstate, AlterFdwStmt *stmt)
 										stmt->options,
 										fdwvalidator);
 
-		if (PointerIsValid(DatumGetPointer(datum)))
+		if (DatumGetPointer(datum) != NULL)
 			repl_val[Anum_pg_foreign_data_wrapper_fdwoptions - 1] = datum;
 		else
 			repl_null[Anum_pg_foreign_data_wrapper_fdwoptions - 1] = true;
@@ -901,7 +912,7 @@ CreateForeignServer(CreateForeignServerStmt *stmt)
 	 */
 	fdw = GetForeignDataWrapperByName(stmt->fdwname, false);
 
-	aclresult = pg_foreign_data_wrapper_aclcheck(fdw->fdwid, ownerId, ACL_USAGE);
+	aclresult = object_aclcheck(ForeignDataWrapperRelationId, fdw->fdwid, ownerId, ACL_USAGE);
 	if (aclresult != ACLCHECK_OK)
 		aclcheck_error(aclresult, OBJECT_FDW, fdw->fdwname);
 
@@ -944,7 +955,7 @@ CreateForeignServer(CreateForeignServerStmt *stmt)
 
 	yb_validate_server_options(fdw, srvoptions, (Datum) 0 /* old_options */ );
 
-	if (PointerIsValid(DatumGetPointer(srvoptions)))
+	if (DatumGetPointer(srvoptions) != NULL)
 		values[Anum_pg_foreign_server_srvoptions - 1] = srvoptions;
 	else
 		nulls[Anum_pg_foreign_server_srvoptions - 1] = true;
@@ -1010,7 +1021,7 @@ AlterForeignServer(AlterForeignServerStmt *stmt)
 	/*
 	 * Only owner or a superuser can ALTER a SERVER.
 	 */
-	if (!pg_foreign_server_ownercheck(srvId, GetUserId()))
+	if (!object_ownercheck(ForeignServerRelationId, srvId, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_FOREIGN_SERVER,
 					   stmt->servername);
 
@@ -1055,7 +1066,7 @@ AlterForeignServer(AlterForeignServerStmt *stmt)
 
 		yb_validate_server_options(fdw, datum, yb_old_options);
 
-		if (PointerIsValid(DatumGetPointer(datum)))
+		if (DatumGetPointer(datum) != NULL)
 			repl_val[Anum_pg_foreign_server_srvoptions - 1] = datum;
 		else
 			repl_null[Anum_pg_foreign_server_srvoptions - 1] = true;
@@ -1091,13 +1102,13 @@ user_mapping_ddl_aclcheck(Oid umuserid, Oid serverid, const char *servername)
 {
 	Oid			curuserid = GetUserId();
 
-	if (!pg_foreign_server_ownercheck(serverid, curuserid))
+	if (!object_ownercheck(ForeignServerRelationId, serverid, curuserid))
 	{
 		if (umuserid == curuserid)
 		{
 			AclResult	aclresult;
 
-			aclresult = pg_foreign_server_aclcheck(serverid, curuserid, ACL_USAGE);
+			aclresult = object_aclcheck(ForeignServerRelationId, serverid, curuserid, ACL_USAGE);
 			if (aclresult != ACLCHECK_OK)
 				aclcheck_error(aclresult, OBJECT_FOREIGN_SERVER, servername);
 		}
@@ -1191,7 +1202,7 @@ CreateUserMapping(CreateUserMappingStmt *stmt)
 										 stmt->options,
 										 fdw->fdwvalidator);
 
-	if (PointerIsValid(DatumGetPointer(useoptions)))
+	if (DatumGetPointer(useoptions) != NULL)
 		values[Anum_pg_user_mapping_umoptions - 1] = useoptions;
 	else
 		nulls[Anum_pg_user_mapping_umoptions - 1] = true;
@@ -1305,7 +1316,7 @@ AlterUserMapping(AlterUserMappingStmt *stmt)
 										stmt->options,
 										fdw->fdwvalidator);
 
-		if (PointerIsValid(DatumGetPointer(datum)))
+		if (DatumGetPointer(datum) != NULL)
 			repl_val[Anum_pg_user_mapping_umoptions - 1] = datum;
 		else
 			repl_null[Anum_pg_user_mapping_umoptions - 1] = true;
@@ -1448,7 +1459,7 @@ CreateForeignTable(CreateForeignTableStmt *stmt, Oid relid)
 	 * get the actual FDW for option validation etc.
 	 */
 	server = GetForeignServerByName(stmt->servername, false);
-	aclresult = pg_foreign_server_aclcheck(server->serverid, ownerId, ACL_USAGE);
+	aclresult = object_aclcheck(ForeignServerRelationId, server->serverid, ownerId, ACL_USAGE);
 	if (aclresult != ACLCHECK_OK)
 		aclcheck_error(aclresult, OBJECT_FOREIGN_SERVER, server->servername);
 
@@ -1468,7 +1479,7 @@ CreateForeignTable(CreateForeignTableStmt *stmt, Oid relid)
 										stmt->options,
 										fdw->fdwvalidator);
 
-	if (PointerIsValid(DatumGetPointer(ftoptions)))
+	if (DatumGetPointer(ftoptions) != NULL)
 		values[Anum_pg_foreign_table_ftoptions - 1] = ftoptions;
 	else
 		nulls[Anum_pg_foreign_table_ftoptions - 1] = true;
@@ -1507,7 +1518,7 @@ ImportForeignSchema(ImportForeignSchemaStmt *stmt)
 
 	/* Check that the foreign server exists and that we have USAGE on it */
 	server = GetForeignServerByName(stmt->server_name, false);
-	aclresult = pg_foreign_server_aclcheck(server->serverid, GetUserId(), ACL_USAGE);
+	aclresult = object_aclcheck(ForeignServerRelationId, server->serverid, GetUserId(), ACL_USAGE);
 	if (aclresult != ACLCHECK_OK)
 		aclcheck_error(aclresult, OBJECT_FOREIGN_SERVER, server->servername);
 
@@ -1547,7 +1558,7 @@ ImportForeignSchema(ImportForeignSchemaStmt *stmt)
 		callback_arg.tablename = NULL;	/* not known yet */
 		callback_arg.cmd = cmd;
 		sqlerrcontext.callback = import_error_callback;
-		sqlerrcontext.arg = (void *) &callback_arg;
+		sqlerrcontext.arg = &callback_arg;
 		sqlerrcontext.previous = error_context_stack;
 		error_context_stack = &sqlerrcontext;
 
@@ -1592,6 +1603,7 @@ ImportForeignSchema(ImportForeignSchemaStmt *stmt)
 			pstmt->utilityStmt = (Node *) cstmt;
 			pstmt->stmt_location = rs->stmt_location;
 			pstmt->stmt_len = rs->stmt_len;
+			pstmt->planOrigin = PLAN_STMT_INTERNAL;
 
 			/* Execute statement */
 			ProcessUtility(pstmt, cmd, false,

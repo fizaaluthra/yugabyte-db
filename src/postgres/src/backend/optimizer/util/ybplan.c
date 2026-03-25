@@ -836,7 +836,7 @@ YbUpdateComputeIndexColumnReferences(const Relation rel,
 	 * Add the primary key to the head of the entity list so that it gets
 	 * evaluated first.
 	 */
-	if (RelationGetPrimaryKeyIndex(rel) != InvalidOid)
+	if (RelationGetPrimaryKeyIndex(rel, false) != InvalidOid)
 	{
 		Bitmapset  *pkbms = RelationGetIndexAttrBitmap(rel,
 													   INDEX_ATTR_BITMAP_PRIMARY_KEY);
@@ -957,7 +957,7 @@ YbUpdateComputeForeignKeyColumnReferences(const Relation rel,
 								   SKIP_REFERENCING_FKEY :
 								   SKIP_REFERENCED_FKEY);
 	const AttrNumber offset = YBGetFirstLowInvalidAttributeNumber(rel);
-	Oid			pk_oid = RelationGetPrimaryKeyIndex(rel);
+	Oid			pk_oid = RelationGetPrimaryKeyIndex(rel, false);
 	bool		pk_maybe_modified = !(OidIsValid(pk_oid) &&
 									  list_member_oid(skip_entities->index_list,
 													  pk_oid));

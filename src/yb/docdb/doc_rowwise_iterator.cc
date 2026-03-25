@@ -872,7 +872,8 @@ Status DocRowwiseIterator::FillRow(
       dest.value.Clear();
       continue;
     }
-    source->ToQLValuePB(VERIFY_RESULT_REF(schema.column_by_id(column.id)).type(), &dest.value);
+    const auto& col_schema = VERIFY_RESULT_REF(schema.column_by_id(column.id));
+    source->ToQLValuePB(col_schema.type(), &dest.value);
     dest.ttl_seconds = source->GetTtl();
     if (source->IsWriteTimeSet()) {
       dest.write_time = source->GetWriteTime();

@@ -1,11 +1,11 @@
 /*-------------------------------------------------------------------------
  *
  * spin.h
- *	   Hardware-independent implementation of spinlocks.
+ *	   API for spinlocks.
  *
  *
- *	The hardware-independent interface to spinlocks is defined by the
- *	typedef "slock_t" and these macros:
+ *	The interface to spinlocks is defined by the typedef "slock_t" and
+ *	these macros:
  *
  *	void SpinLockInit(volatile slock_t *lock)
  *		Initialize a spinlock (to the unlocked state).
@@ -42,7 +42,7 @@
  *	be again.
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/storage/spin.h
@@ -53,14 +53,17 @@
 #define SPIN_H
 
 #include "storage/s_lock.h"
-#ifndef HAVE_SPINLOCKS
-#include "storage/pg_sema.h"
-#endif
 
-/* YB includes */
-#include "miscadmin.h"
-#include "storage/proc.h"
-
+/*
+ * YB: We track spinlock acquisitions per-process so the postmaster can detect
+ * when a child dies while holding a spinlock and force a restart.  We use an
+ * external pointer (set in proc.c when MyProc is initialized) instead of
+ * referencing MyProc directly, because including proc.h here creates a
+ * circular include chain in PG19:  lock.h -> shmem.h -> spin.h -> proc.h ->
+ * lock.h.  When the pointer is NULL (postmaster, before InitProcess), the
+ * tracking is simply skipped.
+ */
+extern PGDLLIMPORT int *yb_spin_locks_acquired_ptr;
 
 #define SpinLockInit(lock)	S_INIT_LOCK(lock)
 
@@ -68,8 +71,8 @@
 #define SpinLockAcquire(lock) \
 	do \
 	{ \
-		if (IsUnderPostmaster && MyProc) \
-			MyProc->ybSpinLocksAcquired++; \
+		if (yb_spin_locks_acquired_ptr) \
+			(*yb_spin_locks_acquired_ptr)++; \
 		S_LOCK(lock); \
 	} while (0)
 
@@ -78,19 +81,10 @@
 	do \
 	{ \
 		S_UNLOCK(lock); \
-		if (IsUnderPostmaster && MyProc && MyProc->ybSpinLocksAcquired >= 1) \
-			MyProc->ybSpinLocksAcquired--; \
+		if (yb_spin_locks_acquired_ptr && *yb_spin_locks_acquired_ptr >= 1) \
+			(*yb_spin_locks_acquired_ptr)--; \
 	} while (0)
 
 #define SpinLockFree(lock)	S_LOCK_FREE(lock)
-
-
-extern int	SpinlockSemas(void);
-extern Size SpinlockSemaSize(void);
-
-#ifndef HAVE_SPINLOCKS
-extern void SpinlockSemaInit(void);
-extern PGDLLIMPORT PGSemaphore *SpinlockSemaArray;
-#endif
 
 #endif							/* SPIN_H */

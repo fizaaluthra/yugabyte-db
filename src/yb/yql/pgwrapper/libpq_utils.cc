@@ -74,7 +74,8 @@ std::string ExecStatusTypeToStr(ExecStatusType exec_status_type) {
     (PGRES_COPY_BOTH) \
     (PGRES_SINGLE_TUPLE) \
     (PGRES_PIPELINE_SYNC) \
-    (PGRES_PIPELINE_ABORTED)
+    (PGRES_PIPELINE_ABORTED) \
+    (PGRES_TUPLES_CHUNK) /* YB: added in PG19 for chunked tuple transfer */
   switch (exec_status_type) {
     BOOST_PP_SEQ_FOR_EACH(EXEC_STATUS_SWITCH_CASE, ~, EXEC_STATUS_TYPE_ENUM_ELEMENTS)
   }

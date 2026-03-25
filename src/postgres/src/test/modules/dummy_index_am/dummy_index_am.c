@@ -3,7 +3,7 @@
  * dummy_index_am.c
  *		Index AM template main file.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -18,23 +18,19 @@
 #include "catalog/index.h"
 #include "commands/vacuum.h"
 #include "nodes/pathnodes.h"
-#include "utils/guc.h"
-#include "utils/rel.h"
 
 PG_MODULE_MAGIC;
 
-void		_PG_init(void);
-
 /* parse table for fillRelOptions */
-relopt_parse_elt di_relopt_tab[6];
+static relopt_parse_elt di_relopt_tab[6];
 
 /* Kind of relation options for dummy index */
-relopt_kind di_relopt_kind;
+static relopt_kind di_relopt_kind;
 
 typedef enum DummyAmEnum
 {
 	DUMMY_AM_ENUM_ONE,
-	DUMMY_AM_ENUM_TWO
+	DUMMY_AM_ENUM_TWO,
 }			DummyAmEnum;
 
 /* Dummy index options */
@@ -49,7 +45,7 @@ typedef struct DummyIndexOptions
 	int			option_string_null_offset;
 }			DummyIndexOptions;
 
-relopt_enum_elt_def dummyAmEnumValues[] =
+static relopt_enum_elt_def dummyAmEnumValues[] =
 {
 	{"one", DUMMY_AM_ENUM_ONE},
 	{"two", DUMMY_AM_ENUM_TWO},
@@ -142,7 +138,7 @@ dibuild(Relation heap, Relation index, IndexInfo *indexInfo)
 {
 	IndexBuildResult *result;
 
-	result = (IndexBuildResult *) palloc(sizeof(IndexBuildResult));
+	result = palloc_object(IndexBuildResult);
 
 	/* let's pretend that no tuples were scanned */
 	result->heap_tuples = 0;
@@ -280,50 +276,57 @@ diendscan(IndexScanDesc scan)
 Datum
 dihandler(PG_FUNCTION_ARGS)
 {
-	IndexAmRoutine *amroutine = makeNode(IndexAmRoutine);
+	static const IndexAmRoutine amroutine = {
+		.type = T_IndexAmRoutine,
+		.amstrategies = 0,
+		.amsupport = 1,
+		.amcanorder = false,
+		.amcanorderbyop = false,
+		.amcanhash = false,
+		.amconsistentequality = false,
+		.amconsistentordering = false,
+		.amcanbackward = false,
+		.amcanunique = false,
+		.amcanmulticol = false,
+		.amoptionalkey = false,
+		.amsearcharray = false,
+		.amsearchnulls = false,
+		.amstorage = false,
+		.amclusterable = false,
+		.ampredlocks = false,
+		.amcanparallel = false,
+		.amcanbuildparallel = false,
+		.amcaninclude = false,
+		.amusemaintenanceworkmem = false,
+		.amsummarizing = false,
+		.amparallelvacuumoptions = VACUUM_OPTION_NO_PARALLEL,
+		.amkeytype = InvalidOid,
 
-	amroutine->amstrategies = 0;
-	amroutine->amsupport = 1;
-	amroutine->amcanorder = false;
-	amroutine->amcanorderbyop = false;
-	amroutine->amcanbackward = false;
-	amroutine->amcanunique = false;
-	amroutine->amcanmulticol = false;
-	amroutine->amoptionalkey = false;
-	amroutine->amsearcharray = false;
-	amroutine->amsearchnulls = false;
-	amroutine->amstorage = false;
-	amroutine->amclusterable = false;
-	amroutine->ampredlocks = false;
-	amroutine->amcanparallel = false;
-	amroutine->amcaninclude = false;
-	amroutine->amusemaintenanceworkmem = false;
-	amroutine->amparallelvacuumoptions = VACUUM_OPTION_NO_PARALLEL;
-	amroutine->amkeytype = InvalidOid;
+		.ambuild = dibuild,
+		.ambuildempty = dibuildempty,
+		.aminsert = diinsert,
+		.ambulkdelete = dibulkdelete,
+		.amvacuumcleanup = divacuumcleanup,
+		.amcanreturn = NULL,
+		.amcostestimate = dicostestimate,
+		.amgettreeheight = NULL,
+		.amoptions = dioptions,
+		.amproperty = NULL,
+		.ambuildphasename = NULL,
+		.amvalidate = divalidate,
+		.ambeginscan = dibeginscan,
+		.amrescan = direscan,
+		.amgettuple = NULL,
+		.amgetbitmap = NULL,
+		.amendscan = diendscan,
+		.ammarkpos = NULL,
+		.amrestrpos = NULL,
+		.amestimateparallelscan = NULL,
+		.aminitparallelscan = NULL,
+		.amparallelrescan = NULL,
+	};
 
-	amroutine->ambuild = dibuild;
-	amroutine->ambuildempty = dibuildempty;
-	amroutine->aminsert = diinsert;
-	amroutine->ambulkdelete = dibulkdelete;
-	amroutine->amvacuumcleanup = divacuumcleanup;
-	amroutine->amcanreturn = NULL;
-	amroutine->amcostestimate = dicostestimate;
-	amroutine->amoptions = dioptions;
-	amroutine->amproperty = NULL;
-	amroutine->ambuildphasename = NULL;
-	amroutine->amvalidate = divalidate;
-	amroutine->ambeginscan = dibeginscan;
-	amroutine->amrescan = direscan;
-	amroutine->amgettuple = NULL;
-	amroutine->amgetbitmap = NULL;
-	amroutine->amendscan = diendscan;
-	amroutine->ammarkpos = NULL;
-	amroutine->amrestrpos = NULL;
-	amroutine->amestimateparallelscan = NULL;
-	amroutine->aminitparallelscan = NULL;
-	amroutine->amparallelrescan = NULL;
-
-	PG_RETURN_POINTER(amroutine);
+	PG_RETURN_POINTER(&amroutine);
 }
 
 void

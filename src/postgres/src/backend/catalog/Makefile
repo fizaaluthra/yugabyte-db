@@ -2,7 +2,7 @@
 #
 # Makefile for backend/catalog
 #
-# Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+# Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
 # Portions Copyright (c) 1994, Regents of the University of California
 #
 # src/backend/catalog/Makefile
@@ -46,6 +46,7 @@ OBJS = \
 	pg_range.o \
 	pg_shdepend.o \
 	pg_subscription.o \
+	pg_tablespace.o \
 	pg_type.o \
 	storage.o \
 	toasting.o
@@ -134,16 +135,15 @@ $(top_builddir)/src/include/catalog/header-stamp: bki-stamp yb_bki-stamp
 # Note: installation of generated headers is handled elsewhere
 .PHONY: install-data
 install-data: bki-stamp yb_bki-stamp installdirs
-	$(INSTALL_DATA) $(call vpathsearch,postgres.bki) '$(DESTDIR)$(datadir)/postgres.bki'
-	$(INSTALL_DATA) $(call vpathsearch,yb_postgres.bki) '$(DESTDIR)$(datadir)/yb_postgres.bki'
-	$(INSTALL_DATA) $(call vpathsearch,system_constraints.sql) '$(DESTDIR)$(datadir)/system_constraints.sql'
+	$(INSTALL_DATA) postgres.bki '$(DESTDIR)$(datadir)/postgres.bki'
+	$(INSTALL_DATA) yb_postgres.bki '$(DESTDIR)$(datadir)/yb_postgres.bki'
+	$(INSTALL_DATA) system_constraints.sql '$(DESTDIR)$(datadir)/system_constraints.sql'
 	$(INSTALL_DATA) $(srcdir)/system_functions.sql '$(DESTDIR)$(datadir)/system_functions.sql'
 	$(INSTALL_DATA) $(srcdir)/yb_system_functions.sql '$(DESTDIR)$(datadir)/yb_system_functions.sql'
 	$(INSTALL_DATA) $(srcdir)/system_views.sql '$(DESTDIR)$(datadir)/system_views.sql'
 	$(INSTALL_DATA) $(srcdir)/yb_system_views.sql '$(DESTDIR)$(datadir)/yb_system_views.sql'
 	$(INSTALL_DATA) $(srcdir)/information_schema.sql '$(DESTDIR)$(datadir)/information_schema.sql'
 	$(INSTALL_DATA) $(srcdir)/sql_features.txt '$(DESTDIR)$(datadir)/sql_features.txt'
-	$(INSTALL_DATA) $(srcdir)/fix-CVE-2024-4317.sql '$(DESTDIR)$(datadir)/fix-CVE-2024-4317.sql'
 
 installdirs:
 	$(MKDIR_P) '$(DESTDIR)$(datadir)'

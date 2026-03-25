@@ -58,7 +58,7 @@ extern "C" {
 #elif defined(__cplusplus)
   inline void __lsan_ignore_object(const void *p) {}
 #else
-  static void __lsan_ignore_object(const void *p) {}
+  static void __attribute__((unused)) __lsan_ignore_object(const void *p) {}
 #endif
 
 #ifdef __cplusplus

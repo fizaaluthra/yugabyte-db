@@ -404,11 +404,6 @@ ExecEndYbBitmapTableScan(YbBitmapTableScanState *node)
 	tsdesc = node->ss.ss_currentScanDesc;
 
 	/*
-	 * Free the exprcontext
-	 */
-	ExecFreeExprContext(&node->ss.ps);
-
-	/*
 	 * clear out tuple table slots
 	 */
 	if (node->ss.ps.ps_ResultTupleSlot)

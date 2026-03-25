@@ -18,7 +18,8 @@ SELECT
         'relname', 'test',
         'relpages', 18::integer,
         'reltuples', 21::real,
-        'relallvisible', 24::integer);
+        'relallvisible', 24::integer,
+	'relallfrozen', 27::integer);
  pg_restore_relation_stats 
 ---------------------------
  t
@@ -27,13 +28,13 @@ SELECT
 -- CREATE INDEX on a table with autovac disabled should not overwrite
 -- stats
 CREATE INDEX test_i ON stats_import.test(id);
-SELECT relname, relpages, reltuples, relallvisible
+SELECT relname, relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'stats_import.test'::regclass
 ORDER BY relname;
- relname | relpages | reltuples | relallvisible 
----------+----------+-----------+---------------
- test    |       18 |        21 |            24
+ relname | relpages | reltuples | relallvisible | relallfrozen 
+---------+----------+-----------+---------------+--------------
+ test    |       18 |        21 |            24 |           27
 (1 row)
 
 SELECT pg_clear_relation_stats('stats_import', 'test');
@@ -49,26 +50,26 @@ SELECT pg_clear_relation_stats('stats_import', 'test');
 SELECT pg_catalog.pg_restore_relation_stats(
         'relname', 'test',
         'relpages', 17::integer);
-ERROR:  "schemaname" cannot be NULL
+ERROR:  argument "schemaname" must not be null
 -- error: relname missing
 SELECT pg_catalog.pg_restore_relation_stats(
         'schemaname', 'stats_import',
         'relpages', 17::integer);
-ERROR:  "relname" cannot be NULL
+ERROR:  argument "relname" must not be null
 --- error: schemaname is wrong type
 SELECT pg_catalog.pg_restore_relation_stats(
         'schemaname', 3.6::float,
         'relname', 'test',
         'relpages', 17::integer);
-WARNING:  argument "schemaname" has type "double precision", expected type "text"
-ERROR:  "schemaname" cannot be NULL
+WARNING:  argument "schemaname" has type double precision, expected type text
+ERROR:  argument "schemaname" must not be null
 --- error: relname is wrong type
 SELECT pg_catalog.pg_restore_relation_stats(
         'schemaname', 'stats_import',
         'relname', 0::oid,
         'relpages', 17::integer);
-WARNING:  argument "relname" has type "oid", expected type "text"
-ERROR:  "relname" cannot be NULL
+WARNING:  argument "relname" has type oid, expected type text
+ERROR:  argument "relname" must not be null
 -- error: relation not found
 SELECT pg_catalog.pg_restore_relation_stats(
         'schemaname', 'stats_import',
@@ -87,14 +88,14 @@ SELECT pg_restore_relation_stats(
         'schemaname', 'stats_import',
         'relname', 'test',
         NULL, '17'::integer);
-ERROR:  name at variadic position 5 is NULL
+ERROR:  name at variadic position 5 is null
 -- starting stats
-SELECT relpages, reltuples, relallvisible
+SELECT relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'stats_import.test_i'::regclass;
- relpages | reltuples | relallvisible 
-----------+-----------+---------------
-        1 |         0 |             0
+ relpages | reltuples | relallvisible | relallfrozen 
+----------+-----------+---------------+--------------
+        1 |         0 |             0 |            0
 (1 row)
 
 -- regular indexes have special case locking rules
@@ -119,9 +120,9 @@ WHERE relation = 'stats_import.test'::regclass AND
 SELECT mode FROM pg_locks
 WHERE relation = 'stats_import.test_i'::regclass AND
       pid = pg_backend_pid() AND granted;
-      mode       
------------------
- AccessShareLock
+           mode           
+--------------------------
+ ShareUpdateExclusiveLock
 (1 row)
 
 COMMIT;
@@ -189,18 +190,19 @@ SELECT pg_restore_relation_stats(
         'version', 150000::integer,
         'relpages', '-17'::integer,
         'reltuples', 400::real,
-        'relallvisible', 4::integer);
+        'relallvisible', 4::integer,
+        'relallfrozen', 2::integer);
  pg_restore_relation_stats 
 ---------------------------
  t
 (1 row)
 
-SELECT relpages, reltuples, relallvisible
+SELECT relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'stats_import.test'::regclass;
- relpages | reltuples | relallvisible 
-----------+-----------+---------------
-      -17 |       400 |             4
+ relpages | reltuples | relallvisible | relallfrozen 
+----------+-----------+---------------+--------------
+      -17 |       400 |             4 |            2
 (1 row)
 
 -- ok: set just relpages, rest stay same
@@ -213,12 +215,12 @@ SELECT pg_restore_relation_stats(
  t
 (1 row)
 
-SELECT relpages, reltuples, relallvisible
+SELECT relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'stats_import.test'::regclass;
- relpages | reltuples | relallvisible 
-----------+-----------+---------------
-       16 |       400 |             4
+ relpages | reltuples | relallvisible | relallfrozen 
+----------+-----------+---------------+--------------
+       16 |       400 |             4 |            2
 (1 row)
 
 -- ok: set just reltuples, rest stay same
@@ -231,12 +233,12 @@ SELECT pg_restore_relation_stats(
  t
 (1 row)
 
-SELECT relpages, reltuples, relallvisible
+SELECT relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'stats_import.test'::regclass;
- relpages | reltuples | relallvisible 
-----------+-----------+---------------
-       16 |       500 |             4
+ relpages | reltuples | relallvisible | relallfrozen 
+----------+-----------+---------------+--------------
+       16 |       500 |             4 |            2
 (1 row)
 
 -- ok: set just relallvisible, rest stay same
@@ -249,12 +251,31 @@ SELECT pg_restore_relation_stats(
  t
 (1 row)
 
-SELECT relpages, reltuples, relallvisible
+SELECT relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'stats_import.test'::regclass;
- relpages | reltuples | relallvisible 
-----------+-----------+---------------
-       16 |       500 |             5
+ relpages | reltuples | relallvisible | relallfrozen 
+----------+-----------+---------------+--------------
+       16 |       500 |             5 |            2
+(1 row)
+
+-- ok: just relallfrozen
+SELECT pg_restore_relation_stats(
+        'schemaname', 'stats_import',
+        'relname', 'test',
+        'version', 150000::integer,
+        'relallfrozen', 3::integer);
+ pg_restore_relation_stats 
+---------------------------
+ t
+(1 row)
+
+SELECT relpages, reltuples, relallvisible, relallfrozen
+FROM pg_class
+WHERE oid = 'stats_import.test'::regclass;
+ relpages | reltuples | relallvisible | relallfrozen 
+----------+-----------+---------------+--------------
+       16 |       500 |             5 |            3
 (1 row)
 
 -- warn: bad relpages type, rest updated
@@ -263,19 +284,20 @@ SELECT pg_restore_relation_stats(
         'relname', 'test',
         'relpages', 'nope'::text,
         'reltuples', 400.0::real,
-        'relallvisible', 4::integer);
-WARNING:  argument "relpages" has type "text", expected type "integer"
+        'relallvisible', 4::integer,
+        'relallfrozen', 3::integer);
+WARNING:  argument "relpages" has type text, expected type integer
  pg_restore_relation_stats 
 ---------------------------
  f
 (1 row)
 
-SELECT relpages, reltuples, relallvisible
+SELECT relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'stats_import.test'::regclass;
- relpages | reltuples | relallvisible 
-----------+-----------+---------------
-       16 |       400 |             4
+ relpages | reltuples | relallvisible | relallfrozen 
+----------+-----------+---------------+--------------
+       16 |       400 |             4 |            3
 (1 row)
 
 -- unrecognized argument name, rest ok
@@ -336,7 +358,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'attname', 'id',
     'inherited', false::boolean,
     'null_frac', 0.1::real);
-ERROR:  "schemaname" cannot be NULL
+ERROR:  argument "schemaname" must not be null
 -- error: schema does not exist
 SELECT pg_catalog.pg_restore_attribute_stats(
     'schemaname', 'nope',
@@ -351,7 +373,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'attname', 'id',
     'inherited', false::boolean,
     'null_frac', 0.1::real);
-ERROR:  "relname" cannot be NULL
+ERROR:  argument "relname" must not be null
 -- error: relname does not exist
 SELECT pg_catalog.pg_restore_attribute_stats(
     'schemaname', 'stats_import',
@@ -367,7 +389,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'attname', 'id',
     'inherited', false::boolean,
     'null_frac', 0.1::real);
-ERROR:  "relname" cannot be NULL
+ERROR:  argument "relname" must not be null
 -- error: NULL attname
 SELECT pg_catalog.pg_restore_attribute_stats(
     'schemaname', 'stats_import',
@@ -375,7 +397,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'attname', NULL,
     'inherited', false::boolean,
     'null_frac', 0.1::real);
-ERROR:  must specify either attname or attnum
+ERROR:  must specify either "attname" or "attnum"
 -- error: attname doesn't exist
 SELECT pg_catalog.pg_restore_attribute_stats(
     'schemaname', 'stats_import',
@@ -394,14 +416,14 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'attnum', 1::smallint,
     'inherited', false::boolean,
     'null_frac', 0.1::real);
-ERROR:  cannot specify both attname and attnum
+ERROR:  cannot specify both "attname" and "attnum"
 -- error: neither attname nor attnum
 SELECT pg_catalog.pg_restore_attribute_stats(
     'schemaname', 'stats_import',
     'relname', 'test',
     'inherited', false::boolean,
     'null_frac', 0.1::real);
-ERROR:  must specify either attname or attnum
+ERROR:  must specify either "attname" or "attnum"
 -- error: attribute is system column
 SELECT pg_catalog.pg_restore_attribute_stats(
     'schemaname', 'stats_import',
@@ -417,7 +439,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'attname', 'id',
     'inherited', NULL::boolean,
     'null_frac', 0.1::real);
-ERROR:  "inherited" cannot be NULL
+ERROR:  argument "inherited" must not be null
 -- ok: just the fixed values, with version, no stakinds
 SELECT pg_catalog.pg_restore_attribute_stats(
     'schemaname', 'stats_import',
@@ -505,7 +527,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'null_frac', 0.21::real,
     'most_common_freqs', '{0.1,0.2,0.3}'::real[]
     );
-WARNING:  "most_common_vals" must be specified when "most_common_freqs" is specified
+WARNING:  argument "most_common_vals" must be specified when argument "most_common_freqs" is specified
  pg_restore_attribute_stats 
 ----------------------------
  f
@@ -531,7 +553,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'null_frac', 0.21::real,
     'most_common_vals', '{1,2,3}'::text
     );
-WARNING:  "most_common_freqs" must be specified when "most_common_vals" is specified
+WARNING:  argument "most_common_freqs" must be specified when argument "most_common_vals" is specified
  pg_restore_attribute_stats 
 ----------------------------
  f
@@ -558,8 +580,8 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'most_common_vals', '{2,1,3}'::text,
     'most_common_freqs', '{0.2,0.1}'::double precision[]
     );
-WARNING:  argument "most_common_freqs" has type "double precision[]", expected type "real[]"
-WARNING:  "most_common_freqs" must be specified when "most_common_vals" is specified
+WARNING:  argument "most_common_freqs" has type double precision[], expected type real[]
+WARNING:  argument "most_common_freqs" must be specified when argument "most_common_vals" is specified
  pg_restore_attribute_stats 
 ----------------------------
  f
@@ -586,7 +608,12 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'most_common_vals', '{2,four,3}'::text,
     'most_common_freqs', '{0.3,0.25,0.05}'::real[]
     );
-ERROR:  invalid input syntax for type integer: "four"
+WARNING:  invalid input syntax for type integer: "four"
+ pg_restore_attribute_stats 
+----------------------------
+ f
+(1 row)
+
 SELECT *
 FROM pg_stats
 WHERE schemaname = 'stats_import'
@@ -595,7 +622,7 @@ AND inherited = false
 AND attname = 'id';
   schemaname  | tablename | attname | inherited | null_frac | avg_width | n_distinct | most_common_vals | most_common_freqs | histogram_bounds | correlation | most_common_elems | most_common_elem_freqs | elem_count_histogram | range_length_histogram | range_empty_frac | range_bounds_histogram 
 --------------+-----------+---------+-----------+-----------+-----------+------------+------------------+-------------------+------------------+-------------+-------------------+------------------------+----------------------+------------------------+------------------+------------------------
- stats_import | test      | id      | f         |      0.22 |         5 |        0.6 |                  |                   |                  |             |                   |                        |                      |                        |                  | 
+ stats_import | test      | id      | f         |      0.23 |         5 |        0.6 |                  |                   |                  |             |                   |                        |                      |                        |                  | 
 (1 row)
 
 -- ok: mcv+mcf
@@ -620,7 +647,7 @@ AND inherited = false
 AND attname = 'id';
   schemaname  | tablename | attname | inherited | null_frac | avg_width | n_distinct | most_common_vals | most_common_freqs | histogram_bounds | correlation | most_common_elems | most_common_elem_freqs | elem_count_histogram | range_length_histogram | range_empty_frac | range_bounds_histogram 
 --------------+-----------+---------+-----------+-----------+-----------+------------+------------------+-------------------+------------------+-------------+-------------------+------------------------+----------------------+------------------------+------------------+------------------------
- stats_import | test      | id      | f         |      0.22 |         5 |        0.6 | {2,1,3}          | {0.3,0.25,0.05}   |                  |             |                   |                        |                      |                        |                  | 
+ stats_import | test      | id      | f         |      0.23 |         5 |        0.6 | {2,1,3}          | {0.3,0.25,0.05}   |                  |             |                   |                        |                      |                        |                  | 
 (1 row)
 
 -- warn: NULL in histogram array, rest get set
@@ -632,7 +659,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'null_frac', 0.24::real,
     'histogram_bounds', '{1,NULL,3,4}'::text
     );
-WARNING:  "histogram_bounds" array cannot contain NULL values
+WARNING:  "histogram_bounds" array must not contain null values
  pg_restore_attribute_stats 
 ----------------------------
  f
@@ -682,7 +709,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'null_frac', 0.25::real,
     'elem_count_histogram', '{1,1,NULL,1,1,1,1,1}'::real[]
     );
-WARNING:  "elem_count_histogram" array cannot contain NULL values
+WARNING:  argument "elem_count_histogram" array must not contain null values
  pg_restore_attribute_stats 
 ----------------------------
  f
@@ -734,7 +761,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'range_empty_frac', 0.5::real,
     'range_length_histogram', '{399,499,Infinity}'::text
     );
-WARNING:  attribute "id" is not a range type
+WARNING:  column "id" is not a range type
 DETAIL:  Cannot set STATISTIC_KIND_RANGE_LENGTH_HISTOGRAM or STATISTIC_KIND_BOUNDS_HISTOGRAM.
  pg_restore_attribute_stats 
 ----------------------------
@@ -761,7 +788,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'null_frac', 0.28::real,
     'range_length_histogram', '{399,499,Infinity}'::text
     );
-WARNING:  "range_empty_frac" must be specified when "range_length_histogram" is specified
+WARNING:  argument "range_empty_frac" must be specified when argument "range_length_histogram" is specified
  pg_restore_attribute_stats 
 ----------------------------
  f
@@ -787,7 +814,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'null_frac', 0.29::real,
     'range_empty_frac', 0.5::real
     );
-WARNING:  "range_length_histogram" must be specified when "range_empty_frac" is specified
+WARNING:  argument "range_length_histogram" must be specified when argument "range_empty_frac" is specified
  pg_restore_attribute_stats 
 ----------------------------
  f
@@ -838,7 +865,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'null_frac', 0.31::real,
     'range_bounds_histogram', '{"[-1,1)","[0,4)","[1,4)","[1,100)"}'::text
     );
-WARNING:  attribute "id" is not a range type
+WARNING:  column "id" is not a range type
 DETAIL:  Cannot set STATISTIC_KIND_RANGE_LENGTH_HISTOGRAM or STATISTIC_KIND_BOUNDS_HISTOGRAM.
  pg_restore_attribute_stats 
 ----------------------------
@@ -890,7 +917,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'most_common_elems', '{3,1}'::text,
     'most_common_elem_freqs', '{0.3,0.2,0.2,0.3,0.0}'::real[]
     );
-WARNING:  unable to determine element type of attribute "arange"
+WARNING:  could not determine element type of column "arange"
 DETAIL:  Cannot set STATISTIC_KIND_MCELEM or STATISTIC_KIND_DECHIST.
  pg_restore_attribute_stats 
 ----------------------------
@@ -918,7 +945,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'most_common_elems', '{1,3}'::text,
     'most_common_elem_freqs', '{0.3,0.2,0.2,0.3,0.0}'::real[]
     );
-WARNING:  unable to determine element type of attribute "id"
+WARNING:  could not determine element type of column "id"
 DETAIL:  Cannot set STATISTIC_KIND_MCELEM or STATISTIC_KIND_DECHIST.
  pg_restore_attribute_stats 
 ----------------------------
@@ -945,7 +972,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'null_frac', 0.34::real,
     'most_common_elems', '{one,two}'::text
     );
-WARNING:  "most_common_elem_freqs" must be specified when "most_common_elems" is specified
+WARNING:  argument "most_common_elem_freqs" must be specified when argument "most_common_elems" is specified
  pg_restore_attribute_stats 
 ----------------------------
  f
@@ -971,7 +998,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'null_frac', 0.35::real,
     'most_common_elem_freqs', '{0.3,0.2,0.2,0.3}'::real[]
     );
-WARNING:  "most_common_elems" must be specified when "most_common_elem_freqs" is specified
+WARNING:  argument "most_common_elems" must be specified when argument "most_common_elem_freqs" is specified
  pg_restore_attribute_stats 
 ----------------------------
  f
@@ -1022,7 +1049,7 @@ SELECT pg_catalog.pg_restore_attribute_stats(
     'null_frac', 0.36::real,
     'elem_count_histogram', '{1,1,1,1,1,1,1,1,1,1}'::real[]
     );
-WARNING:  unable to determine element type of attribute "id"
+WARNING:  could not determine element type of column "id"
 DETAIL:  Cannot set STATISTIC_KIND_MCELEM or STATISTIC_KIND_DECHIST.
  pg_restore_attribute_stats 
 ----------------------------
@@ -1275,19 +1302,20 @@ SELECT pg_restore_relation_stats(
         'relname', 'stats_temp',
         'relpages', '-19'::integer,
         'reltuples', 401::real,
-        'relallvisible', 5::integer);
+        'relallvisible', 5::integer,
+        'relallfrozen', 3::integer);
  pg_restore_relation_stats 
 ---------------------------
  t
 (1 row)
 
-SELECT relname, relpages, reltuples, relallvisible
+SELECT relname, relpages, reltuples, relallvisible, relallfrozen
 FROM pg_class
 WHERE oid = 'pg_temp.stats_temp'::regclass
 ORDER BY relname;
-  relname   | relpages | reltuples | relallvisible 
-------------+----------+-----------+---------------
- stats_temp |      -19 |       401 |             5
+  relname   | relpages | reltuples | relallvisible | relallfrozen 
+------------+----------+-----------+---------------+--------------
+ stats_temp |      -19 |       401 |             5 |            3
 (1 row)
 
 SELECT pg_catalog.pg_restore_attribute_stats(

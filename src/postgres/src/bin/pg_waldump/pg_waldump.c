@@ -2,7 +2,7 @@
  *
  * pg_waldump.c - decode and display WAL
  *
- * Copyright (c) 2013-2022, PostgreSQL Global Development Group
+ * Copyright (c) 2013-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		  src/bin/pg_waldump/pg_waldump.c
@@ -13,6 +13,7 @@
 #include "postgres.h"
 
 #include <dirent.h>
+#include <limits.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -23,9 +24,13 @@
 #include "access/xlogrecord.h"
 #include "access/xlogstats.h"
 #include "common/fe_memutils.h"
+#include "common/file_perm.h"
+#include "common/file_utils.h"
 #include "common/logging.h"
+#include "common/relpath.h"
 #include "getopt_long.h"
 #include "rmgrdesc.h"
+#include "storage/bufpage.h"
 
 /*
  * NOTE: For any code change or issue fix here, it is highly recommended to
@@ -37,7 +42,7 @@ static const char *progname;
 static int	WalSegSz;
 static volatile sig_atomic_t time_to_stop = false;
 
-static const RelFileNode emptyRelFileNode = {0, 0, 0};
+static const RelFileLocator emptyRelFileLocator = {0, 0, 0};
 
 typedef struct XLogDumpPrivate
 {
@@ -63,13 +68,16 @@ typedef struct XLogDumpConfig
 	bool		filter_by_rmgr_enabled;
 	TransactionId filter_by_xid;
 	bool		filter_by_xid_enabled;
-	RelFileNode filter_by_relation;
+	RelFileLocator filter_by_relation;
 	bool		filter_by_extended;
 	bool		filter_by_relation_enabled;
 	BlockNumber filter_by_relation_block;
 	bool		filter_by_relation_block_enabled;
 	ForkNumber	filter_by_relation_forknum;
 	bool		filter_by_fpw;
+
+	/* save options */
+	char	   *save_fullpage_path;
 } XLogDumpConfig;
 
 
@@ -80,7 +88,7 @@ typedef struct XLogDumpConfig
 #ifndef WIN32
 
 static void
-sigint_handler(int signum)
+sigint_handler(SIGNAL_ARGS)
 {
 	time_to_stop = true;
 }
@@ -113,6 +121,37 @@ verify_directory(const char *directory)
 }
 
 /*
+ * Create if necessary the directory storing the full-page images extracted
+ * from the WAL records read.
+ */
+static void
+create_fullpage_directory(char *path)
+{
+	int			ret;
+
+	switch ((ret = pg_check_dir(path)))
+	{
+		case 0:
+			/* Does not exist, so create it */
+			if (pg_mkdir_p(path, pg_dir_create_mode) < 0)
+				pg_fatal("could not create directory \"%s\": %m", path);
+			break;
+		case 1:
+			/* Present and empty, so do nothing */
+			break;
+		case 2:
+		case 3:
+		case 4:
+			/* Exists and not empty */
+			pg_fatal("directory \"%s\" exists but is not empty", path);
+			break;
+		default:
+			/* Trouble accessing directory */
+			pg_fatal("could not access directory \"%s\": %m", path);
+	}
+}
+
+/*
  * Split a pathname as dirname(1) and basename(1) would.
  *
  * XXX this probably doesn't do very well on Windows.  We probably need to
@@ -121,7 +160,7 @@ verify_directory(const char *directory)
 static void
 split_path(const char *path, char **dir, char **fname)
 {
-	char	   *sep;
+	const char *sep;
 
 	/* split filepath into directory & filename */
 	sep = strrchr(path, '/');
@@ -213,10 +252,14 @@ search_directory(const char *directory, const char *fname)
 			WalSegSz = longhdr->xlp_seg_size;
 
 			if (!IsValidWalSegSize(WalSegSz))
-				pg_fatal(ngettext("WAL segment size must be a power of two between 1 MB and 1 GB, but the WAL file \"%s\" header specifies %d byte",
-								  "WAL segment size must be a power of two between 1 MB and 1 GB, but the WAL file \"%s\" header specifies %d bytes",
-								  WalSegSz),
-						 fname, WalSegSz);
+			{
+				pg_log_error(ngettext("invalid WAL segment size in WAL file \"%s\" (%d byte)",
+									  "invalid WAL segment size in WAL file \"%s\" (%d bytes)",
+									  WalSegSz),
+							 fname, WalSegSz);
+				pg_log_error_detail("The WAL segment size must be a power of two between 1 MB and 1 GB.");
+				exit(1);
+			}
 		}
 		else if (r < 0)
 			pg_fatal("could not read file \"%s\": %m",
@@ -350,7 +393,7 @@ WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
 	int			count = XLOG_BLCKSZ;
 	WALReadError errinfo;
 
-	if (private->endptr != InvalidXLogRecPtr)
+	if (XLogRecPtrIsValid(private->endptr))
 	{
 		if (targetPagePtr + XLOG_BLCKSZ <= private->endptr)
 			count = XLOG_BLCKSZ;
@@ -375,11 +418,11 @@ WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
 		if (errinfo.wre_errno != 0)
 		{
 			errno = errinfo.wre_errno;
-			pg_fatal("could not read from file %s, offset %d: %m",
+			pg_fatal("could not read from file \"%s\", offset %d: %m",
 					 fname, errinfo.wre_off);
 		}
 		else
-			pg_fatal("could not read from file %s, offset %d: read %d of %d",
+			pg_fatal("could not read from file \"%s\", offset %d: read %d of %d",
 					 fname, errinfo.wre_off, errinfo.wre_read,
 					 errinfo.wre_req);
 	}
@@ -393,7 +436,7 @@ WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
  */
 static bool
 XLogRecordMatchesRelationBlock(XLogReaderState *record,
-							   RelFileNode matchRnode,
+							   RelFileLocator matchRlocator,
 							   BlockNumber matchBlock,
 							   ForkNumber matchFork)
 {
@@ -401,17 +444,17 @@ XLogRecordMatchesRelationBlock(XLogReaderState *record,
 
 	for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
 	{
-		RelFileNode rnode;
+		RelFileLocator rlocator;
 		ForkNumber	forknum;
 		BlockNumber blk;
 
 		if (!XLogRecGetBlockTagExtended(record, block_id,
-										&rnode, &forknum, &blk, NULL))
+										&rlocator, &forknum, &blk, NULL))
 			continue;
 
 		if ((matchFork == InvalidForkNumber || matchFork == forknum) &&
-			(RelFileNodeEquals(matchRnode, emptyRelFileNode) ||
-			 RelFileNodeEquals(matchRnode, rnode)) &&
+			(RelFileLocatorEquals(matchRlocator, emptyRelFileLocator) ||
+			 RelFileLocatorEquals(matchRlocator, rlocator)) &&
 			(matchBlock == InvalidBlockNumber || matchBlock == blk))
 			return true;
 	}
@@ -437,6 +480,63 @@ XLogRecordHasFPW(XLogReaderState *record)
 	}
 
 	return false;
+}
+
+/*
+ * Function to externally save all FPWs stored in the given WAL record.
+ * Decompression is applied to all the blocks saved, if necessary.
+ */
+static void
+XLogRecordSaveFPWs(XLogReaderState *record, const char *savepath)
+{
+	int			block_id;
+
+	for (block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
+	{
+		PGAlignedBlock buf;
+		Page		page;
+		char		filename[MAXPGPATH];
+		char		forkname[FORKNAMECHARS + 2];	/* _ + terminating zero */
+		FILE	   *file;
+		BlockNumber blk;
+		RelFileLocator rnode;
+		ForkNumber	fork;
+
+		if (!XLogRecHasBlockRef(record, block_id))
+			continue;
+
+		if (!XLogRecHasBlockImage(record, block_id))
+			continue;
+
+		page = (Page) buf.data;
+
+		/* Full page exists, so let's save it */
+		if (!RestoreBlockImage(record, block_id, page))
+			pg_fatal("%s", record->errormsg_buf);
+
+		(void) XLogRecGetBlockTagExtended(record, block_id,
+										  &rnode, &fork, &blk, NULL);
+
+		if (fork >= 0 && fork <= MAX_FORKNUM)
+			sprintf(forkname, "_%s", forkNames[fork]);
+		else
+			pg_fatal("invalid fork number: %u", fork);
+
+		snprintf(filename, MAXPGPATH, "%s/%08X-%08X-%08X.%u.%u.%u.%u%s", savepath,
+				 record->seg.ws_tli,
+				 LSN_FORMAT_ARGS(record->ReadRecPtr),
+				 rnode.spcOid, rnode.dbOid, rnode.relNumber, blk, forkname);
+
+		file = fopen(filename, PG_BINARY_W);
+		if (!file)
+			pg_fatal("could not open file \"%s\": %m", filename);
+
+		if (fwrite(page, BLCKSZ, 1, file) != 1)
+			pg_fatal("could not write file \"%s\": %m", filename);
+
+		if (fclose(file) != 0)
+			pg_fatal("could not close file \"%s\": %m", filename);
+	}
 }
 
 /*
@@ -510,10 +610,10 @@ XLogDumpStatsRow(const char *name,
 		tot_len_pct = 100 * (double) tot_len / total_len;
 
 	printf("%-27s "
-		   "%20" INT64_MODIFIER "u (%6.02f) "
-		   "%20" INT64_MODIFIER "u (%6.02f) "
-		   "%20" INT64_MODIFIER "u (%6.02f) "
-		   "%20" INT64_MODIFIER "u (%6.02f)\n",
+		   "%20" PRIu64 " (%6.02f) "
+		   "%20" PRIu64 " (%6.02f) "
+		   "%20" PRIu64 " (%6.02f) "
+		   "%20" PRIu64 " (%6.02f)\n",
 		   name, n, n_pct, rec_len, rec_len_pct, fpi_len, fpi_len_pct,
 		   tot_len, tot_len_pct);
 }
@@ -537,7 +637,7 @@ XLogDumpDisplayStats(XLogDumpConfig *config, XLogStats *stats)
 	/*
 	 * Leave if no stats have been computed yet, as tracked by the end LSN.
 	 */
-	if (XLogRecPtrIsInvalid(stats->endptr))
+	if (!XLogRecPtrIsValid(stats->endptr))
 		return;
 
 	/*
@@ -556,7 +656,7 @@ XLogDumpDisplayStats(XLogDumpConfig *config, XLogStats *stats)
 	}
 	total_len = total_rec_len + total_fpi_len;
 
-	printf("WAL statistics between %X/%X and %X/%X:\n",
+	printf("WAL statistics between %X/%08X and %X/%08X:\n",
 		   LSN_FORMAT_ARGS(stats->startptr), LSN_FORMAT_ARGS(stats->endptr));
 
 	/*
@@ -642,10 +742,10 @@ XLogDumpDisplayStats(XLogDumpConfig *config, XLogStats *stats)
 		fpi_len_pct = 100 * (double) total_fpi_len / total_len;
 
 	printf("%-27s "
-		   "%20" INT64_MODIFIER "u %-9s"
-		   "%20" INT64_MODIFIER "u %-9s"
-		   "%20" INT64_MODIFIER "u %-9s"
-		   "%20" INT64_MODIFIER "u %-6s\n",
+		   "%20" PRIu64 " %-9s"
+		   "%20" PRIu64 " %-9s"
+		   "%20" PRIu64 " %-9s"
+		   "%20" PRIu64 " %-6s\n",
 		   "Total", stats->count, "",
 		   total_rec_len, psprintf("[%.02f%%]", rec_len_pct),
 		   total_fpi_len, psprintf("[%.02f%%]", fpi_len_pct),
@@ -667,7 +767,7 @@ usage(void)
 	printf(_("  -F, --fork=FORK        only show records that modify blocks in fork FORK;\n"
 			 "                         valid names are main, fsm, vm, init\n"));
 	printf(_("  -n, --limit=N          number of records to display\n"));
-	printf(_("  -p, --path=PATH        directory in which to find log segment files or a\n"
+	printf(_("  -p, --path=PATH        directory in which to find WAL segment files or a\n"
 			 "                         directory with a ./pg_wal that contains such files\n"
 			 "                         (default: current directory, ./pg_wal, $PGDATA/pg_wal)\n"));
 	printf(_("  -q, --quiet            do not print any output, except for errors\n"));
@@ -675,13 +775,14 @@ usage(void)
 			 "                         use --rmgr=list to list valid resource manager names\n"));
 	printf(_("  -R, --relation=T/D/R   only show records that modify blocks in relation T/D/R\n"));
 	printf(_("  -s, --start=RECPTR     start reading at WAL location RECPTR\n"));
-	printf(_("  -t, --timeline=TLI     timeline from which to read log records\n"
+	printf(_("  -t, --timeline=TLI     timeline from which to read WAL records\n"
 			 "                         (default: 1 or the value used in STARTSEG)\n"));
 	printf(_("  -V, --version          output version information, then exit\n"));
 	printf(_("  -w, --fullpage         only show records with a full page write\n"));
 	printf(_("  -x, --xid=XID          only show records with transaction ID XID\n"));
 	printf(_("  -z, --stats[=record]   show statistics instead of records\n"
 			 "                         (optionally, show per-record statistics)\n"));
+	printf(_("  --save-fullpage=DIR    save full page images to DIR\n"));
 	printf(_("  -?, --help             show this help, then exit\n"));
 	printf(_("\nReport bugs to <%s>.\n"), PACKAGE_BUGREPORT);
 	printf(_("%s home page: <%s>\n"), PACKAGE_NAME, PACKAGE_URL);
@@ -719,6 +820,7 @@ main(int argc, char **argv)
 		{"xid", required_argument, NULL, 'x'},
 		{"version", no_argument, NULL, 'V'},
 		{"stats", optional_argument, NULL, 'z'},
+		{"save-fullpage", required_argument, NULL, 1},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -770,6 +872,7 @@ main(int argc, char **argv)
 	config.filter_by_relation_block_enabled = false;
 	config.filter_by_relation_forknum = InvalidForkNumber;
 	config.filter_by_fpw = false;
+	config.save_fullpage_path = NULL;
 	config.stats = false;
 	config.stats_per_record = false;
 
@@ -801,7 +904,7 @@ main(int argc, char **argv)
 				config.filter_by_extended = true;
 				break;
 			case 'e':
-				if (sscanf(optarg, "%X/%X", &xlogid, &xrecoff) != 2)
+				if (sscanf(optarg, "%X/%08X", &xlogid, &xrecoff) != 2)
 				{
 					pg_log_error("invalid WAL location: \"%s\"",
 								 optarg);
@@ -885,11 +988,11 @@ main(int argc, char **argv)
 				break;
 			case 'R':
 				if (sscanf(optarg, "%u/%u/%u",
-						   &config.filter_by_relation.spcNode,
-						   &config.filter_by_relation.dbNode,
-						   &config.filter_by_relation.relNode) != 3 ||
-					!OidIsValid(config.filter_by_relation.spcNode) ||
-					!OidIsValid(config.filter_by_relation.relNode))
+						   &config.filter_by_relation.spcOid,
+						   &config.filter_by_relation.dbOid,
+						   &config.filter_by_relation.relNumber) != 3 ||
+					!OidIsValid(config.filter_by_relation.spcOid) ||
+					!RelFileNumberIsValid(config.filter_by_relation.relNumber))
 				{
 					pg_log_error("invalid relation specification: \"%s\"", optarg);
 					pg_log_error_detail("Expecting \"tablespace OID/database OID/relation filenode\".");
@@ -899,7 +1002,7 @@ main(int argc, char **argv)
 				config.filter_by_extended = true;
 				break;
 			case 's':
-				if (sscanf(optarg, "%X/%X", &xlogid, &xrecoff) != 2)
+				if (sscanf(optarg, "%X/%08X", &xlogid, &xrecoff) != 2)
 				{
 					pg_log_error("invalid WAL location: \"%s\"",
 								 optarg);
@@ -909,12 +1012,40 @@ main(int argc, char **argv)
 					private.startptr = (uint64) xlogid << 32 | xrecoff;
 				break;
 			case 't':
-				if (sscanf(optarg, "%u", &private.timeline) != 1)
+
+				/*
+				 * This is like option_parse_int() but needs to handle
+				 * unsigned 32-bit int.  Also, we accept both decimal and
+				 * hexadecimal specifications here.
+				 */
 				{
-					pg_log_error("invalid timeline specification: \"%s\"", optarg);
-					goto bad_argument;
+					char	   *endptr;
+					unsigned long val;
+
+					errno = 0;
+					val = strtoul(optarg, &endptr, 0);
+
+					while (*endptr != '\0' && isspace((unsigned char) *endptr))
+						endptr++;
+
+					if (*endptr != '\0')
+					{
+						pg_log_error("invalid value \"%s\" for option %s",
+									 optarg, "-t/--timeline");
+						goto bad_argument;
+					}
+
+					if (errno == ERANGE || val < 1 || val > UINT_MAX)
+					{
+						pg_log_error("%s must be in range %u..%u",
+									 "-t/--timeline", 1, UINT_MAX);
+						goto bad_argument;
+					}
+
+					private.timeline = val;
+
+					break;
 				}
-				break;
 			case 'w':
 				config.filter_by_fpw = true;
 				break;
@@ -941,6 +1072,9 @@ main(int argc, char **argv)
 						goto bad_argument;
 					}
 				}
+				break;
+			case 1:
+				config.save_fullpage_path = pg_strdup(optarg);
 				break;
 			default:
 				goto bad_argument;
@@ -972,6 +1106,9 @@ main(int argc, char **argv)
 		}
 	}
 
+	if (config.save_fullpage_path != NULL)
+		create_fullpage_directory(config.save_fullpage_path);
+
 	/* parse files as start/end boundaries, extract path if not specified */
 	if (optind < argc)
 	{
@@ -999,18 +1136,18 @@ main(int argc, char **argv)
 		/* parse position from file */
 		XLogFromFileName(fname, &private.timeline, &segno, WalSegSz);
 
-		if (XLogRecPtrIsInvalid(private.startptr))
+		if (!XLogRecPtrIsValid(private.startptr))
 			XLogSegNoOffsetToRecPtr(segno, 0, WalSegSz, private.startptr);
 		else if (!XLByteInSeg(private.startptr, segno, WalSegSz))
 		{
-			pg_log_error("start WAL location %X/%X is not inside file \"%s\"",
+			pg_log_error("start WAL location %X/%08X is not inside file \"%s\"",
 						 LSN_FORMAT_ARGS(private.startptr),
 						 fname);
 			goto bad_argument;
 		}
 
 		/* no second file specified, set end position */
-		if (!(optind + 1 < argc) && XLogRecPtrIsInvalid(private.endptr))
+		if (!(optind + 1 < argc) && !XLogRecPtrIsValid(private.endptr))
 			XLogSegNoOffsetToRecPtr(segno + 1, 0, WalSegSz, private.endptr);
 
 		/* parse ENDSEG if passed */
@@ -1033,7 +1170,7 @@ main(int argc, char **argv)
 				pg_fatal("ENDSEG %s is before STARTSEG %s",
 						 argv[optind + 1], argv[optind]);
 
-			if (XLogRecPtrIsInvalid(private.endptr))
+			if (!XLogRecPtrIsValid(private.endptr))
 				XLogSegNoOffsetToRecPtr(endsegno + 1, 0, WalSegSz,
 										private.endptr);
 
@@ -1045,7 +1182,7 @@ main(int argc, char **argv)
 		if (!XLByteInSeg(private.endptr, segno, WalSegSz) &&
 			private.endptr != (segno + 1) * WalSegSz)
 		{
-			pg_log_error("end WAL location %X/%X is not inside file \"%s\"",
+			pg_log_error("end WAL location %X/%08X is not inside file \"%s\"",
 						 LSN_FORMAT_ARGS(private.endptr),
 						 argv[argc - 1]);
 			goto bad_argument;
@@ -1055,7 +1192,7 @@ main(int argc, char **argv)
 		waldir = identify_target_directory(waldir, NULL);
 
 	/* we don't know what to print */
-	if (XLogRecPtrIsInvalid(private.startptr))
+	if (!XLogRecPtrIsValid(private.startptr))
 	{
 		pg_log_error("no start WAL location given");
 		goto bad_argument;
@@ -1076,8 +1213,8 @@ main(int argc, char **argv)
 	/* first find a valid recptr to start from */
 	first_record = XLogFindNextRecord(xlogreader_state, private.startptr);
 
-	if (first_record == InvalidXLogRecPtr)
-		pg_fatal("could not find a valid record after %X/%X",
+	if (!XLogRecPtrIsValid(first_record))
+		pg_fatal("could not find a valid record after %X/%08X",
 				 LSN_FORMAT_ARGS(private.startptr));
 
 	/*
@@ -1087,12 +1224,12 @@ main(int argc, char **argv)
 	 */
 	if (first_record != private.startptr &&
 		XLogSegmentOffset(private.startptr, WalSegSz) != 0)
-		printf(ngettext("first record is after %X/%X, at %X/%X, skipping over %u byte\n",
-						"first record is after %X/%X, at %X/%X, skipping over %u bytes\n",
-						(first_record - private.startptr)),
-			   LSN_FORMAT_ARGS(private.startptr),
-			   LSN_FORMAT_ARGS(first_record),
-			   (uint32) (first_record - private.startptr));
+		pg_log_info(ngettext("first record is after %X/%08X, at %X/%08X, skipping over %u byte",
+							 "first record is after %X/%08X, at %X/%08X, skipping over %u bytes",
+							 (first_record - private.startptr)),
+					LSN_FORMAT_ARGS(private.startptr),
+					LSN_FORMAT_ARGS(first_record),
+					(uint32) (first_record - private.startptr));
 
 	if (config.stats == true && !config.quiet)
 		stats.startptr = first_record;
@@ -1132,7 +1269,7 @@ main(int argc, char **argv)
 			!XLogRecordMatchesRelationBlock(xlogreader_state,
 											config.filter_by_relation_enabled ?
 											config.filter_by_relation :
-											emptyRelFileNode,
+											emptyRelFileLocator,
 											config.filter_by_relation_block_enabled ?
 											config.filter_by_relation_block :
 											InvalidBlockNumber,
@@ -1154,6 +1291,10 @@ main(int argc, char **argv)
 				XLogDumpDisplayRecord(&config, xlogreader_state);
 		}
 
+		/* save full pages if requested */
+		if (config.save_fullpage_path != NULL)
+			XLogRecordSaveFPWs(xlogreader_state, config.save_fullpage_path);
+
 		/* check whether we printed enough */
 		config.already_displayed_records++;
 		if (config.stop_after_records > 0 &&
@@ -1168,7 +1309,7 @@ main(int argc, char **argv)
 		exit(0);
 
 	if (errormsg)
-		pg_fatal("error in WAL record at %X/%X: %s",
+		pg_fatal("error in WAL record at %X/%08X: %s",
 				 LSN_FORMAT_ARGS(xlogreader_state->ReadRecPtr),
 				 errormsg);
 

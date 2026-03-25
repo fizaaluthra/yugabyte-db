@@ -6,7 +6,7 @@
  * See also lsyscache.h, which provides convenience routines for
  * common cache-lookup operations.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/syscache.h
@@ -18,120 +18,13 @@
 
 #include "access/attnum.h"
 #include "access/htup.h"
+#include "nodes/pg_list.h"
 /* we intentionally do not include utils/catcache.h here */
 
-/* YB includes */
-#include "relcache.h"
+/* YB: forward declaration to avoid including rel.h */
+typedef struct RelationData *Relation;
 
-/*
- *		SysCache identifiers.
- *
- *		The order of these identifiers must match the order
- *		of the entries in the array cacheinfo[] in syscache.c.
- *		Keep them in alphabetical order (renumbering only costs a
- *		backend rebuild).
- * YB Note:
- * Starting from 2025-03-11, we try to keep existing ids to have same integer
- * value. In other words, newly added ids should be appended at the end
- * and the alphabetical order can no longer be maintained. The purpose is
- * to allow interop between different releases during YSQL upgrade so that
- * an id of the same integer value represents the same catalog cache across
- * different releases. In this way a catalog cache invalidation message
- * generated in release 123 can be applicable to release 456, or vice versa.
- * The function YbCheckCatalogCacheIds() is used to detect any change in
- * this enum list.
- */
-
-enum SysCacheIdentifier
-{
-	AGGFNOID = 0,
-	AMNAME,
-	AMOID,
-	AMOPOPID,
-	AMOPSTRATEGY,
-	AMPROCNUM,
-	ATTNAME,
-	ATTNUM,
-	AUTHMEMMEMROLE,
-	AUTHMEMROLEMEM,
-	AUTHNAME,
-	AUTHOID,
-	CASTSOURCETARGET,
-	CLAAMNAMENSP,
-	CLAOID,
-	COLLNAMEENCNSP,
-	COLLOID,
-	CONDEFAULT,
-	CONNAMENSP,
-	CONSTROID,
-	CONVOID,
-	DATABASEOID,
-	DEFACLROLENSPOBJ,
-	ENUMOID,
-	ENUMTYPOIDNAME,
-	EVENTTRIGGERNAME,
-	EVENTTRIGGEROID,
-	FOREIGNDATAWRAPPERNAME,
-	FOREIGNDATAWRAPPEROID,
-	FOREIGNSERVERNAME,
-	FOREIGNSERVEROID,
-	FOREIGNTABLEREL,
-	INDEXRELID,
-	LANGNAME,
-	LANGOID,
-	NAMESPACENAME,
-	NAMESPACEOID,
-	OPERNAMENSP,
-	OPEROID,
-	OPFAMILYAMNAMENSP,
-	OPFAMILYOID,
-	PARAMETERACLNAME,
-	PARAMETERACLOID,
-	PARTRELID,
-	PROCNAMEARGSNSP,
-	PROCOID,
-	PUBLICATIONNAME,
-	PUBLICATIONNAMESPACE,
-	PUBLICATIONNAMESPACEMAP,
-	PUBLICATIONOID,
-	PUBLICATIONREL,
-	PUBLICATIONRELMAP,
-	RANGEMULTIRANGE,
-	RANGETYPE,
-	RELNAMENSP,
-	RELOID,
-	REPLORIGIDENT,
-	REPLORIGNAME,
-	RULERELNAME,
-	SEQRELID,
-	STATEXTDATASTXOID,
-	STATEXTNAMENSP,
-	STATEXTOID,
-	STATRELATTINH,
-	SUBSCRIPTIONNAME,
-	SUBSCRIPTIONOID,
-	SUBSCRIPTIONRELMAP,
-	TABLESPACEOID,
-	TRFOID,
-	TRFTYPELANG,
-	TSCONFIGMAP,
-	TSCONFIGNAMENSP,
-	TSCONFIGOID,
-	TSDICTNAMENSP,
-	TSDICTOID,
-	TSPARSERNAMENSP,
-	TSPARSEROID,
-	TSTEMPLATENAMENSP,
-	TSTEMPLATEOID,
-	TYPENAMENSP,
-	TYPEOID,
-	USERMAPPINGOID,
-	USERMAPPINGUSERSERVER,
-	YBTABLEGROUPOID,
-	YBCONSTRAINTRELIDTYPIDNAME
-
-#define SysCacheSize (YBCONSTRAINTRELIDTYPIDNAME + 1)
-};
+#include "catalog/syscache_ids.h"	/* IWYU pragma: export */
 
 typedef enum YbCatalogCacheTable
 {
@@ -151,6 +44,7 @@ typedef enum YbCatalogCacheTable
 	YbCatalogCacheTable_pg_default_acl,
 	YbCatalogCacheTable_pg_enum,
 	YbCatalogCacheTable_pg_event_trigger,
+	YbCatalogCacheTable_pg_extension,
 	YbCatalogCacheTable_pg_foreign_data_wrapper,
 	YbCatalogCacheTable_pg_foreign_server,
 	YbCatalogCacheTable_pg_foreign_table,
@@ -237,6 +131,9 @@ extern HeapTuple SearchSysCacheCopyAttNum(Oid relid, int16 attnum);
 extern Datum SysCacheGetAttr(int cacheId, HeapTuple tup,
 							 AttrNumber attributeNumber, bool *isNull);
 
+extern Datum SysCacheGetAttrNotNull(int cacheId, HeapTuple tup,
+									AttrNumber attributeNumber);
+
 extern uint32 GetSysCacheHashValue(int cacheId,
 								   Datum key1, Datum key2, Datum key3, Datum key4);
 
@@ -252,6 +149,7 @@ extern bool RelationHasSysCache(Oid relid);
 extern bool RelationSupportsSysCache(Oid relid);
 
 /* YB */
+struct List;					/* forward declaration for YbSetAdditionalNegCacheIds */
 extern void YbSetSysCacheTuple(Relation rel, HeapTuple tup);
 extern void YbPreloadCatalogCache(int cache_id, int idx_cache_id);
 #ifndef NDEBUG
@@ -264,7 +162,7 @@ extern const char *YbGetCatalogCacheTableNameFromCacheId(int cache_id);
 extern int	YbGetCatalogCacheTableIdFromCacheId(int cache_id);
 extern uint32 YbSysCacheComputeHashValue(int cache_id, Datum v1, Datum v2, Datum v3, Datum v4);
 extern void YbCopyCacheInfoToValues(int cache_id, Datum *values);
-extern void YbSetAdditionalNegCacheIds(List *neg_cache_ids);
+extern void YbSetAdditionalNegCacheIds(struct List *neg_cache_ids);
 
 /*
  * The use of the macros below rather than direct calls to the corresponding

@@ -27,8 +27,10 @@
 
 #include <inttypes.h>
 
+#include "access/tupdesc.h"
 #include "access/xact.h"
 #include "pg_yb_utils.h"
+#include "replication/reorderbuffer.h"
 #include "replication/walsender_private.h"
 #include "replication/yb_decode.h"
 #include "utils/rel.h"
@@ -144,9 +146,9 @@ static void
 YBDecodeInsert(LogicalDecodingContext *ctx, XLogReaderState *record)
 {
 	const YbVirtualWalRecord *yb_record = record->yb_virtual_wal_record;
-	ReorderBufferChange *change = ReorderBufferGetChange(ctx->reorder);
+	ReorderBufferChange *change = ReorderBufferAllocChange(ctx->reorder);
 	HeapTuple	tuple;
-	ReorderBufferTupleBuf *tuple_buf;
+	HeapTuple	tuple_buf;
 
 	Assert(ctx->reader->ReadRecPtr == yb_record->lsn);
 
@@ -169,9 +171,9 @@ YBDecodeInsert(LogicalDecodingContext *ctx, XLogReaderState *record)
 	 * created.
 	 */
 	tuple = YBGetHeapTuplesForRecord(yb_record, REORDER_BUFFER_CHANGE_INSERT);
-	tuple_buf =
-		ReorderBufferGetTupleBuf(ctx->reorder, tuple->t_len + HEAPTUPLESIZE);
-	yb_heap_copytuple_with_tuple(tuple, &tuple_buf->tuple);
+	tuple_buf = ReorderBufferAllocTupleBuf(ctx->reorder,
+										   tuple->t_len - SizeofHeapTupleHeader);
+	yb_heap_copytuple_with_tuple(tuple, tuple_buf);
 	pfree(tuple);
 
 	change->data.tp.newtuple = tuple_buf;
@@ -195,14 +197,14 @@ static void
 YBDecodeUpdate(LogicalDecodingContext *ctx, XLogReaderState *record)
 {
 	const YbVirtualWalRecord *yb_record = record->yb_virtual_wal_record;
-	ReorderBufferChange *change = ReorderBufferGetChange(ctx->reorder);
+	ReorderBufferChange *change = ReorderBufferAllocChange(ctx->reorder);
 	Relation	relation;
 	TupleDesc	tupdesc;
 	int			nattrs;
 	HeapTuple	after_op_tuple;
 	HeapTuple	before_op_tuple;
-	ReorderBufferTupleBuf *after_op_tuple_buf;
-	ReorderBufferTupleBuf *before_op_tuple_buf;
+	HeapTuple	after_op_tuple_buf;
+	HeapTuple	before_op_tuple_buf;
 	bool	   *before_op_is_omitted = NULL;
 	bool	   *after_op_is_omitted = NULL;
 	bool		should_handle_omitted_case;
@@ -289,10 +291,9 @@ YBDecodeUpdate(LogicalDecodingContext *ctx, XLogReaderState *record)
 	/* See the comment in YBDecodeInsert on why we create tuples twice. */
 	after_op_tuple =
 		heap_form_tuple(tupdesc, after_op_datums, after_op_is_nulls);
-	after_op_tuple_buf =
-		ReorderBufferGetTupleBuf(ctx->reorder,
-								 after_op_tuple->t_len + HEAPTUPLESIZE);
-	yb_heap_copytuple_with_tuple(after_op_tuple, &after_op_tuple_buf->tuple);
+	after_op_tuple_buf = ReorderBufferAllocTupleBuf(ctx->reorder,
+													after_op_tuple->t_len - SizeofHeapTupleHeader);
+	yb_heap_copytuple_with_tuple(after_op_tuple, after_op_tuple_buf);
 	pfree(after_op_tuple);
 	after_op_tuple_buf->yb_is_omitted = after_op_is_omitted;
 	after_op_tuple_buf->yb_is_omitted_size =
@@ -308,11 +309,9 @@ YBDecodeUpdate(LogicalDecodingContext *ctx, XLogReaderState *record)
 	{
 		before_op_tuple =
 			heap_form_tuple(tupdesc, before_op_datums, before_op_is_nulls);
-		before_op_tuple_buf =
-			ReorderBufferGetTupleBuf(ctx->reorder,
-									 before_op_tuple->t_len + HEAPTUPLESIZE);
-		yb_heap_copytuple_with_tuple(before_op_tuple,
-									 &before_op_tuple_buf->tuple);
+		before_op_tuple_buf = ReorderBufferAllocTupleBuf(ctx->reorder,
+														before_op_tuple->t_len - SizeofHeapTupleHeader);
+		yb_heap_copytuple_with_tuple(before_op_tuple, before_op_tuple_buf);
 		pfree(before_op_tuple);
 		before_op_tuple_buf->yb_is_omitted = before_op_is_omitted;
 		before_op_tuple_buf->yb_is_omitted_size =
@@ -330,7 +329,7 @@ YBDecodeUpdate(LogicalDecodingContext *ctx, XLogReaderState *record)
 		const char *new_tuple_string;
 
 		new_tuple_string =
-			YbHeapTupleToStringWithIsOmitted(&after_op_tuple_buf->tuple,
+			YbHeapTupleToStringWithIsOmitted(after_op_tuple_buf,
 											 tupdesc,
 											 after_op_is_omitted);
 
@@ -339,7 +338,7 @@ YBDecodeUpdate(LogicalDecodingContext *ctx, XLogReaderState *record)
 			const char *old_tuple_string;
 
 			old_tuple_string =
-				YbHeapTupleToStringWithIsOmitted(&before_op_tuple_buf->tuple,
+				YbHeapTupleToStringWithIsOmitted(before_op_tuple_buf,
 												 tupdesc,
 												 before_op_is_omitted);
 			elog(DEBUG2,
@@ -373,9 +372,9 @@ static void
 YBDecodeDelete(LogicalDecodingContext *ctx, XLogReaderState *record)
 {
 	const YbVirtualWalRecord *yb_record = record->yb_virtual_wal_record;
-	ReorderBufferChange *change = ReorderBufferGetChange(ctx->reorder);
+	ReorderBufferChange *change = ReorderBufferAllocChange(ctx->reorder);
 	HeapTuple	tuple;
-	ReorderBufferTupleBuf *tuple_buf;
+	HeapTuple	tuple_buf;
 
 	Assert(ctx->reader->ReadRecPtr == yb_record->lsn);
 
@@ -387,9 +386,9 @@ YBDecodeDelete(LogicalDecodingContext *ctx, XLogReaderState *record)
 
 	/* See the comment in YBDecodeInsert on why we create tuples twice. */
 	tuple = YBGetHeapTuplesForRecord(yb_record, REORDER_BUFFER_CHANGE_DELETE);
-	tuple_buf =
-		ReorderBufferGetTupleBuf(ctx->reorder, tuple->t_len + HEAPTUPLESIZE);
-	yb_heap_copytuple_with_tuple(tuple, &tuple_buf->tuple);
+	tuple_buf = ReorderBufferAllocTupleBuf(ctx->reorder,
+										   tuple->t_len - SizeofHeapTupleHeader);
+	yb_heap_copytuple_with_tuple(tuple, tuple_buf);
 	pfree(tuple);
 
 	change->data.tp.newtuple = NULL;
@@ -424,26 +423,26 @@ YBDecodeCommit(LogicalDecodingContext *ctx, XLogReaderState *record)
 		 * subtransactions.
 		 */
 		elog(DEBUG1,
-			 "YBDecodeCommit: Ignoring txn %d with commit_lsn = %lu as "
-			 "yb_start_decoding_at = %lu.",
-			 yb_record->xid, commit_lsn, ctx->yb_start_decoding_at);
+			 "YBDecodeCommit: Ignoring txn %d with commit_lsn = " UINT64_FORMAT " as "
+			 "yb_start_decoding_at = " UINT64_FORMAT ".",
+			 yb_record->xid, (uint64) commit_lsn, (uint64) ctx->yb_start_decoding_at);
 		ReorderBufferForget(ctx->reorder, yb_record->xid, commit_lsn);
 		return;
 	}
 
 	elog(DEBUG1,
-		 "Going to stream transaction: %d with commit_lsn: %lu and "
-		 "end_lsn: %lu",
-		 yb_record->xid, commit_lsn, end_lsn);
+		 "Going to stream transaction: %d with commit_lsn: " UINT64_FORMAT " and "
+		 "end_lsn: " UINT64_FORMAT,
+		 yb_record->xid, (uint64) commit_lsn, (uint64) end_lsn);
 
 	ReorderBufferCommit(ctx->reorder, yb_record->xid, commit_lsn, end_lsn,
 						yb_record->commit_time, yb_record->xrepl_origin_id,
 						origin_lsn);
 
 	elog(DEBUG1,
-		 "Successfully streamed transaction: %d with commit_lsn: %lu and "
-		 "end_lsn: %lu",
-		 yb_record->xid, commit_lsn, end_lsn);
+		 "Successfully streamed transaction: %d with commit_lsn: " UINT64_FORMAT " and "
+		 "end_lsn: " UINT64_FORMAT,
+		 yb_record->xid, (uint64) commit_lsn, (uint64) end_lsn);
 }
 
 static HeapTuple
@@ -529,10 +528,12 @@ YBFindAttributeIndexInDescriptor(TupleDesc tupdesc, const char *column_name)
 
 	for (attr_idx = 0; attr_idx < tupdesc->natts; attr_idx++)
 	{
-		if (tupdesc->attrs[attr_idx].attisdropped)
+		FormData_pg_attribute *attr = TupleDescAttr(tupdesc, attr_idx);
+
+		if (attr->attisdropped)
 			continue;
 
-		if (!strcmp(tupdesc->attrs[attr_idx].attname.data, column_name))
+		if (!strcmp(NameStr(attr->attname), column_name))
 			return attr_idx;
 	}
 
@@ -623,10 +624,12 @@ YBLogTupleDescIfRequested(const YbVirtualWalRecord *yb_record,
 			 yb_record->table_oid);
 		for (int attr_idx = 0; attr_idx < tupdesc->natts; attr_idx++)
 		{
+			FormData_pg_attribute *attr = TupleDescAttr(tupdesc, attr_idx);
+
 			elog(DEBUG2, "Col %d: name = %s, dropped = %d, type = %d\n",
-				 attr_idx, tupdesc->attrs[attr_idx].attname.data,
-				 tupdesc->attrs[attr_idx].attisdropped,
-				 tupdesc->attrs[attr_idx].atttypid);
+				 attr_idx, NameStr(attr->attname),
+				 attr->attisdropped,
+				 attr->atttypid);
 		}
 	}
 }

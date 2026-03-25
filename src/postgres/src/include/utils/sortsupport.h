@@ -42,7 +42,7 @@
  * function for such cases, but probably not any other acceleration method.
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/sortsupport.h
@@ -262,7 +262,6 @@ ApplyUnsignedSortComparator(Datum datum1, bool isNull1,
 	return compare;
 }
 
-#if SIZEOF_DATUM >= 8
 static inline int
 ApplySignedSortComparator(Datum datum1, bool isNull1,
 						  Datum datum2, bool isNull2,
@@ -296,7 +295,6 @@ ApplySignedSortComparator(Datum datum1, bool isNull1,
 
 	return compare;
 }
-#endif
 
 static inline int
 ApplyInt32SortComparator(Datum datum1, bool isNull1,
@@ -372,19 +370,17 @@ ApplySortAbbrevFullComparator(Datum datum1, bool isNull1,
 
 /*
  * Datum comparison functions that we have specialized sort routines for.
- * Datatypes that install these as their comparator or abbrevated comparator
+ * Datatypes that install these as their comparator or abbreviated comparator
  * are eligible for faster sorting.
  */
 extern int	ssup_datum_unsigned_cmp(Datum x, Datum y, SortSupport ssup);
-#if SIZEOF_DATUM >= 8
 extern int	ssup_datum_signed_cmp(Datum x, Datum y, SortSupport ssup);
-#endif
 extern int	ssup_datum_int32_cmp(Datum x, Datum y, SortSupport ssup);
 
 /* Other functions in utils/sort/sortsupport.c */
 extern void PrepareSortSupportComparisonShim(Oid cmpFunc, SortSupport ssup);
 extern void PrepareSortSupportFromOrderingOp(Oid orderingOp, SortSupport ssup);
-extern void PrepareSortSupportFromIndexRel(Relation indexRel, int16 strategy,
+extern void PrepareSortSupportFromIndexRel(Relation indexRel, bool reverse,
 										   SortSupport ssup);
 extern void PrepareSortSupportFromGistIndexRel(Relation indexRel, SortSupport ssup);
 

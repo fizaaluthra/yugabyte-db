@@ -29,6 +29,7 @@
 
 #include "access/genam.h"
 #include "access/heapam.h"
+#include "lib/qunique.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
 #include "access/relation.h"
@@ -382,8 +383,8 @@ ybcBindTupleExprCondIn(YbScanDesc ybScan,
 	/* Form the list of tuples for the RHS. */
 	for (int i = 0; i < nvalues; i++)
 	{
-		tuple.t_len = HeapTupleHeaderGetDatumLength(values[i]);
 		tuple.t_data = DatumGetHeapTupleHeader(values[i]);
+		tuple.t_len = HeapTupleHeaderGetDatumLength(tuple.t_data);
 		heap_deform_tuple(&tuple, tupdesc, datum_values, is_null);
 		for (int j = 0; j < n_attnum_values; j++)
 		{
@@ -515,7 +516,7 @@ ybcFetchNextHeapTuple(YbScanDesc ybScan, ScanDirection dir)
 	TupleDesc	tupdesc = ybScan->target_desc;
 	TableScanDesc tsdesc = (TableScanDesc) ybScan;
 	Datum	   *values = (Datum *) palloc0(tupdesc->natts * sizeof(Datum));
-	bool	   *nulls = (bool *) palloc(tupdesc->natts * sizeof(bool));
+	bool	   *nulls = (bool *) palloc0(tupdesc->natts * sizeof(bool));
 	YbcPgSysColumns syscols;
 
 	/*
@@ -650,7 +651,7 @@ ybcFetchNextIndexTuple(YbScanDesc ybScan, ScanDirection dir)
 	Relation	index = ybScan->index;
 	TupleDesc	tupdesc = ybScan->target_desc;
 	Datum	   *values = (Datum *) palloc0(tupdesc->natts * sizeof(Datum));
-	bool	   *nulls = (bool *) palloc(tupdesc->natts * sizeof(bool));
+	bool	   *nulls = (bool *) palloc0(tupdesc->natts * sizeof(bool));
 	YbcPgSysColumns syscols;
 
 	/*
@@ -1516,8 +1517,8 @@ YbIsTupleInRange(Datum value, TupleDesc bind_desc,
 
 	ItemPointerSetInvalid(&(tuple.t_self));
 	tuple.t_tableOid = InvalidOid;
-	tuple.t_len = HeapTupleHeaderGetDatumLength(value);
 	tuple.t_data = DatumGetHeapTupleHeader(value);
+	tuple.t_len = HeapTupleHeaderGetDatumLength(tuple.t_data);
 	heap_deform_tuple(&tuple, val_tupdesc,
 					  datum_values, datum_nulls);
 	bool		is_in_range = true;
@@ -1793,6 +1794,66 @@ YbGetArrayConst(ScanKey *keys)
 }
 
 /*
+ * Comparator context for yb_sort_array_elements, mirroring BTSortArrayContext
+ * from nbtpreprocesskeys.c.
+ */
+typedef struct YbSortArrayContext
+{
+	FmgrInfo   *sortproc;
+	Oid			collation;
+	bool		reverse;
+} YbSortArrayContext;
+
+static int
+yb_compare_array_elements(const void *a, const void *b, void *arg)
+{
+	Datum		da = *((const Datum *) a);
+	Datum		db = *((const Datum *) b);
+	YbSortArrayContext *cxt = (YbSortArrayContext *) arg;
+	int32		compare;
+
+	compare = DatumGetInt32(FunctionCall2Coll(cxt->sortproc,
+											  cxt->collation,
+											  da, db));
+	if (cxt->reverse)
+		INVERT_COMPARE_RESULT(compare);
+	return compare;
+}
+
+/*
+ * Sort and de-duplicate array elements using the index column's ORDER proc.
+ *
+ * This is a YB-local equivalent of _bt_sort_array_elements (which became
+ * static in PG19's nbtpreprocesskeys.c).  The interface matches the old PG15
+ * call-site that passes an IndexScanDesc so we can look up the sort procedure
+ * from the index relation.
+ */
+static int
+yb_sort_array_elements(IndexScanDesc scan, ScanKey skey, bool reverse,
+					   Datum *elems, int nelems)
+{
+	YbSortArrayContext cxt;
+	FmgrInfo	sortproc;
+
+	if (nelems <= 1)
+		return nelems;			/* no work to do */
+
+	/* Look up the ORDER proc for this index column's opclass */
+	sortproc = *index_getprocinfo(scan->indexRelation, skey->sk_attno,
+								  BTORDER_PROC);
+
+	cxt.sortproc = &sortproc;
+	cxt.collation = skey->sk_collation;
+	cxt.reverse = reverse;
+	qsort_arg(elems, nelems, sizeof(Datum),
+			  yb_compare_array_elements, &cxt);
+
+	/* Now scan the sorted elements and remove duplicates */
+	return qunique_arg(elems, nelems, sizeof(Datum),
+					   yb_compare_array_elements, &cxt);
+}
+
+/*
  * Given an array, cull it by removing unsatisfiable and duplicate elements.
  *
  * Out params:
@@ -1933,9 +1994,9 @@ YbCullArray(ArrayType *arrayval,
 	 * sort in the same ordering used by the index column, so that the
 	 * successive primitive indexscans produce data in index order.
 	 */
-	*culled_num_elems = _bt_sort_array_elements(&tmp_scan_desc, key,
-												false,	/* reverse */
-												elem_values, num_valid);
+	*culled_num_elems = yb_sort_array_elements(&tmp_scan_desc, key,
+											   false,	/* reverse */
+											   elem_values, num_valid);
 
 	return true;
 }
@@ -2003,7 +2064,8 @@ YbBindSearchArray(YbScanDesc ybScan, YbScanPlan scan_plan,
 		 * All columns are bindable: mark them as bound before proceeding to
 		 * bind them.
 		 */
-		while ((bound_idx = bms_first_member(newly_bound_idxs)) >= 0)
+		bound_idx = -1;
+		while ((bound_idx = bms_next_member(newly_bound_idxs, bound_idx)) >= 0)
 		{
 			is_column_bound[bound_idx] = true;
 		}
@@ -2047,7 +2109,7 @@ YbBindSearchArray(YbScanDesc ybScan, YbScanPlan scan_plan,
 							   num_elems, elem_values);
 	}
 	else if (scalar_attnum == YBTupleIdAttributeNumber)
-		YBCPgBindYbctids(ybScan->handle, num_elems, elem_values);
+		YBCPgBindYbctids(ybScan->handle, num_elems, (uintptr_t *) elem_values);
 	else
 		ybcBindColumnCondIn(ybScan, scan_plan->bind_desc,
 							scalar_attnum, num_elems,
@@ -2487,7 +2549,7 @@ YbBindScanKeys(YbScanDesc ybScan, YbScanPlan scan_plan, Scan *scan,
 	}
 
 	/* Bind keys for BETWEEN and IS NOT NULL */
-	int			min_idx = bms_first_member(scan_plan->sk_cols);
+	int			min_idx = bms_next_member(scan_plan->sk_cols, -1);
 
 	min_idx = min_idx < 0 ? 0 : min_idx;
 	for (int idx = min_idx; idx < max_idx; idx++)
@@ -3611,7 +3673,7 @@ ybc_free_ybscan(YbScanDesc ybscan)
 	 * even though it's YbScanDesc was not set. We need to cleanup after the
 	 * biss_ScanDesc but not the YbScanDesc.
 	 */
-	if (PointerIsValid(ybscan))
+	if (ybscan != NULL)
 	{
 		YBCPgDeleteStatement(ybscan->handle);
 		pfree(ybscan);
@@ -3672,7 +3734,7 @@ ybc_systable_getnext(YbSysScanBase default_scan)
 
 	bool		recheck = false;
 
-	Assert(PointerIsValid(scan->ybscan));
+	Assert(scan->ybscan != NULL);
 
 	HeapTuple	tuple = ybc_getnext_heaptuple(scan->ybscan,
 											  true /* is_forward_scan */ ,
@@ -3803,7 +3865,7 @@ ybc_heap_getnext(TableScanDesc tsdesc)
 	YbScanDesc	ybdesc = (YbScanDesc) tsdesc;
 	HeapTuple	tuple;
 
-	Assert(PointerIsValid(tsdesc));
+	Assert(tsdesc != NULL);
 	tuple = ybc_getnext_heaptuple(ybdesc, true /* is_forward_scan */ , &recheck);
 	Assert(!recheck);
 
@@ -4195,7 +4257,9 @@ ybcIndexCostEstimate(struct PlannerInfo *root, IndexPath *path,
 				 */
 				if (OidIsValid(clause_op) &&
 					(!yb_ignore_bool_cond_for_legacy_estimate ||
-					 !IsBooleanOpfamily(opfamily)))
+					 !(opfamily < FirstNormalObjectId
+					   ? IsBuiltinBooleanOpfamily(opfamily)
+					   : op_in_opfamily(BooleanEqualOperator, opfamily))))
 				{
 					ybcAddAttributeColumn(&scan_plan, attnum);
 					if (other_operand && IsA(other_operand, Const))
@@ -4738,7 +4802,9 @@ ybParallelWorkers(double numrows)
  * fit.
  */
 Size
-yb_estimate_parallel_size(void)
+yb_estimate_parallel_size(Relation rel pg_attribute_unused(),
+						  int nkeys pg_attribute_unused(),
+						  int norderbys pg_attribute_unused())
 {
 	Size		size = sizeof(YBParallelPartitionKeysData);
 

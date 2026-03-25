@@ -51,7 +51,7 @@
  * holding the relation lock) during which a worker may choose a table that was
  * already vacuumed; this is a bug in the current design.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -77,17 +77,17 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_namespace.h"
-#include "commands/dbcommands.h"
 #include "commands/vacuum.h"
+#include "common/int.h"
 #include "lib/ilist.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
-#include "postmaster/fork_process.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
+#include "storage/aio_subsys.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
@@ -95,11 +95,12 @@
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procsignal.h"
-#include "storage/sinvaladt.h"
 #include "storage/smgr.h"
 #include "tcop/tcopprot.h"
 #include "utils/fmgroids.h"
 #include "utils/fmgrprotos.h"
+#include "utils/guc_hooks.h"
+#include "utils/injection_point.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
@@ -114,10 +115,12 @@
  * GUC parameters
  */
 bool		autovacuum_start_daemon = false;
+int			autovacuum_worker_slots;
 int			autovacuum_max_workers;
 int			autovacuum_work_mem = -1;
 int			autovacuum_naptime;
 int			autovacuum_vac_thresh;
+int			autovacuum_vac_max_thresh;
 double		autovacuum_vac_scale;
 int			autovacuum_vac_ins_thresh;
 double		autovacuum_vac_ins_scale;
@@ -130,14 +133,23 @@ double		autovacuum_vac_cost_delay;
 int			autovacuum_vac_cost_limit;
 
 int			Log_autovacuum_min_duration = 600000;
+int			Log_autoanalyze_min_duration = 600000;
 
 /* the minimum allowed time between two awakenings of the launcher */
 #define MIN_AUTOVAC_SLEEPTIME 100.0 /* milliseconds */
 #define MAX_AUTOVAC_SLEEPTIME 300	/* seconds */
 
-/* Flags to tell if we are in an autovacuum process */
-static bool am_autovacuum_launcher = false;
-static bool am_autovacuum_worker = false;
+/*
+ * Variables to save the cost-related storage parameters for the current
+ * relation being vacuumed by this autovacuum worker. Using these, we can
+ * ensure we don't overwrite the values of vacuum_cost_delay and
+ * vacuum_cost_limit after reloading the configuration file. They are
+ * initialized to "invalid" values to indicate that no cost-related storage
+ * parameters were specified and will be set in do_autovacuum() after checking
+ * the storage parameters in table_recheck_autovac().
+ */
+static double av_storage_param_cost_delay = -1;
+static int	av_storage_param_cost_limit = -1;
 
 /* Flags set by signal handlers */
 static volatile sig_atomic_t got_SIGUSR2 = false;
@@ -189,8 +201,8 @@ typedef struct autovac_table
 {
 	Oid			at_relid;
 	VacuumParams at_params;
-	double		at_vacuum_cost_delay;
-	int			at_vacuum_cost_limit;
+	double		at_storage_param_vac_cost_delay;
+	int			at_storage_param_vac_cost_limit;
 	bool		at_dobalance;
 	bool		at_sharedrel;
 	char	   *at_relname;
@@ -201,7 +213,7 @@ typedef struct autovac_table
 /*-------------
  * This struct holds information about a single worker's whereabouts.  We keep
  * an array of these in shared memory, sized according to
- * autovacuum_max_workers.
+ * autovacuum_worker_slots.
  *
  * wi_links		entry into free list or running list
  * wi_dboid		OID of the database this worker is supposed to work on
@@ -209,7 +221,7 @@ typedef struct autovac_table
  * wi_sharedrel flag indicating whether table is marked relisshared
  * wi_proc		pointer to PGPROC of the running worker, NULL if not started
  * wi_launchtime Time at which this worker was launched
- * wi_cost_*	Vacuum cost-based delay parameters current in this worker
+ * wi_dobalance Whether this worker should be included in balance calculations
  *
  * All fields are protected by AutovacuumLock, except for wi_tableoid and
  * wi_sharedrel which are protected by AutovacuumScheduleLock (note these
@@ -223,11 +235,8 @@ typedef struct WorkerInfoData
 	Oid			wi_tableoid;
 	PGPROC	   *wi_proc;
 	TimestampTz wi_launchtime;
-	bool		wi_dobalance;
+	pg_atomic_flag wi_dobalance;
 	bool		wi_sharedrel;
-	double		wi_cost_delay;
-	int			wi_cost_limit;
-	int			wi_cost_limit_base;
 } WorkerInfoData;
 
 typedef struct WorkerInfoData *WorkerInfo;
@@ -241,8 +250,9 @@ typedef enum
 {
 	AutoVacForkFailed,			/* failed trying to start a worker */
 	AutoVacRebalance,			/* rebalance the cost limits */
-	AutoVacNumSignals			/* must be last */
 }			AutoVacuumSignal;
+
+#define AutoVacNumSignals (AutoVacRebalance + 1)
 
 /*
  * Autovacuum workitem array, stored in AutoVacuumShmem->av_workItems.  This
@@ -273,6 +283,8 @@ typedef struct AutoVacuumWorkItem
  * av_startingWorker pointer to WorkerInfo currently being started (cleared by
  *					the worker itself as soon as it's up and running)
  * av_workItems		work item array
+ * av_nworkersForBalance the number of autovacuum workers to use when
+ * 					calculating the per worker cost limit
  *
  * This struct is protected by AutovacuumLock, except for av_signal and parts
  * of the worker list (see above).
@@ -282,10 +294,11 @@ typedef struct
 {
 	sig_atomic_t av_signal[AutoVacNumSignals];
 	pid_t		av_launcherpid;
-	dlist_head	av_freeWorkers;
+	dclist_head av_freeWorkers;
 	dlist_head	av_runningWorkers;
 	WorkerInfo	av_startingWorker;
 	AutoVacuumWorkItem av_workItems[NUM_WORKITEMS];
+	pg_atomic_uint32 av_nworkersForBalance;
 } AutoVacuumShmemStruct;
 
 static AutoVacuumShmemStruct *AutoVacuumShmem;
@@ -297,29 +310,32 @@ static AutoVacuumShmemStruct *AutoVacuumShmem;
 static dlist_head DatabaseList = DLIST_STATIC_INIT(DatabaseList);
 static MemoryContext DatabaseListCxt = NULL;
 
+/*
+ * Dummy pointer to persuade Valgrind that we've not leaked the array of
+ * avl_dbase structs.  Make it global to ensure the compiler doesn't
+ * optimize it away.
+ */
+#ifdef USE_VALGRIND
+extern avl_dbase *avl_dbase_array;
+avl_dbase  *avl_dbase_array;
+#endif
+
 /* Pointer to my own WorkerInfo, valid on each worker */
 static WorkerInfo MyWorkerInfo = NULL;
 
 /* PID of launcher, valid only in worker while shutting down */
 int			AutovacuumLauncherPid = 0;
 
-#ifdef EXEC_BACKEND
-static pid_t avlauncher_forkexec(void);
-static pid_t avworker_forkexec(void);
-#endif
-NON_EXEC_STATIC void AutoVacWorkerMain(int argc, char *argv[]) pg_attribute_noreturn();
-NON_EXEC_STATIC void AutoVacLauncherMain(int argc, char *argv[]) pg_attribute_noreturn();
-
 static Oid	do_start_worker(void);
-static void HandleAutoVacLauncherInterrupts(void);
-static void AutoVacLauncherShutdown(void) pg_attribute_noreturn();
+static void ProcessAutoVacLauncherInterrupts(void);
+pg_noreturn static void AutoVacLauncherShutdown(void);
 static void launcher_determine_sleep(bool canlaunch, bool recursing,
 									 struct timeval *nap);
 static void launch_worker(TimestampTz now);
 static List *get_database_list(void);
 static void rebuild_database_list(Oid newdb);
 static int	db_comparator(const void *a, const void *b);
-static void autovac_balance_cost(void);
+static void autovac_recalculate_workers_for_balance(void);
 
 static void do_autovacuum(void);
 static void FreeWorkerInfo(int code, Datum arg);
@@ -346,6 +362,8 @@ static void autovac_report_activity(autovac_table *tab);
 static void autovac_report_workitem(AutoVacuumWorkItem *workitem,
 									const char *nspname, const char *relname);
 static void avl_sigusr2_handler(SIGNAL_ARGS);
+static bool av_worker_available(void);
+static void check_av_worker_gucs(void);
 
 
 
@@ -353,86 +371,22 @@ static void avl_sigusr2_handler(SIGNAL_ARGS);
  *					  AUTOVACUUM LAUNCHER CODE
  ********************************************************************/
 
-#ifdef EXEC_BACKEND
 /*
- * forkexec routine for the autovacuum launcher process.
- *
- * Format up the arglist, then fork and exec.
- */
-static pid_t
-avlauncher_forkexec(void)
-{
-	char	   *av[10];
-	int			ac = 0;
-
-	av[ac++] = "postgres";
-	av[ac++] = "--forkavlauncher";
-	av[ac++] = NULL;			/* filled in by postmaster_forkexec */
-	av[ac] = NULL;
-
-	Assert(ac < lengthof(av));
-
-	return postmaster_forkexec(ac, av);
-}
-
-/*
- * We need this set from the outside, before InitProcess is called
+ * Main entry point for the autovacuum launcher process.
  */
 void
-AutovacuumLauncherIAm(void)
-{
-	am_autovacuum_launcher = true;
-}
-#endif
-
-/*
- * Main entry point for autovacuum launcher process, to be called from the
- * postmaster.
- */
-int
-StartAutoVacLauncher(void)
-{
-	pid_t		AutoVacPID;
-
-#ifdef EXEC_BACKEND
-	switch ((AutoVacPID = avlauncher_forkexec()))
-#else
-	switch ((AutoVacPID = fork_process()))
-#endif
-	{
-		case -1:
-			ereport(LOG,
-					(errmsg("could not fork autovacuum launcher process: %m")));
-			return 0;
-
-#ifndef EXEC_BACKEND
-		case 0:
-			/* in postmaster child ... */
-			InitPostmasterChild();
-
-			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(false);
-
-			AutoVacLauncherMain(0, NULL);
-			break;
-#endif
-		default:
-			return (int) AutoVacPID;
-	}
-
-	/* shouldn't get here */
-	return 0;
-}
-
-/*
- * Main loop for the autovacuum launcher process.
- */
-NON_EXEC_STATIC void
-AutoVacLauncherMain(int argc, char *argv[])
+AutoVacLauncherMain(const void *startup_data, size_t startup_data_len)
 {
 	sigjmp_buf	local_sigjmp_buf;
 
-	am_autovacuum_launcher = true;
+	Assert(startup_data_len == 0);
+
+	/* Release postmaster's working memory context */
+	if (PostmasterContext)
+	{
+		MemoryContextDelete(PostmasterContext);
+		PostmasterContext = NULL;
+	}
 
 	MyBackendType = B_AUTOVAC_LAUNCHER;
 	init_ps_display(NULL);
@@ -443,7 +397,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 	if (PostAuthDelay)
 		pg_usleep(PostAuthDelay * 1000000L);
 
-	SetProcessingMode(InitProcessing);
+	Assert(GetProcessingMode() == InitProcessing);
 
 	/*
 	 * Set up signal handlers.  We operate on databases much like a regular
@@ -464,19 +418,15 @@ AutoVacLauncherMain(int argc, char *argv[])
 	pqsignal(SIGCHLD, SIG_DFL);
 
 	/*
-	 * Create a per-backend PGPROC struct in shared memory, except in the
-	 * EXEC_BACKEND case where this was done in SubPostmasterMain. We must do
-	 * this before we can use LWLocks (and in the EXEC_BACKEND case we already
-	 * had to do some stuff with LWLocks).
+	 * Create a per-backend PGPROC struct in shared memory.  We must do this
+	 * before we can use LWLocks or access any shared memory.
 	 */
-#ifndef EXEC_BACKEND
 	InitProcess();
-#endif
 
 	/* Early initialization */
 	BaseInit();
 
-	InitPostgres(NULL, InvalidOid, NULL, InvalidOid, false, false, NULL);
+	InitPostgres(NULL, InvalidOid, NULL, InvalidOid, 0, NULL);
 
 	SetProcessingMode(NormalProcessing);
 
@@ -526,7 +476,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 		 */
 		LWLockReleaseAll();
 		pgstat_report_wait_end();
-		AbortBufferIO();
+		pgaio_error_cleanup();
 		UnlockBuffers();
 		/* this is probably dead code, but let's be safe: */
 		if (AuxProcessResourceOwner)
@@ -544,7 +494,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 		FlushErrorState();
 
 		/* Flush any leaked data in the top-level context */
-		MemoryContextResetAndDeleteChildren(AutovacMemCxt);
+		MemoryContextReset(AutovacMemCxt);
 
 		/* don't leave dangling pointers to freed memory */
 		DatabaseListCxt = NULL;
@@ -568,7 +518,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 	PG_exception_stack = &local_sigjmp_buf;
 
 	/* must unblock signals before calling rebuild_database_list */
-	PG_SETMASK(&UnBlockSig);
+	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
 	/*
 	 * Set always-secure search path.  Launcher doesn't connect to a database,
@@ -588,6 +538,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 	 * regular maintenance from being executed.
 	 */
 	SetConfigOption("statement_timeout", "0", PGC_SUSET, PGC_S_OVERRIDE);
+	SetConfigOption("transaction_timeout", "0", PGC_SUSET, PGC_S_OVERRIDE);
 	SetConfigOption("lock_timeout", "0", PGC_SUSET, PGC_S_OVERRIDE);
 	SetConfigOption("idle_in_transaction_session_timeout", "0",
 					PGC_SUSET, PGC_S_OVERRIDE);
@@ -621,10 +572,10 @@ AutoVacLauncherMain(int argc, char *argv[])
 
 	/*
 	 * Create the initial database list.  The invariant we want this list to
-	 * keep is that it's ordered by decreasing next_time.  As soon as an entry
-	 * is updated to a higher time, it will be moved to the front (which is
-	 * correct because the only operation is to add autovacuum_naptime to the
-	 * entry, and time always increases).
+	 * keep is that it's ordered by decreasing next_worker.  As soon as an
+	 * entry is updated to a higher time, it will be moved to the front (which
+	 * is correct because the only operation is to add autovacuum_naptime to
+	 * the entry, and time always increases).
 	 */
 	rebuild_database_list(InvalidOid);
 
@@ -642,8 +593,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 		 * wakening conditions.
 		 */
 
-		launcher_determine_sleep(!dlist_is_empty(&AutoVacuumShmem->av_freeWorkers),
-								 false, &nap);
+		launcher_determine_sleep(av_worker_available(), false, &nap);
 
 		/*
 		 * Wait until naptime expires or we get some type of signal (all the
@@ -656,7 +606,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 
 		ResetLatch(MyLatch);
 
-		HandleAutoVacLauncherInterrupts();
+		ProcessAutoVacLauncherInterrupts();
 
 		/*
 		 * a worker finished, or postmaster signaled failure to start a worker
@@ -670,7 +620,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 			{
 				LWLockAcquire(AutovacuumLock, LW_EXCLUSIVE);
 				AutoVacuumShmem->av_signal[AutoVacRebalance] = false;
-				autovac_balance_cost();
+				autovac_recalculate_workers_for_balance();
 				LWLockRelease(AutovacuumLock);
 			}
 
@@ -703,7 +653,7 @@ AutoVacLauncherMain(int argc, char *argv[])
 		current_time = GetCurrentTimestamp();
 		LWLockAcquire(AutovacuumLock, LW_SHARED);
 
-		can_launch = !dlist_is_empty(&AutoVacuumShmem->av_freeWorkers);
+		can_launch = av_worker_available();
 
 		if (AutoVacuumShmem->av_startingWorker != NULL)
 		{
@@ -746,8 +696,8 @@ AutoVacLauncherMain(int argc, char *argv[])
 					worker->wi_sharedrel = false;
 					worker->wi_proc = NULL;
 					worker->wi_launchtime = 0;
-					dlist_push_head(&AutoVacuumShmem->av_freeWorkers,
-									&worker->wi_links);
+					dclist_push_head(&AutoVacuumShmem->av_freeWorkers,
+									 &worker->wi_links);
 					AutoVacuumShmem->av_startingWorker = NULL;
 					ereport(WARNING,
 							errmsg("autovacuum worker took too long to start; canceled"));
@@ -804,7 +754,7 @@ AutoVacLauncherMain(int argc, char *argv[])
  * Process any new interrupts.
  */
 static void
-HandleAutoVacLauncherInterrupts(void)
+ProcessAutoVacLauncherInterrupts(void)
 {
 	/* the normal shutdown case */
 	if (ShutdownRequestPending)
@@ -812,6 +762,8 @@ HandleAutoVacLauncherInterrupts(void)
 
 	if (ConfigReloadPending)
 	{
+		int			autovacuum_max_workers_prev = autovacuum_max_workers;
+
 		ConfigReloadPending = false;
 		ProcessConfigFile(PGC_SIGHUP);
 
@@ -819,10 +771,13 @@ HandleAutoVacLauncherInterrupts(void)
 		if (!AutoVacuumingActive())
 			AutoVacLauncherShutdown();
 
-		/* rebalance in case the default cost parameters changed */
-		LWLockAcquire(AutovacuumLock, LW_EXCLUSIVE);
-		autovac_balance_cost();
-		LWLockRelease(AutovacuumLock);
+		/*
+		 * If autovacuum_max_workers changed, emit a WARNING if
+		 * autovacuum_worker_slots < autovacuum_max_workers.  If it didn't
+		 * change, skip this to avoid too many repeated log messages.
+		 */
+		if (autovacuum_max_workers_prev != autovacuum_max_workers)
+			check_av_worker_gucs();
 
 		/* rebuild the list in case the naptime changed */
 		rebuild_database_list(InvalidOid);
@@ -1075,6 +1030,10 @@ rebuild_database_list(Oid newdb)
 
 		/* put all the hash elements into an array */
 		dbary = palloc(nelems * sizeof(avl_dbase));
+		/* keep Valgrind quiet */
+#ifdef USE_VALGRIND
+		avl_dbase_array = dbary;
+#endif
 
 		i = 0;
 		hash_seq_init(&seq, dbhash);
@@ -1103,7 +1062,7 @@ rebuild_database_list(Oid newdb)
 		 */
 		for (i = 0; i < nelems; i++)
 		{
-			avl_dbase  *db = &(dbary[i]);
+			db = &(dbary[i]);
 
 			current_time = TimestampTzPlusMilliseconds(current_time,
 													   millis_increment);
@@ -1126,10 +1085,8 @@ rebuild_database_list(Oid newdb)
 static int
 db_comparator(const void *a, const void *b)
 {
-	if (((const avl_dbase *) a)->adl_score == ((const avl_dbase *) b)->adl_score)
-		return 0;
-	else
-		return (((const avl_dbase *) a)->adl_score < ((const avl_dbase *) b)->adl_score) ? 1 : -1;
+	return pg_cmp_s32(((const avl_dbase *) a)->adl_score,
+					  ((const avl_dbase *) b)->adl_score);
 }
 
 /*
@@ -1161,7 +1118,7 @@ do_start_worker(void)
 
 	/* return quickly when there are no free workers */
 	LWLockAcquire(AutovacuumLock, LW_SHARED);
-	if (dlist_is_empty(&AutoVacuumShmem->av_freeWorkers))
+	if (!av_worker_available())
 	{
 		LWLockRelease(AutovacuumLock);
 		return InvalidOid;
@@ -1314,7 +1271,7 @@ do_start_worker(void)
 		 * Get a worker entry from the freelist.  We checked above, so there
 		 * really should be a free slot.
 		 */
-		wptr = dlist_pop_head_node(&AutoVacuumShmem->av_freeWorkers);
+		wptr = dclist_pop_head_node(&AutoVacuumShmem->av_freeWorkers);
 
 		worker = dlist_container(WorkerInfoData, wi_links, wptr);
 		worker->wi_dboid = avdb->adw_datid;
@@ -1417,12 +1374,8 @@ AutoVacWorkerFailed(void)
 static void
 avl_sigusr2_handler(SIGNAL_ARGS)
 {
-	int			save_errno = errno;
-
 	got_SIGUSR2 = true;
 	SetLatch(MyLatch);
-
-	errno = save_errno;
 }
 
 
@@ -1430,93 +1383,28 @@ avl_sigusr2_handler(SIGNAL_ARGS)
  *					  AUTOVACUUM WORKER CODE
  ********************************************************************/
 
-#ifdef EXEC_BACKEND
 /*
- * forkexec routines for the autovacuum worker.
- *
- * Format up the arglist, then fork and exec.
- */
-static pid_t
-avworker_forkexec(void)
-{
-	char	   *av[10];
-	int			ac = 0;
-
-	av[ac++] = "postgres";
-	av[ac++] = "--forkavworker";
-	av[ac++] = NULL;			/* filled in by postmaster_forkexec */
-	av[ac] = NULL;
-
-	Assert(ac < lengthof(av));
-
-	return postmaster_forkexec(ac, av);
-}
-
-/*
- * We need this set from the outside, before InitProcess is called
+ * Main entry point for autovacuum worker processes.
  */
 void
-AutovacuumWorkerIAm(void)
-{
-	am_autovacuum_worker = true;
-}
-#endif
-
-/*
- * Main entry point for autovacuum worker process.
- *
- * This code is heavily based on pgarch.c, q.v.
- */
-int
-StartAutoVacWorker(void)
-{
-	pid_t		worker_pid;
-
-#ifdef EXEC_BACKEND
-	switch ((worker_pid = avworker_forkexec()))
-#else
-	switch ((worker_pid = fork_process()))
-#endif
-	{
-		case -1:
-			ereport(LOG,
-					(errmsg("could not fork autovacuum worker process: %m")));
-			return 0;
-
-#ifndef EXEC_BACKEND
-		case 0:
-			/* in postmaster child ... */
-			InitPostmasterChild();
-
-			/* Close the postmaster's sockets */
-			ClosePostmasterPorts(false);
-
-			AutoVacWorkerMain(0, NULL);
-			break;
-#endif
-		default:
-			return (int) worker_pid;
-	}
-
-	/* shouldn't get here */
-	return 0;
-}
-
-/*
- * AutoVacWorkerMain
- */
-NON_EXEC_STATIC void
-AutoVacWorkerMain(int argc, char *argv[])
+AutoVacWorkerMain(const void *startup_data, size_t startup_data_len)
 {
 	sigjmp_buf	local_sigjmp_buf;
 	Oid			dbid;
 
-	am_autovacuum_worker = true;
+	Assert(startup_data_len == 0);
+
+	/* Release postmaster's working memory context */
+	if (PostmasterContext)
+	{
+		MemoryContextDelete(PostmasterContext);
+		PostmasterContext = NULL;
+	}
 
 	MyBackendType = B_AUTOVAC_WORKER;
 	init_ps_display(NULL);
 
-	SetProcessingMode(InitProcessing);
+	Assert(GetProcessingMode() == InitProcessing);
 
 	/*
 	 * Set up signal handlers.  We operate on databases much like a regular
@@ -1542,14 +1430,10 @@ AutoVacWorkerMain(int argc, char *argv[])
 	pqsignal(SIGCHLD, SIG_DFL);
 
 	/*
-	 * Create a per-backend PGPROC struct in shared memory, except in the
-	 * EXEC_BACKEND case where this was done in SubPostmasterMain. We must do
-	 * this before we can use LWLocks (and in the EXEC_BACKEND case we already
-	 * had to do some stuff with LWLocks).
+	 * Create a per-backend PGPROC struct in shared memory.  We must do this
+	 * before we can use LWLocks or access any shared memory.
 	 */
-#ifndef EXEC_BACKEND
 	InitProcess();
-#endif
 
 	/* Early initialization */
 	BaseInit();
@@ -1589,7 +1473,7 @@ AutoVacWorkerMain(int argc, char *argv[])
 	/* We can now handle ereport(ERROR) */
 	PG_exception_stack = &local_sigjmp_buf;
 
-	PG_SETMASK(&UnBlockSig);
+	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
 	/*
 	 * Set always-secure search path, so malicious users can't redirect user
@@ -1611,6 +1495,7 @@ AutoVacWorkerMain(int argc, char *argv[])
 	 * regular maintenance from being executed.
 	 */
 	SetConfigOption("statement_timeout", "0", PGC_SUSET, PGC_S_OVERRIDE);
+	SetConfigOption("transaction_timeout", "0", PGC_SUSET, PGC_S_OVERRIDE);
 	SetConfigOption("lock_timeout", "0", PGC_SUSET, PGC_S_OVERRIDE);
 	SetConfigOption("idle_in_transaction_session_timeout", "0",
 					PGC_SUSET, PGC_S_OVERRIDE);
@@ -1702,7 +1587,9 @@ AutoVacWorkerMain(int argc, char *argv[])
 		 * Note: if we have selected a just-deleted database (due to using
 		 * stale stats info), we'll fail and exit here.
 		 */
-		InitPostgres(NULL, dbid, NULL, InvalidOid, false, true, dbname);
+		InitPostgres(NULL, dbid, NULL, InvalidOid,
+					 INIT_PG_OVERRIDE_ALLOW_CONNS,
+					 dbname);
 		SetProcessingMode(NormalProcessing);
 		set_ps_display(dbname);
 		ereport(DEBUG1,
@@ -1756,12 +1643,9 @@ FreeWorkerInfo(int code, Datum arg)
 		MyWorkerInfo->wi_sharedrel = false;
 		MyWorkerInfo->wi_proc = NULL;
 		MyWorkerInfo->wi_launchtime = 0;
-		MyWorkerInfo->wi_dobalance = false;
-		MyWorkerInfo->wi_cost_delay = 0;
-		MyWorkerInfo->wi_cost_limit = 0;
-		MyWorkerInfo->wi_cost_limit_base = 0;
-		dlist_push_head(&AutoVacuumShmem->av_freeWorkers,
-						&MyWorkerInfo->wi_links);
+		pg_atomic_clear_flag(&MyWorkerInfo->wi_dobalance);
+		dclist_push_head(&AutoVacuumShmem->av_freeWorkers,
+						 &MyWorkerInfo->wi_links);
 		/* not mine anymore */
 		MyWorkerInfo = NULL;
 
@@ -1775,99 +1659,152 @@ FreeWorkerInfo(int code, Datum arg)
 }
 
 /*
- * Update the cost-based delay parameters, so that multiple workers consume
- * each a fraction of the total available I/O.
+ * Update vacuum cost-based delay-related parameters for autovacuum workers and
+ * backends executing VACUUM or ANALYZE using the value of relevant GUCs and
+ * global state. This must be called during setup for vacuum and after every
+ * config reload to ensure up-to-date values.
  */
 void
-AutoVacuumUpdateDelay(void)
+VacuumUpdateCosts(void)
 {
 	if (MyWorkerInfo)
 	{
-		VacuumCostDelay = MyWorkerInfo->wi_cost_delay;
-		VacuumCostLimit = MyWorkerInfo->wi_cost_limit;
+		if (av_storage_param_cost_delay >= 0)
+			vacuum_cost_delay = av_storage_param_cost_delay;
+		else if (autovacuum_vac_cost_delay >= 0)
+			vacuum_cost_delay = autovacuum_vac_cost_delay;
+		else
+			/* fall back to VacuumCostDelay */
+			vacuum_cost_delay = VacuumCostDelay;
+
+		AutoVacuumUpdateCostLimit();
+	}
+	else
+	{
+		/* Must be explicit VACUUM or ANALYZE */
+		vacuum_cost_delay = VacuumCostDelay;
+		vacuum_cost_limit = VacuumCostLimit;
+	}
+
+	/*
+	 * If configuration changes are allowed to impact VacuumCostActive, make
+	 * sure it is updated.
+	 */
+	if (VacuumFailsafeActive)
+		Assert(!VacuumCostActive);
+	else if (vacuum_cost_delay > 0)
+		VacuumCostActive = true;
+	else
+	{
+		VacuumCostActive = false;
+		VacuumCostBalance = 0;
+	}
+
+	/*
+	 * Since the cost logging requires a lock, avoid rendering the log message
+	 * in case we are using a message level where the log wouldn't be emitted.
+	 */
+	if (MyWorkerInfo && message_level_is_interesting(DEBUG2))
+	{
+		Oid			dboid,
+					tableoid;
+
+		Assert(!LWLockHeldByMe(AutovacuumLock));
+
+		LWLockAcquire(AutovacuumLock, LW_SHARED);
+		dboid = MyWorkerInfo->wi_dboid;
+		tableoid = MyWorkerInfo->wi_tableoid;
+		LWLockRelease(AutovacuumLock);
+
+		elog(DEBUG2,
+			 "Autovacuum VacuumUpdateCosts(db=%u, rel=%u, dobalance=%s, cost_limit=%d, cost_delay=%g active=%s failsafe=%s)",
+			 dboid, tableoid, pg_atomic_unlocked_test_flag(&MyWorkerInfo->wi_dobalance) ? "no" : "yes",
+			 vacuum_cost_limit, vacuum_cost_delay,
+			 vacuum_cost_delay > 0 ? "yes" : "no",
+			 VacuumFailsafeActive ? "yes" : "no");
 	}
 }
 
 /*
- * autovac_balance_cost
- *		Recalculate the cost limit setting for each active worker.
- *
- * Caller must hold the AutovacuumLock in exclusive mode.
+ * Update vacuum_cost_limit with the correct value for an autovacuum worker,
+ * given the value of other relevant cost limit parameters and the number of
+ * workers across which the limit must be balanced. Autovacuum workers must
+ * call this regularly in case av_nworkersForBalance has been updated by
+ * another worker or by the autovacuum launcher. They must also call it after a
+ * config reload.
  */
-static void
-autovac_balance_cost(void)
+void
+AutoVacuumUpdateCostLimit(void)
 {
+	if (!MyWorkerInfo)
+		return;
+
 	/*
-	 * The idea here is that we ration out I/O equally.  The amount of I/O
-	 * that a worker can consume is determined by cost_limit/cost_delay, so we
-	 * try to equalize those ratios rather than the raw limit settings.
-	 *
 	 * note: in cost_limit, zero also means use value from elsewhere, because
 	 * zero is not a valid value.
 	 */
-	int			vac_cost_limit = (autovacuum_vac_cost_limit > 0 ?
-								  autovacuum_vac_cost_limit : VacuumCostLimit);
-	double		vac_cost_delay = (autovacuum_vac_cost_delay >= 0 ?
-								  autovacuum_vac_cost_delay : VacuumCostDelay);
-	double		cost_total;
-	double		cost_avail;
+
+	if (av_storage_param_cost_limit > 0)
+		vacuum_cost_limit = av_storage_param_cost_limit;
+	else
+	{
+		int			nworkers_for_balance;
+
+		if (autovacuum_vac_cost_limit > 0)
+			vacuum_cost_limit = autovacuum_vac_cost_limit;
+		else
+			vacuum_cost_limit = VacuumCostLimit;
+
+		/* Only balance limit if no cost-related storage parameters specified */
+		if (pg_atomic_unlocked_test_flag(&MyWorkerInfo->wi_dobalance))
+			return;
+
+		Assert(vacuum_cost_limit > 0);
+
+		nworkers_for_balance = pg_atomic_read_u32(&AutoVacuumShmem->av_nworkersForBalance);
+
+		/* There is at least 1 autovac worker (this worker) */
+		if (nworkers_for_balance <= 0)
+			elog(ERROR, "nworkers_for_balance must be > 0");
+
+		vacuum_cost_limit = Max(vacuum_cost_limit / nworkers_for_balance, 1);
+	}
+}
+
+/*
+ * autovac_recalculate_workers_for_balance
+ *		Recalculate the number of workers to consider, given cost-related
+ *		storage parameters and the current number of active workers.
+ *
+ * Caller must hold the AutovacuumLock in at least shared mode to access
+ * worker->wi_proc.
+ */
+static void
+autovac_recalculate_workers_for_balance(void)
+{
 	dlist_iter	iter;
+	int			orig_nworkers_for_balance;
+	int			nworkers_for_balance = 0;
 
-	/* not set? nothing to do */
-	if (vac_cost_limit <= 0 || vac_cost_delay <= 0)
-		return;
+	Assert(LWLockHeldByMe(AutovacuumLock));
 
-	/* calculate the total base cost limit of participating active workers */
-	cost_total = 0.0;
+	orig_nworkers_for_balance =
+		pg_atomic_read_u32(&AutoVacuumShmem->av_nworkersForBalance);
+
 	dlist_foreach(iter, &AutoVacuumShmem->av_runningWorkers)
 	{
 		WorkerInfo	worker = dlist_container(WorkerInfoData, wi_links, iter.cur);
 
-		if (worker->wi_proc != NULL &&
-			worker->wi_dobalance &&
-			worker->wi_cost_limit_base > 0 && worker->wi_cost_delay > 0)
-			cost_total +=
-				(double) worker->wi_cost_limit_base / worker->wi_cost_delay;
+		if (worker->wi_proc == NULL ||
+			pg_atomic_unlocked_test_flag(&worker->wi_dobalance))
+			continue;
+
+		nworkers_for_balance++;
 	}
 
-	/* there are no cost limits -- nothing to do */
-	if (cost_total <= 0)
-		return;
-
-	/*
-	 * Adjust cost limit of each active worker to balance the total of cost
-	 * limit to autovacuum_vacuum_cost_limit.
-	 */
-	cost_avail = (double) vac_cost_limit / vac_cost_delay;
-	dlist_foreach(iter, &AutoVacuumShmem->av_runningWorkers)
-	{
-		WorkerInfo	worker = dlist_container(WorkerInfoData, wi_links, iter.cur);
-
-		if (worker->wi_proc != NULL &&
-			worker->wi_dobalance &&
-			worker->wi_cost_limit_base > 0 && worker->wi_cost_delay > 0)
-		{
-			int			limit = (int)
-				(cost_avail * worker->wi_cost_limit_base / cost_total);
-
-			/*
-			 * We put a lower bound of 1 on the cost_limit, to avoid division-
-			 * by-zero in the vacuum code.  Also, in case of roundoff trouble
-			 * in these calculations, let's be sure we don't ever set
-			 * cost_limit to more than the base value.
-			 */
-			worker->wi_cost_limit = Max(Min(limit,
-											worker->wi_cost_limit_base),
-										1);
-		}
-
-		if (worker->wi_proc != NULL)
-			elog(DEBUG2, "autovac_balance_cost(pid=%d db=%u, rel=%u, dobalance=%s cost_limit=%d, cost_limit_base=%d, cost_delay=%g)",
-				 worker->wi_proc->pid, worker->wi_dboid, worker->wi_tableoid,
-				 worker->wi_dobalance ? "yes" : "no",
-				 worker->wi_cost_limit, worker->wi_cost_limit_base,
-				 worker->wi_cost_delay);
-	}
+	if (nworkers_for_balance != orig_nworkers_for_balance)
+		pg_atomic_write_u32(&AutoVacuumShmem->av_nworkersForBalance,
+							nworkers_for_balance);
 }
 
 /*
@@ -1895,18 +1832,9 @@ get_database_list(void)
 	resultcxt = CurrentMemoryContext;
 
 	/*
-	 * Start a transaction so we can access pg_database, and get a snapshot.
-	 * We don't have a use for the snapshot itself, but we're interested in
-	 * the secondary effect that it sets RecentGlobalXmin.  (This is critical
-	 * for anything that reads heap pages, because HOT may decide to prune
-	 * them even if the process doesn't attempt to modify any tuples.)
-	 *
-	 * FIXME: This comment is inaccurate / the code buggy. A snapshot that is
-	 * not pushed/active does not reliably prevent HOT pruning (->xmin could
-	 * e.g. be cleared when cache invalidations are processed).
+	 * Start a transaction so we can access pg_database.
 	 */
 	StartTransactionCommand();
-	(void) GetTransactionSnapshot();
 
 	rel = table_open(DatabaseRelationId, AccessShareLock);
 	scan = table_beginscan_catalog(rel, 0, NULL);
@@ -1937,7 +1865,7 @@ get_database_list(void)
 		 */
 		oldcxt = MemoryContextSwitchTo(resultcxt);
 
-		avdb = (avw_dbase *) palloc(sizeof(avw_dbase));
+		avdb = palloc_object(avw_dbase);
 
 		avdb->adw_datid = pgdatabase->oid;
 		avdb->adw_name = pstrdup(NameStr(pgdatabase->datname));
@@ -2001,9 +1929,15 @@ do_autovacuum(void)
 	StartTransactionCommand();
 
 	/*
+	 * This injection point is put in a transaction block to work with a wait
+	 * that uses a condition variable.
+	 */
+	INJECTION_POINT("autovacuum-worker-start", NULL);
+
+	/*
 	 * Compute the multixact age for which freezing is urgent.  This is
-	 * normally autovacuum_multixact_freeze_max_age, but may be less if we are
-	 * short of multixact member space.
+	 * normally autovacuum_multixact_freeze_max_age, but may be less if
+	 * multixact members are bloated.
 	 */
 	effective_multixact_freeze_max_age = MultiXactMemberFreezeThreshold();
 
@@ -2153,6 +2087,12 @@ do_autovacuum(void)
 				}
 			}
 		}
+
+		/* Release stuff to avoid per-relation leakage */
+		if (relopts)
+			pfree(relopts);
+		if (tabentry)
+			pfree(tabentry);
 	}
 
 	table_endscan(relScan);
@@ -2169,7 +2109,8 @@ do_autovacuum(void)
 		Form_pg_class classForm = (Form_pg_class) GETSTRUCT(tuple);
 		PgStat_StatTabEntry *tabentry;
 		Oid			relid;
-		AutoVacOpts *relopts = NULL;
+		AutoVacOpts *relopts;
+		bool		free_relopts = false;
 		bool		dovacuum;
 		bool		doanalyze;
 		bool		wraparound;
@@ -2187,7 +2128,9 @@ do_autovacuum(void)
 		 * main rel
 		 */
 		relopts = extract_autovac_opts(tuple, pg_class_desc);
-		if (relopts == NULL)
+		if (relopts)
+			free_relopts = true;
+		else
 		{
 			av_relation *hentry;
 			bool		found;
@@ -2208,6 +2151,12 @@ do_autovacuum(void)
 		/* ignore analyze for toast tables */
 		if (dovacuum)
 			table_oids = lappend_oid(table_oids, relid);
+
+		/* Release stuff to avoid leakage */
+		if (free_relopts)
+			pfree(relopts);
+		if (tabentry)
+			pfree(tabentry);
 	}
 
 	table_endscan(relScan);
@@ -2299,6 +2248,12 @@ do_autovacuum(void)
 						get_namespace_name(classForm->relnamespace),
 						NameStr(classForm->relname))));
 
+		/*
+		 * Deletion might involve TOAST table access, so ensure we have a
+		 * valid snapshot.
+		 */
+		PushActiveSnapshot(GetTransactionSnapshot());
+
 		object.classId = RelationRelationId;
 		object.objectId = relid;
 		object.objectSubId = 0;
@@ -2311,6 +2266,7 @@ do_autovacuum(void)
 		 * To commit the deletion, end current transaction and start a new
 		 * one.  Note this also releases the locks we took.
 		 */
+		PopActiveSnapshot();
 		CommitTransactionCommand();
 		StartTransactionCommand();
 
@@ -2319,11 +2275,21 @@ do_autovacuum(void)
 	}
 
 	/*
-	 * Create a buffer access strategy object for VACUUM to use.  We want to
-	 * use the same one across all the vacuum operations we perform, since the
-	 * point is for VACUUM not to blow out the shared cache.
+	 * Optionally, create a buffer access strategy object for VACUUM to use.
+	 * We use the same BufferAccessStrategy object for all tables VACUUMed by
+	 * this worker to prevent autovacuum from blowing out shared buffers.
+	 *
+	 * VacuumBufferUsageLimit being set to 0 results in
+	 * GetAccessStrategyWithSize returning NULL, effectively meaning we can
+	 * use up to all of shared buffers.
+	 *
+	 * If we later enter failsafe mode on any of the tables being vacuumed, we
+	 * will cease use of the BufferAccessStrategy only for that table.
+	 *
+	 * XXX should we consider adding code to adjust the size of this if
+	 * VacuumBufferUsageLimit changes?
 	 */
-	bstrategy = GetAccessStrategy(BAS_VACUUM);
+	bstrategy = GetAccessStrategyWithSize(BAS_VACUUM, VacuumBufferUsageLimit);
 
 	/*
 	 * create a memory context to act as fake PortalContext, so that the
@@ -2343,8 +2309,6 @@ do_autovacuum(void)
 		autovac_table *tab;
 		bool		isshared;
 		bool		skipit;
-		double		stdVacuumCostDelay;
-		int			stdVacuumCostLimit;
 		dlist_iter	iter;
 
 		CHECK_FOR_INTERRUPTS();
@@ -2448,33 +2412,36 @@ do_autovacuum(void)
 		}
 
 		/*
-		 * Remember the prevailing values of the vacuum cost GUCs.  We have to
-		 * restore these at the bottom of the loop, else we'll compute wrong
-		 * values in the next iteration of autovac_balance_cost().
+		 * Save the cost-related storage parameter values in global variables
+		 * for reference when updating vacuum_cost_delay and vacuum_cost_limit
+		 * during vacuuming this table.
 		 */
-		stdVacuumCostDelay = VacuumCostDelay;
-		stdVacuumCostLimit = VacuumCostLimit;
+		av_storage_param_cost_delay = tab->at_storage_param_vac_cost_delay;
+		av_storage_param_cost_limit = tab->at_storage_param_vac_cost_limit;
 
-		/* Must hold AutovacuumLock while mucking with cost balance info */
-		LWLockAcquire(AutovacuumLock, LW_EXCLUSIVE);
+		/*
+		 * We only expect this worker to ever set the flag, so don't bother
+		 * checking the return value. We shouldn't have to retry.
+		 */
+		if (tab->at_dobalance)
+			pg_atomic_test_set_flag(&MyWorkerInfo->wi_dobalance);
+		else
+			pg_atomic_clear_flag(&MyWorkerInfo->wi_dobalance);
 
-		/* advertise my cost delay parameters for the balancing algorithm */
-		MyWorkerInfo->wi_dobalance = tab->at_dobalance;
-		MyWorkerInfo->wi_cost_delay = tab->at_vacuum_cost_delay;
-		MyWorkerInfo->wi_cost_limit = tab->at_vacuum_cost_limit;
-		MyWorkerInfo->wi_cost_limit_base = tab->at_vacuum_cost_limit;
-
-		/* do a balance */
-		autovac_balance_cost();
-
-		/* set the active cost parameters from the result of that */
-		AutoVacuumUpdateDelay();
-
-		/* done */
+		LWLockAcquire(AutovacuumLock, LW_SHARED);
+		autovac_recalculate_workers_for_balance();
 		LWLockRelease(AutovacuumLock);
 
+		/*
+		 * We wait until this point to update cost delay and cost limit
+		 * values, even though we reloaded the configuration file above, so
+		 * that we can take into account the cost-related storage parameters.
+		 */
+		VacuumUpdateCosts();
+
+
 		/* clean up memory before each iteration */
-		MemoryContextResetAndDeleteChildren(PortalContext);
+		MemoryContextReset(PortalContext);
 
 		/*
 		 * Save the relation name for a possible error message, to avoid a
@@ -2529,7 +2496,7 @@ do_autovacuum(void)
 			/* this resets ProcGlobal->statusFlags[i] too */
 			AbortOutOfAnyTransaction();
 			FlushErrorState();
-			MemoryContextResetAndDeleteChildren(PortalContext);
+			MemoryContextReset(PortalContext);
 
 			/* restart our transaction for the following operations */
 			StartTransactionCommand();
@@ -2555,21 +2522,20 @@ deleted:
 		pfree(tab);
 
 		/*
-		 * Remove my info from shared memory.  We could, but intentionally
-		 * don't, clear wi_cost_limit and friends --- this is on the
-		 * assumption that we probably have more to do with similar cost
-		 * settings, so we don't want to give up our share of I/O for a very
-		 * short interval and thereby thrash the global balance.
+		 * Remove my info from shared memory.  We set wi_dobalance on the
+		 * assumption that we are more likely than not to vacuum a table with
+		 * no cost-related storage parameters next, so we want to claim our
+		 * share of I/O as soon as possible to avoid thrashing the global
+		 * balance.
 		 */
 		LWLockAcquire(AutovacuumScheduleLock, LW_EXCLUSIVE);
 		MyWorkerInfo->wi_tableoid = InvalidOid;
 		MyWorkerInfo->wi_sharedrel = false;
 		LWLockRelease(AutovacuumScheduleLock);
-
-		/* restore vacuum cost GUCs for the next iteration */
-		VacuumCostDelay = stdVacuumCostDelay;
-		VacuumCostLimit = stdVacuumCostLimit;
+		pg_atomic_test_set_flag(&MyWorkerInfo->wi_dobalance);
 	}
+
+	list_free(table_oids);
 
 	/*
 	 * Perform additional work items, as requested by backends.
@@ -2590,7 +2556,10 @@ deleted:
 		workitem->avw_active = true;
 		LWLockRelease(AutovacuumLock);
 
+		PushActiveSnapshot(GetTransactionSnapshot());
 		perform_work_item(workitem);
+		if (ActiveSnapshotSet())	/* transaction could have aborted */
+			PopActiveSnapshot();
 
 		/*
 		 * Check for config changes before acquiring lock for further jobs.
@@ -2600,6 +2569,7 @@ deleted:
 		{
 			ConfigReloadPending = false;
 			ProcessConfigFile(PGC_SIGHUP);
+			VacuumUpdateCosts();
 		}
 
 		LWLockAcquire(AutovacuumLock, LW_EXCLUSIVE);
@@ -2612,8 +2582,18 @@ deleted:
 
 	/*
 	 * We leak table_toast_map here (among other things), but since we're
-	 * going away soon, it's not a problem.
+	 * going away soon, it's not a problem normally.  But when using Valgrind,
+	 * release some stuff to reduce complaints about leaked storage.
 	 */
+#ifdef USE_VALGRIND
+	hash_destroy(table_toast_map);
+	FreeTupleDesc(pg_class_desc);
+	if (bstrategy)
+		pfree(bstrategy);
+#endif
+
+	/* Run the rest in xact context, mainly to avoid Valgrind leak warnings */
+	MemoryContextSwitchTo(TopTransactionContext);
 
 	/*
 	 * Update pg_database.datfrozenxid, and truncate pg_xact if possible. We
@@ -2621,8 +2601,8 @@ deleted:
 	 *
 	 * Even if we didn't vacuum anything, it may still be important to do
 	 * this, because one indirect effect of vac_update_datfrozenxid() is to
-	 * update ShmemVariableCache->xidVacLimit.  That might need to be done
-	 * even if we haven't vacuumed anything, because relations with older
+	 * update TransamVariables->xidVacLimit.  That might need to be done even
+	 * if we haven't vacuumed anything, because relations with older
 	 * relfrozenxid values or other databases with older datfrozenxid values
 	 * might have been dropped, allowing xidVacLimit to advance.
 	 *
@@ -2673,7 +2653,7 @@ perform_work_item(AutoVacuumWorkItem *workitem)
 	autovac_report_workitem(workitem, cur_nspname, cur_relname);
 
 	/* clean up memory before each work item */
-	MemoryContextResetAndDeleteChildren(PortalContext);
+	MemoryContextReset(PortalContext);
 
 	/*
 	 * We will abort the current work item if something errors out, and
@@ -2686,7 +2666,10 @@ perform_work_item(AutoVacuumWorkItem *workitem)
 		/* Use PortalContext for any per-work-item allocations */
 		MemoryContextSwitchTo(PortalContext);
 
-		/* have at it */
+		/*
+		 * Have at it.  Functions called here are responsible for any required
+		 * user switch and sandbox.
+		 */
 		switch (workitem->avw_type)
 		{
 			case AVW_BRINSummarizeRange:
@@ -2722,7 +2705,7 @@ perform_work_item(AutoVacuumWorkItem *workitem)
 		/* this resets ProcGlobal->statusFlags[i] too */
 		AbortOutOfAnyTransaction();
 		FlushErrorState();
-		MemoryContextResetAndDeleteChildren(PortalContext);
+		MemoryContextReset(PortalContext);
 
 		/* restart our transaction for the following operations */
 		StartTransactionCommand();
@@ -2748,8 +2731,8 @@ deleted2:
 /*
  * extract_autovac_opts
  *
- * Given a relation's pg_class tuple, return the AutoVacOpts portion of
- * reloptions, if set; otherwise, return NULL.
+ * Given a relation's pg_class tuple, return a palloc'd copy of the
+ * AutoVacOpts portion of reloptions, if set; otherwise, return NULL.
  *
  * Note: callers do not have a relation lock on the table at this point,
  * so the table could have been dropped, and its catalog rows gone, after
@@ -2770,7 +2753,7 @@ extract_autovac_opts(HeapTuple tup, TupleDesc pg_class_desc)
 	if (relopts == NULL)
 		return NULL;
 
-	av = palloc(sizeof(AutoVacOpts));
+	av = palloc_object(AutoVacOpts);
 	memcpy(av, &(((StdRdOptions *) relopts)->autovacuum), sizeof(AutoVacOpts));
 	pfree(relopts);
 
@@ -2798,6 +2781,7 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	autovac_table *tab = NULL;
 	bool		wraparound;
 	AutoVacOpts *avopts;
+	bool		free_avopts = false;
 
 	/* fetch the relation's relcache entry */
 	classTup = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(relid));
@@ -2810,8 +2794,10 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 	 * main table reloptions if the toast table itself doesn't have.
 	 */
 	avopts = extract_autovac_opts(classTup, pg_class_desc);
-	if (classForm->relkind == RELKIND_TOASTVALUE &&
-		avopts == NULL && table_toast_map != NULL)
+	if (avopts)
+		free_avopts = true;
+	else if (classForm->relkind == RELKIND_TOASTVALUE &&
+			 table_toast_map != NULL)
 	{
 		av_relation *hentry;
 		bool		found;
@@ -2832,9 +2818,8 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		int			freeze_table_age;
 		int			multixact_freeze_min_age;
 		int			multixact_freeze_table_age;
-		int			vac_cost_limit;
-		double		vac_cost_delay;
-		int			log_min_duration;
+		int			log_vacuum_min_duration;
+		int			log_analyze_min_duration;
 
 		/*
 		 * Calculate the vacuum cost parameters and the freeze ages.  If there
@@ -2843,24 +2828,15 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		 * defaults, autovacuum's own first and plain vacuum second.
 		 */
 
-		/* -1 in autovac setting means use plain vacuum_cost_delay */
-		vac_cost_delay = (avopts && avopts->vacuum_cost_delay >= 0)
-			? avopts->vacuum_cost_delay
-			: (autovacuum_vac_cost_delay >= 0)
-			? autovacuum_vac_cost_delay
-			: VacuumCostDelay;
-
-		/* 0 or -1 in autovac setting means use plain vacuum_cost_limit */
-		vac_cost_limit = (avopts && avopts->vacuum_cost_limit > 0)
-			? avopts->vacuum_cost_limit
-			: (autovacuum_vac_cost_limit > 0)
-			? autovacuum_vac_cost_limit
-			: VacuumCostLimit;
-
 		/* -1 in autovac setting means use log_autovacuum_min_duration */
-		log_min_duration = (avopts && avopts->log_min_duration >= 0)
-			? avopts->log_min_duration
+		log_vacuum_min_duration = (avopts && avopts->log_vacuum_min_duration >= 0)
+			? avopts->log_vacuum_min_duration
 			: Log_autovacuum_min_duration;
+
+		/* -1 in autovac setting means use log_autoanalyze_min_duration */
+		log_analyze_min_duration = (avopts && avopts->log_analyze_min_duration >= 0)
+			? avopts->log_analyze_min_duration
+			: Log_autoanalyze_min_duration;
 
 		/* these do not have autovacuum-specific settings */
 		freeze_min_age = (avopts && avopts->freeze_min_age >= 0)
@@ -2881,12 +2857,19 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 			? avopts->multixact_freeze_table_age
 			: default_multixact_freeze_table_age;
 
-		tab = palloc(sizeof(autovac_table));
+		tab = palloc_object(autovac_table);
 		tab->at_relid = relid;
 		tab->at_sharedrel = classForm->relisshared;
 
-		/* Note that this skips toast relations */
-		tab->at_params.options = (dovacuum ? VACOPT_VACUUM : 0) |
+		/*
+		 * Select VACUUM options.  Note we don't say VACOPT_PROCESS_TOAST, so
+		 * that vacuum() skips toast relations.  Also note we tell vacuum() to
+		 * skip vac_update_datfrozenxid(); we'll do that separately.
+		 */
+		tab->at_params.options =
+			(dovacuum ? (VACOPT_VACUUM |
+						 VACOPT_PROCESS_MAIN |
+						 VACOPT_SKIP_DATABASE_STATS) : 0) |
 			(doanalyze ? VACOPT_ANALYZE : 0) |
 			(!wraparound ? VACOPT_SKIP_LOCKED : 0);
 
@@ -2904,9 +2887,19 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 		tab->at_params.multixact_freeze_min_age = multixact_freeze_min_age;
 		tab->at_params.multixact_freeze_table_age = multixact_freeze_table_age;
 		tab->at_params.is_wraparound = wraparound;
-		tab->at_params.log_min_duration = log_min_duration;
-		tab->at_vacuum_cost_limit = vac_cost_limit;
-		tab->at_vacuum_cost_delay = vac_cost_delay;
+		tab->at_params.log_vacuum_min_duration = log_vacuum_min_duration;
+		tab->at_params.log_analyze_min_duration = log_analyze_min_duration;
+		tab->at_params.toast_parent = InvalidOid;
+
+		/*
+		 * Later, in vacuum_rel(), we check reloptions for any
+		 * vacuum_max_eager_freeze_failure_rate override.
+		 */
+		tab->at_params.max_eager_freeze_failure_rate = vacuum_max_eager_freeze_failure_rate;
+		tab->at_storage_param_vac_cost_limit = avopts ?
+			avopts->vacuum_cost_limit : 0;
+		tab->at_storage_param_vac_cost_delay = avopts ?
+			avopts->vacuum_cost_delay : -1;
 		tab->at_relname = NULL;
 		tab->at_nspname = NULL;
 		tab->at_datname = NULL;
@@ -2920,6 +2913,8 @@ table_recheck_autovac(Oid relid, HTAB *table_toast_map,
 						 avopts->vacuum_cost_delay >= 0));
 	}
 
+	if (free_avopts)
+		pfree(avopts);
 	heap_freetuple(classTup);
 	return tab;
 }
@@ -2951,6 +2946,10 @@ recheck_relation_needs_vacanalyze(Oid relid,
 							  effective_multixact_freeze_max_age,
 							  dovacuum, doanalyze, wraparound);
 
+	/* Release tabentry to avoid leakage */
+	if (tabentry)
+		pfree(tabentry);
+
 	/* ignore ANALYZE for toast tables */
 	if (classForm->relkind == RELKIND_TOASTVALUE)
 		*doanalyze = false;
@@ -2972,6 +2971,8 @@ recheck_relation_needs_vacanalyze(Oid relid,
  * threshold.  This threshold is calculated as
  *
  * threshold = vac_base_thresh + vac_scale_factor * reltuples
+ * if (threshold > vac_max_thresh)
+ *     threshold = vac_max_thresh;
  *
  * For analyze, the analysis done is that the number of tuples inserted,
  * deleted and updated since the last analyze exceeds a threshold calculated
@@ -3006,10 +3007,10 @@ relation_needs_vacanalyze(Oid relid,
 {
 	bool		force_vacuum;
 	bool		av_enabled;
-	float4		reltuples;		/* pg_class.reltuples */
 
 	/* constants from reloptions or GUC variables */
 	int			vac_base_thresh,
+				vac_max_thresh,
 				vac_ins_base_thresh,
 				anl_base_thresh;
 	float4		vac_scale_factor,
@@ -3030,10 +3031,11 @@ relation_needs_vacanalyze(Oid relid,
 	int			freeze_max_age;
 	int			multixact_freeze_max_age;
 	TransactionId xidForceLimit;
+	TransactionId relfrozenxid;
 	MultiXactId multiForceLimit;
 
-	AssertArg(classForm != NULL);
-	AssertArg(OidIsValid(relid));
+	Assert(classForm != NULL);
+	Assert(OidIsValid(relid));
 
 	/*
 	 * Determine vacuum/analyze equation parameters.  We have two possible
@@ -3049,6 +3051,11 @@ relation_needs_vacanalyze(Oid relid,
 	vac_base_thresh = (relopts && relopts->vacuum_threshold >= 0)
 		? relopts->vacuum_threshold
 		: autovacuum_vac_thresh;
+
+	/* -1 is used to disable max threshold */
+	vac_max_thresh = (relopts && relopts->vacuum_max_threshold >= -1)
+		? relopts->vacuum_max_threshold
+		: autovacuum_vac_max_thresh;
 
 	vac_ins_scale_factor = (relopts && relopts->vacuum_ins_scale_factor >= 0)
 		? relopts->vacuum_ins_scale_factor
@@ -3081,16 +3088,18 @@ relation_needs_vacanalyze(Oid relid,
 	xidForceLimit = recentXid - freeze_max_age;
 	if (xidForceLimit < FirstNormalTransactionId)
 		xidForceLimit -= FirstNormalTransactionId;
-	force_vacuum = (TransactionIdIsNormal(classForm->relfrozenxid) &&
-					TransactionIdPrecedes(classForm->relfrozenxid,
-										  xidForceLimit));
+	relfrozenxid = classForm->relfrozenxid;
+	force_vacuum = (TransactionIdIsNormal(relfrozenxid) &&
+					TransactionIdPrecedes(relfrozenxid, xidForceLimit));
 	if (!force_vacuum)
 	{
+		MultiXactId relminmxid = classForm->relminmxid;
+
 		multiForceLimit = recentMulti - multixact_freeze_max_age;
 		if (multiForceLimit < FirstMultiXactId)
 			multiForceLimit -= FirstMultiXactId;
-		force_vacuum = MultiXactIdIsValid(classForm->relminmxid) &&
-			MultiXactIdPrecedes(classForm->relminmxid, multiForceLimit);
+		force_vacuum = MultiXactIdIsValid(relminmxid) &&
+			MultiXactIdPrecedes(relminmxid, multiForceLimit);
 	}
 	*wraparound = force_vacuum;
 
@@ -3109,26 +3118,46 @@ relation_needs_vacanalyze(Oid relid,
 	 * vacuuming only, so don't vacuum (or analyze) anything that's not being
 	 * forced.
 	 */
-	if (PointerIsValid(tabentry) && AutoVacuumingActive())
+	if (tabentry && AutoVacuumingActive())
 	{
-		reltuples = classForm->reltuples;
-		vactuples = tabentry->n_dead_tuples;
-		instuples = tabentry->inserts_since_vacuum;
-		anltuples = tabentry->changes_since_analyze;
+		float4		pcnt_unfrozen = 1;
+		float4		reltuples = classForm->reltuples;
+		int32		relpages = classForm->relpages;
+		int32		relallfrozen = classForm->relallfrozen;
+
+		vactuples = tabentry->dead_tuples;
+		instuples = tabentry->ins_since_vacuum;
+		anltuples = tabentry->mod_since_analyze;
 
 		/* If the table hasn't yet been vacuumed, take reltuples as zero */
 		if (reltuples < 0)
 			reltuples = 0;
 
+		/*
+		 * If we have data for relallfrozen, calculate the unfrozen percentage
+		 * of the table to modify insert scale factor. This helps us decide
+		 * whether or not to vacuum an insert-heavy table based on the number
+		 * of inserts to the more "active" part of the table.
+		 */
+		if (relpages > 0 && relallfrozen > 0)
+		{
+			/*
+			 * It could be the stats were updated manually and relallfrozen >
+			 * relpages. Clamp relallfrozen to relpages to avoid nonsensical
+			 * calculations.
+			 */
+			relallfrozen = Min(relallfrozen, relpages);
+			pcnt_unfrozen = 1 - ((float4) relallfrozen / relpages);
+		}
+
 		vacthresh = (float4) vac_base_thresh + vac_scale_factor * reltuples;
-		vacinsthresh = (float4) vac_ins_base_thresh + vac_ins_scale_factor * reltuples;
+		if (vac_max_thresh >= 0 && vacthresh > (float4) vac_max_thresh)
+			vacthresh = (float4) vac_max_thresh;
+
+		vacinsthresh = (float4) vac_ins_base_thresh +
+			vac_ins_scale_factor * reltuples * pcnt_unfrozen;
 		anlthresh = (float4) anl_base_thresh + anl_scale_factor * reltuples;
 
-		/*
-		 * Note that we don't need to take special consideration for stat
-		 * reset, because if that happens, the last vacuum and analyze counts
-		 * will be reset too.
-		 */
 		if (vac_ins_base_thresh >= 0)
 			elog(DEBUG3, "%s: vac: %.0f (threshold %.0f), ins: %.0f (threshold %.0f), anl: %.0f (threshold %.0f)",
 				 NameStr(classForm->relname),
@@ -3162,6 +3191,9 @@ relation_needs_vacanalyze(Oid relid,
 /*
  * autovacuum_do_vac_analyze
  *		Vacuum and/or analyze the specified table
+ *
+ * We expect the caller to have switched into a memory context that won't
+ * disappear at transaction commit.
  */
 static void
 autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
@@ -3169,16 +3201,27 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 	RangeVar   *rangevar;
 	VacuumRelation *rel;
 	List	   *rel_list;
+	MemoryContext vac_context;
+	MemoryContext old_context;
 
 	/* Let pgstat know what we're doing */
 	autovac_report_activity(tab);
 
+	/* Create a context that vacuum() can use as cross-transaction storage */
+	vac_context = AllocSetContextCreate(CurrentMemoryContext,
+										"Vacuum",
+										ALLOCSET_DEFAULT_SIZES);
+
 	/* Set up one VacuumRelation target, identified by OID, for vacuum() */
+	old_context = MemoryContextSwitchTo(vac_context);
 	rangevar = makeRangeVar(tab->at_nspname, tab->at_relname, -1);
 	rel = makeVacuumRelation(rangevar, tab->at_relid, NIL);
 	rel_list = list_make1(rel);
+	MemoryContextSwitchTo(old_context);
 
-	vacuum(rel_list, &tab->at_params, bstrategy, true);
+	vacuum(rel_list, tab->at_params, bstrategy, vac_context, true);
+
+	MemoryContextDelete(vac_context);
 }
 
 /*
@@ -3324,29 +3367,15 @@ AutoVacuumRequestWork(AutoVacuumWorkItemType type, Oid relationId,
 void
 autovac_init(void)
 {
-	if (autovacuum_start_daemon && !pgstat_track_counts)
+	if (!autovacuum_start_daemon)
+		return;
+	else if (!pgstat_track_counts)
 		ereport(WARNING,
 				(errmsg("autovacuum not started because of misconfiguration"),
 				 errhint("Enable the \"track_counts\" option.")));
+	else
+		check_av_worker_gucs();
 }
-
-/*
- * IsAutoVacuum functions
- *		Return whether this is either a launcher autovacuum process or a worker
- *		process.
- */
-bool
-IsAutoVacuumLauncherProcess(void)
-{
-	return am_autovacuum_launcher;
-}
-
-bool
-IsAutoVacuumWorkerProcess(void)
-{
-	return am_autovacuum_worker;
-}
-
 
 /*
  * AutoVacuumShmemSize
@@ -3362,7 +3391,7 @@ AutoVacuumShmemSize(void)
 	 */
 	size = sizeof(AutoVacuumShmemStruct);
 	size = MAXALIGN(size);
-	size = add_size(size, mul_size(autovacuum_max_workers,
+	size = add_size(size, mul_size(autovacuum_worker_slots,
 								   sizeof(WorkerInfoData)));
 	return size;
 }
@@ -3389,7 +3418,7 @@ AutoVacuumShmemInit(void)
 		Assert(!found);
 
 		AutoVacuumShmem->av_launcherpid = 0;
-		dlist_init(&AutoVacuumShmem->av_freeWorkers);
+		dclist_init(&AutoVacuumShmem->av_freeWorkers);
 		dlist_init(&AutoVacuumShmem->av_runningWorkers);
 		AutoVacuumShmem->av_startingWorker = NULL;
 		memset(AutoVacuumShmem->av_workItems, 0,
@@ -3399,10 +3428,74 @@ AutoVacuumShmemInit(void)
 							   MAXALIGN(sizeof(AutoVacuumShmemStruct)));
 
 		/* initialize the WorkerInfo free list */
-		for (i = 0; i < autovacuum_max_workers; i++)
-			dlist_push_head(&AutoVacuumShmem->av_freeWorkers,
-							&worker[i].wi_links);
+		for (i = 0; i < autovacuum_worker_slots; i++)
+		{
+			dclist_push_head(&AutoVacuumShmem->av_freeWorkers,
+							 &worker[i].wi_links);
+			pg_atomic_init_flag(&worker[i].wi_dobalance);
+		}
+
+		pg_atomic_init_u32(&AutoVacuumShmem->av_nworkersForBalance, 0);
+
 	}
 	else
 		Assert(found);
+}
+
+/*
+ * GUC check_hook for autovacuum_work_mem
+ */
+bool
+check_autovacuum_work_mem(int *newval, void **extra, GucSource source)
+{
+	/*
+	 * -1 indicates fallback.
+	 *
+	 * If we haven't yet changed the boot_val default of -1, just let it be.
+	 * Autovacuum will look to maintenance_work_mem instead.
+	 */
+	if (*newval == -1)
+		return true;
+
+	/*
+	 * We clamp manually-set values to at least 64kB.  Since
+	 * maintenance_work_mem is always set to at least this value, do the same
+	 * here.
+	 */
+	if (*newval < 64)
+		*newval = 64;
+
+	return true;
+}
+
+/*
+ * Returns whether there is a free autovacuum worker slot available.
+ */
+static bool
+av_worker_available(void)
+{
+	int			free_slots;
+	int			reserved_slots;
+
+	free_slots = dclist_count(&AutoVacuumShmem->av_freeWorkers);
+
+	reserved_slots = autovacuum_worker_slots - autovacuum_max_workers;
+	reserved_slots = Max(0, reserved_slots);
+
+	return free_slots > reserved_slots;
+}
+
+/*
+ * Emits a WARNING if autovacuum_worker_slots < autovacuum_max_workers.
+ */
+static void
+check_av_worker_gucs(void)
+{
+	if (autovacuum_worker_slots < autovacuum_max_workers)
+		ereport(WARNING,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("\"autovacuum_max_workers\" (%d) should be less than or equal to \"autovacuum_worker_slots\" (%d)",
+						autovacuum_max_workers, autovacuum_worker_slots),
+				 errdetail("The server will only start up to \"autovacuum_worker_slots\" (%d) autovacuum workers at a given time.",
+						   autovacuum_worker_slots)));
 }

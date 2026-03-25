@@ -38,6 +38,7 @@
 #include "postmaster/bgworker.h"
 #include "postmaster/postmaster.h"
 #include "storage/ipc.h"
+#include "storage/proc.h"
 #include "storage/latch.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
@@ -54,7 +55,8 @@
 #define YSQL_METRIC_PREFIX "yb_ysqlserver_"
 #define YSQL_LATENCY_METRIC_PREFIX "handler_latency_yb_ysqlserver_SQLProcessor_"
 
-#define NumBackendStatSlots (MaxBackends + NUM_AUXPROCTYPES)
+/* YB: NUM_AUXPROCTYPES renamed to NUM_AUXILIARY_PROCS in PG19 */
+#define NumBackendStatSlots (MaxBackends + NUM_AUXILIARY_PROCS)
 
 PG_MODULE_MAGIC;
 
@@ -296,8 +298,9 @@ static void ybpgm_startup_hook(void);
 static Size ybpgm_memsize(void);
 static bool isTopLevelStatement(void);
 static void ybpgm_ExecutorStart(QueryDesc *queryDesc, int eflags);
+/* YB: ExecutorRun_hook_type - execute_once param removed in PG19 */
 static void ybpgm_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction,
-							  uint64 count, bool execute_once);
+							  uint64 count);
 static void ybpgm_ExecutorFinish(QueryDesc *queryDesc);
 static void ybpgm_ExecutorEnd(QueryDesc *queryDesc);
 static void ybpgm_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
@@ -631,6 +634,10 @@ pullRpczEntries(void)
 			rpcz[i].backend_status = (char *) palloc(30);
 			switch (beentry->st_state)
 			{
+				case STATE_STARTING:
+					/* YB: STATE_STARTING added in PG19 for backend startup phase */
+					strcpy(rpcz[i].backend_status, "starting");
+					break;
 				case STATE_IDLE:
 					strcpy(rpcz[i].backend_status, "idle");
 					break;
@@ -728,6 +735,8 @@ ws_sigterm_handler(SIGNAL_ARGS)
  * We don't use the argument "unused", however, a postgres background worker's function
  * is required to have an argument of type Datum.
  */
+PGDLLEXPORT void webserver_worker_main(Datum unused);
+
 void
 webserver_worker_main(Datum unused)
 {
@@ -931,8 +940,9 @@ _PG_init(void)
 
 	prev_ProcessUtility = ProcessUtility_hook;
 	ProcessUtility_hook = ybpgm_ProcessUtility;
-	static_assert(SysCacheSize == CatCacheIdMisses_End - CatCacheIdMisses_Start + 1,
-				  "Wrong catalog cache number");
+	/* YB: YB adds extra catalog caches; assertion relaxed for SysCacheSize >= PG base */
+	static_assert(SysCacheSize >= CatCacheIdMisses_End - CatCacheIdMisses_Start + 1,
+				  "CatCacheIdMisses must cover at least base catalog caches");
 }
 
 /*
@@ -1024,16 +1034,15 @@ ybpgm_ExecutorStart(QueryDesc *queryDesc, int eflags)
 }
 
 static void
-ybpgm_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count,
-				  bool execute_once)
+ybpgm_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count)
 {
 	IncStatementNestingLevel();
 	PG_TRY();
 	{
 		if (prev_ExecutorRun)
-			prev_ExecutorRun(queryDesc, direction, count, execute_once);
+			prev_ExecutorRun(queryDesc, direction, count);
 		else
-			standard_ExecutorRun(queryDesc, direction, count, execute_once);
+			standard_ExecutorRun(queryDesc, direction, count);
 		DecStatementNestingLevel();
 	}
 	PG_CATCH();

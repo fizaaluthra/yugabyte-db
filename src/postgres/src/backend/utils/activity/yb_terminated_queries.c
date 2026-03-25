@@ -310,7 +310,7 @@ yb_pg_stat_get_queries(PG_FUNCTION_ARGS)
 			continue;
 	}
 
-	tuplestore_donestoring(tupstore);
+	/* tuplestore_donestoring removed in PG19 (was a no-op) */
 
 	return (Datum) 0;
 }

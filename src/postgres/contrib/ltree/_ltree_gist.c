@@ -7,12 +7,15 @@
  */
 #include "postgres.h"
 
+#include <math.h>
+
 #include "access/gist.h"
 #include "access/reloptions.h"
 #include "access/stratnum.h"
 #include "crc32.h"
 #include "ltree.h"
 #include "port/pg_bitutils.h"
+#include "utils/array.h"
 
 PG_FUNCTION_INFO_V1(_ltree_compress);
 PG_FUNCTION_INFO_V1(_ltree_same);
@@ -76,12 +79,12 @@ _ltree_compress(PG_FUNCTION_ARGS)
 			item = NEXTVAL(item);
 		}
 
-		retval = (GISTENTRY *) palloc(sizeof(GISTENTRY));
+		retval = palloc_object(GISTENTRY);
 		gistentryinit(*retval, PointerGetDatum(key),
 					  entry->rel, entry->page,
 					  entry->offset, false);
 	}
-	else if (!LTG_ISALLTRUE(entry->key))
+	else if (!LTG_ISALLTRUE(DatumGetPointer(entry->key)))
 	{
 		int32		i;
 		ltree_gist *key;
@@ -94,7 +97,7 @@ _ltree_compress(PG_FUNCTION_ARGS)
 		}
 
 		key = ltree_gist_alloc(true, sign, siglen, NULL, NULL);
-		retval = (GISTENTRY *) palloc(sizeof(GISTENTRY));
+		retval = palloc_object(GISTENTRY);
 		gistentryinit(*retval, PointerGetDatum(key),
 					  entry->rel, entry->page,
 					  entry->offset, false);
@@ -307,16 +310,16 @@ _ltree_picksplit(PG_FUNCTION_ARGS)
 
 	maxoff = OffsetNumberNext(maxoff);
 	/* sort before ... */
-	costvector = (SPLITCOST *) palloc(sizeof(SPLITCOST) * maxoff);
+	costvector = palloc_array(SPLITCOST, maxoff);
 	for (j = FirstOffsetNumber; j <= maxoff; j = OffsetNumberNext(j))
 	{
 		costvector[j - 1].pos = j;
 		_j = GETENTRY(entryvec, j);
 		size_alpha = hemdist(datum_l, _j, siglen);
 		size_beta = hemdist(datum_r, _j, siglen);
-		costvector[j - 1].cost = Abs(size_alpha - size_beta);
+		costvector[j - 1].cost = abs(size_alpha - size_beta);
 	}
-	qsort((void *) costvector, maxoff, sizeof(SPLITCOST), comparecost);
+	qsort(costvector, maxoff, sizeof(SPLITCOST), comparecost);
 
 	union_l = LTG_SIGN(datum_l);
 	union_r = LTG_SIGN(datum_r);
@@ -345,7 +348,7 @@ _ltree_picksplit(PG_FUNCTION_ARGS)
 			if (LTG_ISALLTRUE(datum_l) || LTG_ISALLTRUE(_j))
 			{
 				if (!LTG_ISALLTRUE(datum_l))
-					MemSet((void *) union_l, 0xff, siglen);
+					memset(union_l, 0xff, siglen);
 			}
 			else
 			{
@@ -361,7 +364,7 @@ _ltree_picksplit(PG_FUNCTION_ARGS)
 			if (LTG_ISALLTRUE(datum_r) || LTG_ISALLTRUE(_j))
 			{
 				if (!LTG_ISALLTRUE(datum_r))
-					MemSet((void *) union_r, 0xff, siglen);
+					memset(union_r, 0xff, siglen);
 			}
 			else
 			{
@@ -503,7 +506,7 @@ Datum
 _ltree_consistent(PG_FUNCTION_ARGS)
 {
 	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
-	void	   *query = (void *) PG_DETOAST_DATUM(PG_GETARG_DATUM(1));
+	void	   *query = PG_DETOAST_DATUM(PG_GETARG_DATUM(1));
 	StrategyNumber strategy = (StrategyNumber) PG_GETARG_UINT16(2);
 
 	/* Oid		subtype = PG_GETARG_OID(3); */

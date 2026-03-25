@@ -212,16 +212,16 @@ Datum
 yb_mem_usage_sql(PG_FUNCTION_ARGS)
 {
 	char		s[1024];
-	int64		usage = MemoryContextStatsUsage(TopMemoryContext, 100);
+	int64		usage = (int64) MemoryContextMemAllocated(TopMemoryContext, true);
 
-	sprintf(s, "SQL layer memory usage = %ld bytes", usage);
+	sprintf(s, "SQL layer memory usage = " INT64_FORMAT " bytes", usage);
 	PG_RETURN_TEXT_P(cstring_to_text(s));
 }
 
 Datum
 yb_mem_usage_sql_b(PG_FUNCTION_ARGS)
 {
-	int64		usage = MemoryContextStatsUsage(TopMemoryContext, 100);
+	int64		usage = (int64) MemoryContextMemAllocated(TopMemoryContext, true);
 
 	PG_RETURN_INT64(usage);
 }
@@ -229,7 +229,7 @@ yb_mem_usage_sql_b(PG_FUNCTION_ARGS)
 Datum
 yb_mem_usage_sql_kb(PG_FUNCTION_ARGS)
 {
-	int64		usage = MemoryContextStatsUsage(TopMemoryContext, 100) / 1000;
+	int64		usage = (int64) MemoryContextMemAllocated(TopMemoryContext, true) / 1000;
 
 	PG_RETURN_INT64(usage);
 }

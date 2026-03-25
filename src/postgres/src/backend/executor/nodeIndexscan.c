@@ -3,7 +3,7 @@
  * nodeIndexscan.c
  *	  Routines to support indexed scans of relations
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -33,7 +33,7 @@
 #include "access/relscan.h"
 #include "access/tableam.h"
 #include "catalog/pg_am.h"
-#include "executor/execdebug.h"
+#include "executor/executor.h"
 #include "executor/nodeIndexscan.h"
 #include "lib/pairingheap.h"
 #include "miscadmin.h"
@@ -41,7 +41,6 @@
 #include "utils/array.h"
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
-#include "utils/memutils.h"
 #include "utils/rel.h"
 
 /* YB includes */
@@ -76,7 +75,7 @@ static int	cmp_orderbyvals(const Datum *adist, const bool *anulls,
 static int	reorderqueue_cmp(const pairingheap_node *a,
 							 const pairingheap_node *b, void *arg);
 static void reorderqueue_push(IndexScanState *node, TupleTableSlot *slot,
-							  Datum *orderbyvals, bool *orderbynulls);
+							  const Datum *orderbyvals, const bool *orderbynulls);
 static HeapTuple reorderqueue_pop(IndexScanState *node);
 
 /* YB declarations */
@@ -104,15 +103,13 @@ IndexNext(IndexScanState *node)
 	 * extract necessary information from index scan node
 	 */
 	estate = node->ss.ps.state;
-	direction = estate->es_direction;
-	/* flip direction if this is an overall backward scan */
-	if (ScanDirectionIsBackward(((IndexScan *) node->ss.ps.plan)->indexorderdir))
-	{
-		if (ScanDirectionIsForward(direction))
-			direction = BackwardScanDirection;
-		else if (ScanDirectionIsBackward(direction))
-			direction = ForwardScanDirection;
-	}
+
+	/*
+	 * Determine which direction to scan the index in based on the plan's scan
+	 * direction and the current direction of execution.
+	 */
+	direction = ScanDirectionCombine(estate->es_direction,
+									 ((IndexScan *) node->ss.ps.plan)->indexorderdir);
 
 	/*
 	 * YB relation scans are optimized for the "Don't care about order"
@@ -123,6 +120,7 @@ IndexNext(IndexScanState *node)
 	{
 		direction = NoMovementScanDirection;
 	}
+
 	scandesc = node->iss_ScanDesc;
 	econtext = node->ss.ps.ps_ExprContext;
 	slot = node->ss.ss_ScanTupleSlot;
@@ -143,6 +141,7 @@ IndexNext(IndexScanState *node)
 		scandesc = index_beginscan(node->ss.ss_currentRelation,
 								   node->iss_RelationDesc,
 								   estate->es_snapshot,
+								   &node->iss_Instrument,
 								   node->iss_NumScanKeys,
 								   node->iss_NumOrderByKeys);
 
@@ -316,6 +315,7 @@ IndexNextWithReorder(IndexScanState *node)
 		scandesc = index_beginscan(node->ss.ss_currentRelation,
 								   node->iss_RelationDesc,
 								   estate->es_snapshot,
+								   &node->iss_Instrument,
 								   node->iss_NumScanKeys,
 								   node->iss_NumOrderByKeys);
 
@@ -569,7 +569,7 @@ reorderqueue_cmp(const pairingheap_node *a, const pairingheap_node *b,
  */
 static void
 reorderqueue_push(IndexScanState *node, TupleTableSlot *slot,
-				  Datum *orderbyvals, bool *orderbynulls)
+				  const Datum *orderbyvals, const bool *orderbynulls)
 {
 	IndexScanDesc scandesc = node->iss_ScanDesc;
 	EState	   *estate = node->ss.ps.state;
@@ -577,12 +577,10 @@ reorderqueue_push(IndexScanState *node, TupleTableSlot *slot,
 	ReorderTuple *rt;
 	int			i;
 
-	rt = (ReorderTuple *) palloc(sizeof(ReorderTuple));
+	rt = palloc_object(ReorderTuple);
 	rt->htup = ExecCopySlotHeapTuple(slot);
-	rt->orderbyvals =
-		(Datum *) palloc(sizeof(Datum) * scandesc->numberOfOrderBys);
-	rt->orderbynulls =
-		(bool *) palloc(sizeof(bool) * scandesc->numberOfOrderBys);
+	rt->orderbyvals = palloc_array(Datum, scandesc->numberOfOrderBys);
+	rt->orderbynulls = palloc_array(bool, scandesc->numberOfOrderBys);
 	for (i = 0; i < node->iss_NumOrderByKeys; i++)
 	{
 		if (!orderbynulls[i])
@@ -910,20 +908,25 @@ ExecEndIndexScan(IndexScanState *node)
 	indexScanDesc = node->iss_ScanDesc;
 
 	/*
-	 * Free the exprcontext(s) ... now dead code, see ExecFreeExprContext
+	 * When ending a parallel worker, copy the statistics gathered by the
+	 * worker back into shared memory so that it can be picked up by the main
+	 * process to report in EXPLAIN ANALYZE
 	 */
-#ifdef NOT_USED
-	ExecFreeExprContext(&node->ss.ps);
-	if (node->iss_RuntimeContext)
-		FreeExprContext(node->iss_RuntimeContext, true);
-#endif
+	if (node->iss_SharedInfo != NULL && IsParallelWorker())
+	{
+		IndexScanInstrumentation *winstrument;
 
-	/*
-	 * clear out tuple table slots
-	 */
-	if (node->ss.ps.ps_ResultTupleSlot)
-		ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
-	ExecClearTuple(node->ss.ss_ScanTupleSlot);
+		Assert(ParallelWorkerNumber <= node->iss_SharedInfo->num_workers);
+		winstrument = &node->iss_SharedInfo->winstrument[ParallelWorkerNumber];
+
+		/*
+		 * We have to accumulate the stats rather than performing a memcpy.
+		 * When a Gather/GatherMerge node finishes it will perform planner
+		 * shutdown on the workers.  On rescan it will spin up new workers
+		 * which will have a new IndexOnlyScanState and zeroed stats.
+		 */
+		winstrument->nsearches += node->iss_Instrument.nsearches;
+	}
 
 	/*
 	 * close the index relation (no-op if we didn't open it)
@@ -1497,7 +1500,7 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 		}
 		/* YB-modified condition */
 		else if (IsA(clause, RowCompareExpr) &&
-				 castNode(RowCompareExpr, clause)->rctype != ROWCOMPARE_EQ)
+				 castNode(RowCompareExpr, clause)->cmptype != COMPARE_EQ)
 		{
 			/* (indexkey, indexkey, ...) op (expression, expression, ...) */
 			RowCompareExpr *rc = (RowCompareExpr *) clause;
@@ -1559,14 +1562,13 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 					if (varattno < 1 || varattno > indnkeyatts)
 						elog(ERROR, "bogus index qualification");
 
-					if ((index->rd_rel->relam != BTREE_AM_OID && index->rd_rel->relam != LSM_AM_OID) ||
+					/*
+					 * We have to look up the operator's associated support
+					 * function
+					 */
+					if (!index->rd_indam->amcanorder ||
 						varattno < 1 || varattno > indnkeyatts)
 						elog(ERROR, "bogus RowCompare index qualification");
-
-					/*
-					 * We have to look up the operator's strategy number.  This
-					 * provides a cross-check that the operator does match the index.
-					 */
 					opfamily = index->rd_opfamily[varattno - 1];
 				}
 
@@ -1575,7 +1577,7 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 										   &op_lefttype,
 										   &op_righttype);
 
-				if (op_strategy != rc->rctype)
+				if (op_strategy != rc->cmptype)
 					elog(ERROR, "RowCompare index qualification contains wrong operator");
 
 				opfuncid = get_opfamily_proc(opfamily,
@@ -1652,18 +1654,19 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 			MemSet(this_scan_key, 0, sizeof(ScanKeyData));
 			this_scan_key->sk_flags = SK_ROW_HEADER;
 			this_scan_key->sk_attno = first_sub_key->sk_attno;
-			this_scan_key->sk_strategy = rc->rctype;
+			this_scan_key->sk_strategy = rc->cmptype;
 			/* sk_subtype, sk_collation, sk_func not used in a header */
 			this_scan_key->sk_argument = PointerGetDatum(first_sub_key);
 		}
 		else if (IsA(clause, ScalarArrayOpExpr))
 		{
-			Assert(!IsYugaByteEnabled() ||
-				   IsA(yb_get_saop_left_op(clause), Var));
 			/* indexkey op ANY (array-expression) */
 			ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) clause;
 			int			flags = 0;
 			Datum		scanvalue;
+
+			Assert(!IsYugaByteEnabled() ||
+				   IsA(yb_get_saop_left_op(clause), Var));
 
 			Assert(!isorderby);
 
@@ -1839,7 +1842,7 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 										   &op_lefttype,
 										   &op_righttype);
 
-				if (op_strategy != rcexpr->rctype)
+				if (op_strategy != rcexpr->cmptype)
 					elog(ERROR, "RowCompare index qualification contains wrong operator");
 
 				opfuncid = get_opfamily_proc(opfamily,
@@ -1956,8 +1959,8 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 			 * YB: we only support = operator for now, and it shouldn't be
 			 * possible to get here with something else.
 			 */
-			Assert(rcexpr->rctype == BTEqualStrategyNumber);
-			this_scan_key->sk_strategy = rcexpr->rctype;
+			Assert(rcexpr->cmptype == COMPARE_EQ);
+			this_scan_key->sk_strategy = rcexpr->cmptype;
 			/* sk_subtype, sk_collation, sk_func not used in a header */
 			this_scan_key->sk_argument = PointerGetDatum(first_sub_key);
 			/*
@@ -2090,9 +2093,21 @@ ExecIndexScanEstimate(IndexScanState *node,
 					  ParallelContext *pcxt)
 {
 	EState	   *estate = node->ss.ps.state;
+	bool		instrument = node->ss.ps.instrument != NULL;
+	bool		parallel_aware = node->ss.ps.plan->parallel_aware;
+
+	if (!instrument && !parallel_aware)
+	{
+		/* No DSM required by the scan */
+		return;
+	}
 
 	node->iss_PscanLen = index_parallelscan_estimate(node->iss_RelationDesc,
-													 estate->es_snapshot);
+													 node->iss_NumScanKeys,
+													 node->iss_NumOrderByKeys,
+													 estate->es_snapshot,
+													 instrument, parallel_aware,
+													 pcxt->nworkers);
 	shm_toc_estimate_chunk(&pcxt->estimator, node->iss_PscanLen);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 }
@@ -2109,16 +2124,33 @@ ExecIndexScanInitializeDSM(IndexScanState *node,
 {
 	EState	   *estate = node->ss.ps.state;
 	ParallelIndexScanDesc piscan;
+	bool		instrument = node->ss.ps.instrument != NULL;
+	bool		parallel_aware = node->ss.ps.plan->parallel_aware;
+
+	if (!instrument && !parallel_aware)
+	{
+		/* No DSM required by the scan */
+		return;
+	}
 
 	piscan = shm_toc_allocate(pcxt->toc, node->iss_PscanLen);
 	index_parallelscan_initialize(node->ss.ss_currentRelation,
 								  node->iss_RelationDesc,
 								  estate->es_snapshot,
-								  piscan);
+								  instrument, parallel_aware, pcxt->nworkers,
+								  &node->iss_SharedInfo, piscan);
 	shm_toc_insert(pcxt->toc, node->ss.ps.plan->plan_node_id, piscan);
+
+	if (!parallel_aware)
+	{
+		/* Only here to initialize SharedInfo in DSM */
+		return;
+	}
+
 	node->iss_ScanDesc =
 		index_beginscan_parallel(node->ss.ss_currentRelation,
 								 node->iss_RelationDesc,
+								 &node->iss_Instrument,
 								 node->iss_NumScanKeys,
 								 node->iss_NumOrderByKeys,
 								 piscan);
@@ -2147,6 +2179,7 @@ void
 ExecIndexScanReInitializeDSM(IndexScanState *node,
 							 ParallelContext *pcxt)
 {
+	Assert(node->ss.ps.plan->parallel_aware);
 	index_parallelrescan(node->iss_ScanDesc);
 }
 
@@ -2161,11 +2194,31 @@ ExecIndexScanInitializeWorker(IndexScanState *node,
 							  ParallelWorkerContext *pwcxt)
 {
 	ParallelIndexScanDesc piscan;
+	bool		instrument = node->ss.ps.instrument != NULL;
+	bool		parallel_aware = node->ss.ps.plan->parallel_aware;
+
+	if (!instrument && !parallel_aware)
+	{
+		/* No DSM required by the scan */
+		return;
+	}
 
 	piscan = shm_toc_lookup(pwcxt->toc, node->ss.ps.plan->plan_node_id, false);
+
+	if (instrument)
+		node->iss_SharedInfo = (SharedIndexScanInstrumentation *)
+			OffsetToPointer(piscan, piscan->ps_offset_ins);
+
+	if (!parallel_aware)
+	{
+		/* Only here to set up worker node's SharedInfo */
+		return;
+	}
+
 	node->iss_ScanDesc =
 		index_beginscan_parallel(node->ss.ss_currentRelation,
 								 node->iss_RelationDesc,
+								 &node->iss_Instrument,
 								 node->iss_NumScanKeys,
 								 node->iss_NumOrderByKeys,
 								 piscan);
@@ -2182,6 +2235,28 @@ ExecIndexScanInitializeWorker(IndexScanState *node,
 		index_rescan(node->iss_ScanDesc,
 					 node->iss_ScanKeys, node->iss_NumScanKeys,
 					 node->iss_OrderByKeys, node->iss_NumOrderByKeys);
+}
+
+/* ----------------------------------------------------------------
+ * ExecIndexScanRetrieveInstrumentation
+ *
+ *		Transfer index scan statistics from DSM to private memory.
+ * ----------------------------------------------------------------
+ */
+void
+ExecIndexScanRetrieveInstrumentation(IndexScanState *node)
+{
+	SharedIndexScanInstrumentation *SharedInfo = node->iss_SharedInfo;
+	size_t		size;
+
+	if (SharedInfo == NULL)
+		return;
+
+	/* Create a copy of SharedInfo in backend-local memory */
+	size = offsetof(SharedIndexScanInstrumentation, winstrument) +
+		SharedInfo->num_workers * sizeof(IndexScanInstrumentation);
+	node->iss_SharedInfo = palloc(size);
+	memcpy(node->iss_SharedInfo, SharedInfo, size);
 }
 
 static void

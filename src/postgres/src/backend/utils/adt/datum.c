@@ -3,7 +3,7 @@
  * datum.c
  *	  POSTGRES Datum (abstract data type) manipulation routines.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -43,12 +43,11 @@
 #include "postgres.h"
 
 #include "access/detoast.h"
-#include "catalog/pg_type_d.h"
 #include "common/hashfn.h"
 #include "fmgr.h"
-#include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/expandeddatum.h"
+#include "utils/fmgrprotos.h"
 
 
 /*-------------------------------------------------------------------------
@@ -85,7 +84,7 @@ datumGetSize(Datum value, bool typByVal, int typLen)
 			/* It is a varlena datatype */
 			struct varlena *s = (struct varlena *) DatumGetPointer(value);
 
-			if (!PointerIsValid(s))
+			if (!s)
 				ereport(ERROR,
 						(errcode(ERRCODE_DATA_EXCEPTION),
 						 errmsg("invalid Datum pointer")));
@@ -97,7 +96,7 @@ datumGetSize(Datum value, bool typByVal, int typLen)
 			/* It is a cstring datatype */
 			char	   *s = (char *) DatumGetPointer(value);
 
-			if (!PointerIsValid(s))
+			if (!s)
 				ereport(ERROR,
 						(errcode(ERRCODE_DATA_EXCEPTION),
 						 errmsg("invalid Datum pointer")));
@@ -150,7 +149,7 @@ datumCopy(Datum value, bool typByVal, int typLen)
 
 			resultsize = EOH_get_flat_size(eoh);
 			resultptr = (char *) palloc(resultsize);
-			EOH_flatten_into(eoh, (void *) resultptr, resultsize);
+			EOH_flatten_into(eoh, resultptr, resultsize);
 			res = PointerGetDatum(resultptr);
 		}
 		else
@@ -300,9 +299,9 @@ datum_image_eq(Datum value1, Datum value2, bool typByVal, int typLen)
 							 len1 - VARHDRSZ) == 0);
 
 			/* Only free memory if it's a copy made here. */
-			if ((Pointer) arg1val != (Pointer) value1)
+			if (arg1val != DatumGetPointer(value1))
 				pfree(arg1val);
-			if ((Pointer) arg2val != (Pointer) value2)
+			if (arg2val != DatumGetPointer(value2))
 				pfree(arg2val);
 		}
 	}
@@ -356,7 +355,7 @@ datum_image_hash(Datum value, bool typByVal, int typLen)
 		result = hash_bytes((unsigned char *) VARDATA_ANY(val), len - VARHDRSZ);
 
 		/* Only free memory if it's a copy made here. */
-		if ((Pointer) val != (Pointer) value)
+		if (val != DatumGetPointer(value))
 			pfree(val);
 	}
 	else if (typLen == -2)
@@ -386,17 +385,20 @@ datum_image_hash(Datum value, bool typByVal, int typLen)
  * datum_image_eq() in all cases can use this as their "equalimage" support
  * function.
  *
- * Earlier minor releases erroneously associated this function with
- * interval_ops.  Detect that case to rescind deduplication support, without
- * requiring initdb.
+ * Currently, we unconditionally assume that any B-Tree operator class that
+ * registers btequalimage as its support function 4 must be able to safely use
+ * optimizations like deduplication (i.e. we return true unconditionally).  If
+ * it ever proved necessary to rescind support for an operator class, we could
+ * do that in a targeted fashion by doing something with the opcintype
+ * argument.
  *-------------------------------------------------------------------------
  */
 Datum
 btequalimage(PG_FUNCTION_ARGS)
 {
-	Oid			opcintype = PG_GETARG_OID(0);
+	/* Oid		opcintype = PG_GETARG_OID(0); */
 
-	PG_RETURN_BOOL(opcintype != INTERVALOID);
+	PG_RETURN_BOOL(true);
 }
 
 /*-------------------------------------------------------------------------
@@ -493,7 +495,7 @@ datumSerialize(Datum value, bool isnull, bool typByVal, int typLen,
 			 * so we can't store directly to *start_address.
 			 */
 			tmp = (char *) palloc(header);
-			EOH_flatten_into(eoh, (void *) tmp, header);
+			EOH_flatten_into(eoh, tmp, header);
 			memcpy(*start_address, tmp, header);
 			*start_address += header;
 

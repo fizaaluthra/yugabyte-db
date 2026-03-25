@@ -66,8 +66,15 @@ YbInitBitMatrix(YbBitMatrix *matrix, int nrows, int ncols)
 	matrix->ncols = ncols;
 	const int	max_idx = matrix->nrows * matrix->ncols;
 
+	/*
+	 * Allocate a bitmapset large enough to hold max_idx bits (indices 0 to
+	 * max_idx-1).  We keep a sentinel bit set at position max_idx so that the
+	 * bitmapset is never empty — PG19's bms_del_member frees and returns NULL
+	 * for empty sets, which would leave matrix->data NULL and break later
+	 * check_matrix_invariants calls.
+	 */
 	if (max_idx)
-		matrix->data = bms_del_member(bms_add_member(NULL, max_idx), max_idx);
+		matrix->data = bms_add_member(NULL, max_idx);
 }
 
 void

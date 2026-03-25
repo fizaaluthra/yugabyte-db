@@ -2,7 +2,7 @@
  * gistfuncs.c
  *		Functions to investigate the content of GiST indexes
  *
- * Copyright (c) 2014-2022, PostgreSQL Global Development Group
+ * Copyright (c) 2014-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		contrib/pageinspect/gistfuncs.c
@@ -10,10 +10,9 @@
 #include "postgres.h"
 
 #include "access/gist.h"
-#include "access/gist_private.h"
 #include "access/htup.h"
+#include "access/htup_details.h"
 #include "access/relation.h"
-#include "catalog/namespace.h"
 #include "catalog/pg_am_d.h"
 #include "funcapi.h"
 #include "miscadmin.h"
@@ -21,19 +20,16 @@
 #include "storage/itemptr.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
-#include "utils/pg_lsn.h"
 #include "utils/lsyscache.h"
+#include "utils/pg_lsn.h"
 #include "utils/rel.h"
 #include "utils/ruleutils.h"
-#include "utils/varlena.h"
 
 PG_FUNCTION_INFO_V1(gist_page_opaque_info);
 PG_FUNCTION_INFO_V1(gist_page_items);
 PG_FUNCTION_INFO_V1(gist_page_items_bytea);
 
 #define IS_GIST(r) ((r)->rd_rel->relam == GIST_AM_OID)
-
-#define ItemPointerGetDatum(X)	 PointerGetDatum(X)
 
 
 static Page verify_gist_page(bytea *raw_page);
@@ -123,9 +119,7 @@ gist_page_opaque_info(PG_FUNCTION_ARGS)
 	values[0] = LSNGetDatum(PageGetLSN(page));
 	values[1] = LSNGetDatum(GistPageGetNSN(page));
 	values[2] = Int64GetDatum(GistPageGetOpaque(page)->rightlink);
-	values[3] = PointerGetDatum(construct_array(flags, nflags,
-												TEXTOID,
-												-1, false, TYPALIGN_INT));
+	values[3] = PointerGetDatum(construct_array_builtin(flags, nflags, TEXTOID));
 
 	/* Build and return the result tuple. */
 	resultTuple = heap_form_tuple(tupdesc, values, nulls);
@@ -181,7 +175,7 @@ gist_page_items_bytea(PG_FUNCTION_ARGS)
 
 		memset(nulls, 0, sizeof(nulls));
 
-		values[0] = DatumGetInt16(offset);
+		values[0] = Int16GetDatum(offset);
 		values[1] = ItemPointerGetDatum(&itup->t_tid);
 		values[2] = Int32GetDatum((int) IndexTupleSize(itup));
 
@@ -249,8 +243,8 @@ gist_page_items(PG_FUNCTION_ARGS)
 	}
 	else
 	{
-		tupdesc = CreateTupleDescCopy(RelationGetDescr(indexRel));
-		tupdesc->natts = IndexRelationGetNumberOfKeyAttributes(indexRel);
+		tupdesc = CreateTupleDescTruncatedCopy(RelationGetDescr(indexRel),
+											   IndexRelationGetNumberOfKeyAttributes(indexRel));
 		printflags |= RULE_INDEXDEF_KEYS_ONLY;
 	}
 
@@ -288,7 +282,7 @@ gist_page_items(PG_FUNCTION_ARGS)
 
 		memset(nulls, 0, sizeof(nulls));
 
-		values[0] = DatumGetInt16(offset);
+		values[0] = Int16GetDatum(offset);
 		values[1] = ItemPointerGetDatum(&itup->t_tid);
 		values[2] = Int32GetDatum((int) IndexTupleSize(itup));
 		values[3] = BoolGetDatum(ItemIdIsDead(id));
@@ -313,7 +307,7 @@ gist_page_items(PG_FUNCTION_ARGS)
 					bool		typisvarlena;
 					Oid			typoid;
 
-					typoid = tupdesc->attrs[i].atttypid;
+					typoid = TupleDescAttr(tupdesc, i)->atttypid;
 					getTypeOutputInfo(typoid, &foutoid, &typisvarlena);
 					value = OidOutputFunctionCall(foutoid, itup_values[i]);
 				}
@@ -367,7 +361,7 @@ gist_page_items(PG_FUNCTION_ARGS)
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 	}
 
-	relation_close(indexRel, AccessShareLock);
+	index_close(indexRel, AccessShareLock);
 
 	return (Datum) 0;
 }

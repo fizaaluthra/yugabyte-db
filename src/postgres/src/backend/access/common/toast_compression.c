@@ -3,7 +3,7 @@
  * toast_compression.c
  *	  Functions for toast compression.
  *
- * Copyright (c) 2021-2022, PostgreSQL Global Development Group
+ * Copyright (c) 2021-2026, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -20,17 +20,16 @@
 #include "access/detoast.h"
 #include "access/toast_compression.h"
 #include "common/pg_lzcompress.h"
-#include "fmgr.h"
-#include "utils/builtins.h"
+#include "varatt.h"
 
 /* GUC */
 int			default_toast_compression = TOAST_LZ4_COMPRESSION;
 
-#define NO_LZ4_SUPPORT() \
+#define NO_COMPRESSION_SUPPORT(method) \
 	ereport(ERROR, \
 			(errcode(ERRCODE_FEATURE_NOT_SUPPORTED), \
-			 errmsg("compression method lz4 not supported"), \
-			 errdetail("This functionality requires the server to be built with lz4 support.")))
+			 errmsg("compression method %s not supported", method), \
+			 errdetail("This functionality requires the server to be built with %s support.", method)))
 
 /*
  * Compress a varlena using PGLZ.
@@ -44,7 +43,7 @@ pglz_compress_datum(const struct varlena *value)
 				len;
 	struct varlena *tmp = NULL;
 
-	valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
+	valsize = VARSIZE_ANY_EXHDR(value);
 
 	/*
 	 * No point in wasting a palloc cycle if value size is outside the allowed
@@ -140,7 +139,7 @@ struct varlena *
 lz4_compress_datum(const struct varlena *value)
 {
 #ifndef USE_LZ4
-	NO_LZ4_SUPPORT();
+	NO_COMPRESSION_SUPPORT("lz4");
 	return NULL;				/* keep compiler quiet */
 #else
 	int32		valsize;
@@ -183,7 +182,7 @@ struct varlena *
 lz4_decompress_datum(const struct varlena *value)
 {
 #ifndef USE_LZ4
-	NO_LZ4_SUPPORT();
+	NO_COMPRESSION_SUPPORT("lz4");
 	return NULL;				/* keep compiler quiet */
 #else
 	int32		rawsize;
@@ -216,7 +215,7 @@ struct varlena *
 lz4_decompress_datum_slice(const struct varlena *value, int32 slicelength)
 {
 #ifndef USE_LZ4
-	NO_LZ4_SUPPORT();
+	NO_COMPRESSION_SUPPORT("lz4");
 	return NULL;				/* keep compiler quiet */
 #else
 	int32		rawsize;
@@ -290,7 +289,7 @@ CompressionNameToMethod(const char *compression)
 	else if (strcmp(compression, "lz4") == 0)
 	{
 #ifndef USE_LZ4
-		NO_LZ4_SUPPORT();
+		NO_COMPRESSION_SUPPORT("lz4");
 #endif
 		return TOAST_LZ4_COMPRESSION;
 	}

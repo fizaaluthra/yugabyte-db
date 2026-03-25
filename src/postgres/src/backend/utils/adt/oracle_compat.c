@@ -2,7 +2,7 @@
  * oracle_compat.c
  *	Oracle compatible functions.
  *
- * Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
  *	Author: Edmund Mergl <E.Mergl@bawue.de>
  *	Multibyte enhancement: Tatsuo Ishii <ishii@postgresql.org>
@@ -21,6 +21,7 @@
 #include "utils/builtins.h"
 #include "utils/formatting.h"
 #include "utils/memutils.h"
+#include "varatt.h"
 
 
 static text *dotrim(const char *string, int stringlen,
@@ -119,6 +120,22 @@ initcap(PG_FUNCTION_ARGS)
 	out_string = str_initcap(VARDATA_ANY(in_string),
 							 VARSIZE_ANY_EXHDR(in_string),
 							 PG_GET_COLLATION());
+	result = cstring_to_text(out_string);
+	pfree(out_string);
+
+	PG_RETURN_TEXT_P(result);
+}
+
+Datum
+casefold(PG_FUNCTION_ARGS)
+{
+	text	   *in_string = PG_GETARG_TEXT_PP(0);
+	char	   *out_string;
+	text	   *result;
+
+	out_string = str_casefold(VARDATA_ANY(in_string),
+							  VARSIZE_ANY_EXHDR(in_string),
+							  PG_GET_COLLATION());
 	result = cstring_to_text(out_string);
 	pfree(out_string);
 

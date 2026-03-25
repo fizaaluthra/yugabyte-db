@@ -3,7 +3,7 @@
  * blscan.c
  *		Bloom index scan functions.
  *
- * Copyright (c) 2016-2022, PostgreSQL Global Development Group
+ * Copyright (c) 2016-2026, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  contrib/bloom/blscan.c
@@ -17,9 +17,6 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/bufmgr.h"
-#include "storage/lmgr.h"
-#include "utils/memutils.h"
-#include "utils/rel.h"
 
 /*
  * Begin scan of bloom index.
@@ -32,7 +29,7 @@ blbeginscan(Relation r, int nkeys, int norderbys)
 
 	scan = RelationGetIndexScan(r, nkeys, norderbys);
 
-	so = (BloomScanOpaque) palloc(sizeof(BloomScanOpaqueData));
+	so = (BloomScanOpaque) palloc_object(BloomScanOpaqueData);
 	initBloomState(&so->state, scan->indexRelation);
 	so->sign = NULL;
 
@@ -55,10 +52,7 @@ blrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 	so->sign = NULL;
 
 	if (scankey && scan->numberOfKeys > 0)
-	{
-		memmove(scan->keyData, scankey,
-				scan->numberOfKeys * sizeof(ScanKeyData));
-	}
+		memcpy(scan->keyData, scankey, scan->numberOfKeys * sizeof(ScanKeyData));
 }
 
 /*
@@ -92,7 +86,7 @@ blgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 		/* New search: have to calculate search signature */
 		ScanKey		skey = scan->keyData;
 
-		so->sign = palloc0(sizeof(BloomSignatureWord) * so->state.opts.bloomLength);
+		so->sign = palloc0_array(BloomSignatureWord, so->state.opts.bloomLength);
 
 		for (i = 0; i < scan->numberOfKeys; i++)
 		{
@@ -122,6 +116,8 @@ blgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	bas = GetAccessStrategy(BAS_BULKREAD);
 	npages = RelationGetNumberOfBlocks(scan->indexRelation);
 	pgstat_count_index_scan(scan->indexRelation);
+	if (scan->instrument)
+		scan->instrument->nsearches++;
 
 	for (blkno = BLOOM_HEAD_BLKNO; blkno < npages; blkno++)
 	{
@@ -133,7 +129,6 @@ blgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
-		TestForOldSnapshot(scan->xs_snapshot, scan->indexRelation, page);
 
 		if (!PageIsNew(page) && !BloomPageIsDeleted(page))
 		{

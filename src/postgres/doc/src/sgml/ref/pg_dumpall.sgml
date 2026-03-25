@@ -66,6 +66,16 @@ PostgreSQL documentation
   linkend="libpq-pgpass"/> for more information.
   </para>
 
+  <warning>
+   <para>
+    Restoring a dump causes the destination to execute arbitrary code of the
+    source superusers' choice.  Partial dumps and partial restores do not limit
+    that.  If the source superusers are not trusted, the dumped SQL statements
+    must be inspected before restoring.  Note that the client running the dump
+    and restore need not trust the source or destination superusers.
+   </para>
+  </warning>
+
  </refsect1>
 
  <refsect1>
@@ -235,16 +245,6 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
-      <term><option>--statistics-only</option></term>
-      <listitem>
-       <para>
-        Dump only the statistics, not the schema (data definitions) or data.
-        Statistics for tables, materialized views, and indexes are dumped.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry>
       <term><option>--binary-upgrade</option></term>
       <listitem>
        <para>
@@ -314,7 +314,7 @@ PostgreSQL documentation
         <replaceable class="parameter">pattern</replaceable> parameter is
         interpreted as a pattern according to the same rules used by
         <application>psql</application>'s <literal>\d</literal>
-        commands (see <xref linkend="app-psql-patterns"/> below),
+        commands (see <xref linkend="app-psql-patterns"/>),
         so multiple databases can also be excluded by writing wildcard
         characters in the pattern.  When using wildcards, be careful to
         quote the pattern if needed to prevent shell wildcard expansion.
@@ -330,6 +330,37 @@ PostgreSQL documentation
         floating-point data, instead of the maximum available precision.
         Routine dumps made for backup purposes should not use this option.
        </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--filter=<replaceable class="parameter">filename</replaceable></option></term>
+      <listitem>
+       <para>
+        Specify a filename from which to read patterns for databases excluded
+        from the dump. The patterns are interpreted according to the same rules
+        as <option>--exclude-database</option>.
+        To read from <literal>STDIN</literal>, use <filename>-</filename> as the
+        filename.  The <option>--filter</option> option can be specified in
+        conjunction with <option>--exclude-database</option> for excluding
+        databases, and can also be specified more than once for multiple filter
+        files.
+       </para>
+
+       <para>
+        The file lists one database pattern per row, with the following format:
+<synopsis>
+exclude database <replaceable class="parameter">PATTERN</replaceable>
+</synopsis>
+       </para>
+
+       <para>
+        Lines starting with <literal>#</literal> are considered comments and
+        ignored. Comments can be placed after an object pattern row as well.
+        Blank lines are also ignored. See <xref linkend="app-psql-patterns"/>
+        for how to perform quoting in patterns.
+       </para>
+
       </listitem>
      </varlistentry>
 
@@ -396,7 +427,7 @@ PostgreSQL documentation
       <term><option>--no-comments</option></term>
       <listitem>
        <para>
-        Do not dump comments.
+        Do not dump <command>COMMENT</command> commands.
        </para>
       </listitem>
      </varlistentry>
@@ -406,6 +437,15 @@ PostgreSQL documentation
       <listitem>
        <para>
         Do not dump data.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--no-policies</option></term>
+      <listitem>
+       <para>
+        Do not dump row security policies.
        </para>
       </listitem>
      </varlistentry>
@@ -457,7 +497,7 @@ PostgreSQL documentation
       <term><option>--no-statistics</option></term>
       <listitem>
        <para>
-        Do not dump statistics.
+        Do not dump statistics. This is the default.
        </para>
       </listitem>
      </varlistentry>
@@ -521,33 +561,6 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
-      <term><option>--with-data</option></term>
-      <listitem>
-       <para>
-        Dump data. This is the default.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry>
-      <term><option>--with-schema</option></term>
-      <listitem>
-       <para>
-        Dump schema (data definitions). This is the default.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry>
-      <term><option>--with-statistics</option></term>
-      <listitem>
-       <para>
-        Dump statistics. This is the default.
-       </para>
-      </listitem>
-     </varlistentry>
-
-     <varlistentry>
       <term><option>--no-unlogged-table-data</option></term>
       <listitem>
        <para>
@@ -589,6 +602,26 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--restrict-key=<replaceable class="parameter">restrict_key</replaceable></option></term>
+      <listitem>
+       <para>
+        Use the provided string as the <application>psql</application>
+        <command>\restrict</command> key in the dump output.  If no restrict
+        key is specified, <application>pg_dumpall</application> will generate a
+        random one as needed.  Keys may contain only alphanumeric characters.
+       </para>
+       <para>
+        This option is primarily intended for testing purposes and other
+        scenarios that require repeatable output (e.g., comparing dump files).
+        It is not recommended for general use, as a malicious server with
+        advance knowledge of the key may be able to inject arbitrary code that
+        will be executed on the machine that runs
+        <application>psql</application> with the dump output.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--rows-per-insert=<replaceable class="parameter">nrows</replaceable></option></term>
       <listitem>
        <para>
@@ -598,6 +631,37 @@ PostgreSQL documentation
         number greater than zero.  Any error during restoring will cause only
         rows that are part of the problematic <command>INSERT</command> to be
         lost, rather than the entire table contents.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--statistics</option></term>
+      <listitem>
+       <para>
+        Dump optimizer statistics.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--statistics-only</option></term>
+      <listitem>
+       <para>
+        Dump only the statistics, not the schema (data definitions) or data.
+        Optimizer statistics for tables, materialized views, foreign tables,
+        and indexes are dumped.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><option>--sequence-data</option></term>
+      <listitem>
+       <para>
+        Include sequence data in the dump.  This is the default behavior except
+        when <option>--no-data</option>, <option>--schema-only</option>, or
+        <option>--statistics-only</option> is specified.
        </para>
       </listitem>
      </varlistentry>
@@ -826,10 +890,15 @@ PostgreSQL documentation
   </para>
 
   <para>
-   Once restored, it is wise to run <command>ANALYZE</command> on each
-   database so the optimizer has useful statistics. You
-   can also run <command>vacuumdb -a -z</command> to analyze all
-   databases.
+   When <option>--statistics</option> is specified,
+   <command>pg_dumpall</command> will include most optimizer statistics in the
+   resulting dump file. This does not include all statistics, such as
+   those created explicitly with <xref linkend="sql-createstatistics"/>,
+   custom statistics added by an extension, or statistics collected by the
+   cumulative statistics system.  Therefore, it may still be useful to
+   run <command>ANALYZE</command> on each database after restoring from a dump
+   file to ensure optimal performance.  You can also run <command>vacuumdb -a
+   -z</command> to analyze all databases.
   </para>
 
   <para>

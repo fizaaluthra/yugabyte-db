@@ -1433,6 +1433,12 @@ YBCAbortTransaction()
 	if (!IsYugaByteEnabled() || !YBTransactionsEnabled())
 		return;
 
+	elog(DEBUG1, "YB_DDL_TRACE YBCAbortTransaction: use_regular_txn_block=%d, "
+		 "nesting_level=%d, IsDdlMode=%d",
+		 ddl_transaction_state.use_regular_txn_block,
+		 ddl_transaction_state.nesting_level,
+		 YBCPgIsDdlMode());
+
 	if (ddl_transaction_state.use_regular_txn_block)
 		YBResetDdlState();
 
@@ -1444,6 +1450,11 @@ YBCAbortTransaction()
 	 * set in pggate. Clean it up in that case.
 	 */
 	YbcStatus	status = YBCPgClearSeparateDdlTxnMode();
+
+	elog(DEBUG1, "YB_DDL_TRACE YBCAbortTransaction: after ClearSeparateDdlTxnMode, "
+		 "IsDdlMode=%d, status=%s",
+		 YBCPgIsDdlMode(),
+		 status ? YBCMessageAsCString(status) : "OK");
 
 	/*
 	 * Aborting a transaction is likely to fail only when there are issues
@@ -2418,7 +2429,7 @@ YBResetEnableSpecialDDLMode()
 static YbcStatus
 YbMemCtxReset(MemoryContext context)
 {
-	AssertArg(MemoryContextIsValid(context));
+	Assert(MemoryContextIsValid(context));
 	for (MemoryContext child = context->firstchild;
 		 child != NULL;
 		 child = child->nextchild)
@@ -2448,6 +2459,11 @@ YBClearDdlTransactionState()
 static void
 YBResetDdlState()
 {
+	elog(DEBUG1, "YB_DDL_TRACE YBResetDdlState: use_regular_txn_block=%d, "
+		 "nesting_level=%d",
+		 ddl_transaction_state.use_regular_txn_block,
+		 ddl_transaction_state.nesting_level);
+
 	YbcStatus	status = NULL;
 
 	if (ddl_transaction_state.mem_context)
@@ -2487,7 +2503,13 @@ YBResetDdlState()
 	 * cleared up as part of the abort of the regular transaction.
 	 */
 	if (!use_regular_txn_block)
+	{
+		elog(DEBUG1, "YB_DDL_TRACE YBResetDdlState: calling ClearSeparateDdlTxnMode");
 		HandleYBStatus(YBCPgClearSeparateDdlTxnMode());
+	}
+	else
+		elog(DEBUG1, "YB_DDL_TRACE YBResetDdlState: skipping ClearSeparateDdlTxnMode "
+			 "(regular txn block)");
 	HandleYBStatus(status);
 }
 
@@ -3163,11 +3185,9 @@ YBCommitTransactionContainingDDL()
 			}
 			else
 				Assert(nmsgs == 0);
-			YBC_LOG_INFO("DEBUG: pg null=%d, nmsgs=%d", !currentInvalMessages, nmsgs);
 		}
 		else if (ddl_transaction_state.num_committed_pg_txns > 0)
-			YBC_LOG_INFO("DEBUG: num_committed_pg_txns: %d",
-						 ddl_transaction_state.num_committed_pg_txns);
+			;
 
 		/* Clear yb_sender_pid for unit test to have a stable result. */
 		if (yb_test_inval_message_portability && currentInvalMessages)
@@ -4448,12 +4468,17 @@ void
 YBResetOperationsBuffering()
 {
 	buffering_nesting_level = 0;
-	YBCPgResetOperationsBuffering();
+	/* YB: Skip when YB is not enabled (e.g., standalone initdb) */
+	if (IsYugaByteEnabled())
+		YBCPgResetOperationsBuffering();
 }
 
 void
 YBFlushBufferedOperations(YbcFlushDebugContext debug_context)
 {
+	/* YB: Skip flushing when YB is not enabled (e.g., standalone initdb) */
+	if (!IsYugaByteEnabled())
+		return;
 	HandleYBStatus(YBCPgFlushBufferedOperations(&debug_context));
 }
 
@@ -5093,7 +5118,6 @@ yb_database_clones(PG_FUNCTION_ARGS)
 #undef YB_DATABASE_CLONES_COLS
 
 	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -5294,7 +5318,7 @@ getSplitPointsInfo(Oid relid, YbcPgTableDesc yb_tabledesc,
 	bool		is_table = rel->rd_rel->relkind == RELKIND_RELATION ||
 		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE;
 	Relation	index_rel = (is_table ?
-							 relation_open(RelationGetPrimaryKeyIndex(rel),
+							 relation_open(RelationGetPrimaryKeyIndex(rel, false),
 										   AccessShareLock) :
 							 rel);
 	Form_pg_index rd_index = index_rel->rd_index;
@@ -5890,7 +5914,6 @@ yb_local_tablets(PG_FUNCTION_ARGS)
 #undef YB_TABLET_INFO_COLS_V2
 
 	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -5900,8 +5923,7 @@ yb_local_tablets(PG_FUNCTION_ARGS)
 static Datum
 GetMetricsAsJsonbDatum(YbcMetricsInfo *metrics, size_t metricsCount)
 {
-	JsonbParseState *state = NULL;
-	JsonbValue	result;
+	JsonbInState state = {0};
 	JsonbValue	key;
 	JsonbValue	value;
 
@@ -5918,8 +5940,8 @@ GetMetricsAsJsonbDatum(YbcMetricsInfo *metrics, size_t metricsCount)
 		value.val.string.len = strlen(metrics[j].value);
 		pushJsonbValue(&state, WJB_VALUE, &value);
 	}
-	result = *pushJsonbValue(&state, WJB_END_OBJECT, NULL);
-	Jsonb	   *jsonb = JsonbValueToJsonb(&result);
+	pushJsonbValue(&state, WJB_END_OBJECT, NULL);
+	Jsonb	   *jsonb = JsonbValueToJsonb(state.result);
 
 	return JsonbPGetDatum(jsonb);
 }
@@ -5995,7 +6017,6 @@ yb_servers_metrics(PG_FUNCTION_ARGS)
 #undef YB_SERVERS_METRICS_COLS
 
 	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -6121,16 +6142,19 @@ YBComputeNonCSortKey(Oid collation_id, const char *value, int64_t bytes)
 	/*
 	 * We expect collation_id is a valid non-C collation.
 	 */
-	pg_locale_t locale = 0;
+	pg_locale_t locale = pg_newlocale_from_collation(collation_id);
+	Assert(locale);
 
-	if (collation_id != DEFAULT_COLLATION_OID)
-	{
-		locale = pg_newlocale_from_collation(collation_id);
-		Assert(locale);
-	}
+	/*
+	 * In PG19 locale->collate is NULL when collate_is_c is true.
+	 * Guard against callers that reach here despite a C locale
+	 * (e.g. when DEFAULT_COLLATION_OID maps to C).
+	 */
+	if (locale->collate_is_c || locale->collate == NULL)
+		return NULL;
+
 	static const int kTextBufLen = 1024;
 	Size		bsize = -1;
-	bool		is_icu_provider = false;
 	const int	buflen1 = bytes;
 	char	   *buf1 = palloc(buflen1 + 1);
 	char	   *buf2 = palloc(kTextBufLen);
@@ -6139,43 +6163,16 @@ YBComputeNonCSortKey(Oid collation_id, const char *value, int64_t bytes)
 	memcpy(buf1, value, bytes);
 	buf1[buflen1] = '\0';
 
-#ifdef USE_ICU
-	int32_t		ulen = -1;
-	UChar	   *uchar = NULL;
-#endif
-
-#ifdef USE_ICU
-	/* When using ICU, convert string to UChar. */
-	if (locale && locale->provider == COLLPROVIDER_ICU)
-	{
-		is_icu_provider = true;
-		ulen = icu_to_uchar(&uchar, buf1, buflen1);
-	}
-#endif
-
 	/*
-	 * Loop: Call strxfrm() or ucol_getSortKey(), possibly enlarge buffer,
-	 * and try again. Both of these functions have the result buffer
-	 * content undefined if the result did not fit, so we need to retry
-	 * until everything fits.
+	 * Loop: Call pg_strnxfrm(), possibly enlarge buffer, and try again.
+	 * pg_strnxfrm() dispatches to the appropriate provider (ICU, libc,
+	 * builtin) via collation method pointers. The result buffer content is
+	 * undefined if the result did not fit, so we need to retry until
+	 * everything fits.
 	 */
 	for (;;)
 	{
-#ifdef USE_ICU
-		if (locale && locale->provider == COLLPROVIDER_ICU)
-		{
-			bsize = ucol_getSortKey(locale->info.icu.ucol,
-									uchar, ulen,
-									(uint8_t *) buf2, buflen2);
-		}
-		else
-#endif
-#ifdef HAVE_LOCALE_T
-		if (locale && locale->provider == COLLPROVIDER_LIBC)
-			bsize = strxfrm_l(buf2, buf1, buflen2, locale->info.lt);
-		else
-#endif
-			bsize = strxfrm(buf2, buf1, buflen2);
+		bsize = pg_strnxfrm(buf2, buflen2, buf1, buflen1, locale);
 
 		if (bsize < buflen2)
 			break;
@@ -6188,30 +6185,13 @@ YBComputeNonCSortKey(Oid collation_id, const char *value, int64_t bytes)
 		buf2 = palloc(buflen2);
 	}
 
-#ifdef USE_ICU
-	if (uchar)
-		pfree(uchar);
-#endif
-
 	pfree(buf1);
-	if (is_icu_provider)
-	{
-		Assert(bsize > 0);
-		/*
-		 * Each sort key ends with one \0 byte and does not contain any
-		 * other \0 byte. The terminating \0 byte is included in bsize.
-		 */
-		Assert(buf2[bsize - 1] == '\0');
-	}
-	else
-	{
-		Assert(bsize >= 0);
-		/*
-		 * Both strxfrm and strxfrm_l return the length of the transformed
-		 * string not including the terminating \0 byte.
-		 */
-		Assert(buf2[bsize] == '\0');
-	}
+	Assert(bsize >= 0);
+	/*
+	 * pg_strnxfrm returns the length of the transformed string not
+	 * including the terminating \0 byte (for all providers).
+	 */
+	Assert(buf2[bsize] == '\0');
 	return buf2;
 }
 
@@ -6316,6 +6296,29 @@ YBSetupAttrCollationInfo(YbcPgAttrValueDescriptor *attr, const YbcPgColumnInfo *
 					   attr->is_null, &attr->collation_info);
 }
 
+/*
+ * lc_collate_is_c
+ *		Returns true if the collation uses the C locale.
+ *		PG19 removed this from pg_locale.c; YB replacement.
+ *
+ * For DEFAULT_COLLATION_OID we consult the pg_locale_t struct which
+ * reflects the actual database locale.  The struct is set up by
+ * init_database_collation() during backend startup.
+ */
+bool
+lc_collate_is_c(Oid collation)
+{
+	if (collation == C_COLLATION_OID)
+		return true;
+	if (collation == DEFAULT_COLLATION_OID)
+	{
+		pg_locale_t locale = pg_newlocale_from_collation(collation);
+		if (locale != NULL)
+			return locale->collate_is_c;
+	}
+	return false;
+}
+
 bool
 YBIsCollationValidNonC(Oid collation_id)
 {
@@ -6347,7 +6350,7 @@ YBRequiresCacheToCheckLocale(Oid collation)
 	 * get information about the locale.
 	 */
 	return OidIsValid(collation) && collation != DEFAULT_COLLATION_OID
-		&& collation != C_COLLATION_OID && collation != POSIX_COLLATION_OID;
+		&& collation != C_COLLATION_OID;
 }
 
 bool
@@ -7246,7 +7249,7 @@ YbGetSplitOptions(Relation rel)
 		rel->yb_table_properties->num_hash_key_columns > 0 ||
 		((rel->rd_rel->relkind == RELKIND_RELATION ||
 		  rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE) &&
-		 RelationGetPrimaryKeyIndex(rel) == InvalidOid) ? NUM_TABLETS :
+		 RelationGetPrimaryKeyIndex(rel, false) == InvalidOid) ? NUM_TABLETS :
 		SPLIT_POINTS;
 	split_options->num_tablets = rel->yb_table_properties->num_tablets;
 
@@ -7341,7 +7344,7 @@ YbIsConnectionMadeStickyUsingGUC()
 	 * priority.
 	 */
 	yb_ysql_conn_mgr_superuser_existed = yb_ysql_conn_mgr_superuser_existed ||
-		session_auth_is_superuser;
+		superuser_arg(GetSessionUserId());
 	return yb_ysql_conn_mgr_sticky_guc = yb_ysql_conn_mgr_sticky_guc ||
 		(YbIsSuperuserConnSticky() && yb_ysql_conn_mgr_superuser_existed);
 }
@@ -7515,6 +7518,7 @@ YbATCopyPrimaryKeyToCreateStmt(Relation rel, Relation pg_constraint,
 					 */
 					AttrMap    *att_map = build_attrmap_by_name(RelationGetDescr(rel),
 																RelationGetDescr(rel),
+																false /* missing_ok */,
 																false /* yb_ignore_type_mismatch */ );
 
 					Relation	idx_rel =
@@ -7552,6 +7556,7 @@ YbATCopyPrimaryKeyToCreateStmt(Relation rel, Relation pg_constraint,
 			case CONSTRAINT_UNIQUE:
 			case CONSTRAINT_TRIGGER:
 			case CONSTRAINT_EXCLUSION:
+			case CONSTRAINT_NOTNULL:
 				break;
 			default:
 				elog(ERROR, "invalid constraint type \"%c\"",
@@ -8217,9 +8222,9 @@ YbIsAnyDependentGeneratedColPK(Relation rel, AttrNumber attnum)
 										target_cols,
 										NULL /* yb_generated_cols_source */ ,
 										rel);
-	int			bms_index;
+	int			bms_index = -1;
 
-	while ((bms_index = bms_first_member(dependent_generated_cols)) >= 0)
+	while ((bms_index = bms_next_member(dependent_generated_cols, bms_index)) >= 0)
 	{
 		AttrNumber	dependent_attnum = bms_index + offset;
 
@@ -8428,7 +8433,6 @@ yb_get_tablet_metadata(PG_FUNCTION_ARGS)
 	}
 
 	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
 
 	MemoryContextSwitchTo(oldcontext);
 	return (Datum) 0;

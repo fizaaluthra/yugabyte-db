@@ -5,22 +5,28 @@
 
 #include <ctype.h>
 
+#include "catalog/pg_collation_d.h"
 #include "catalog/pg_type.h"
+#include "common/int.h"
 #include "lib/qunique.h"
+#include "miscadmin.h"
 #include "trgm.h"
 #include "tsearch/ts_locale.h"
+#include "utils/formatting.h"
+#include "utils/guc.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_crc.h"
 
-PG_MODULE_MAGIC;
+PG_MODULE_MAGIC_EXT(
+					.name = "pg_trgm",
+					.version = PG_VERSION
+);
 
 /* GUC variables */
 double		similarity_threshold = 0.3f;
 double		word_similarity_threshold = 0.6f;
 double		strict_word_similarity_threshold = 0.5f;
-
-void		_PG_init(void);
 
 PG_FUNCTION_INFO_V1(set_limit);
 PG_FUNCTION_INFO_V1(show_limit);
@@ -38,6 +44,9 @@ PG_FUNCTION_INFO_V1(strict_word_similarity_op);
 PG_FUNCTION_INFO_V1(strict_word_similarity_commutator_op);
 PG_FUNCTION_INFO_V1(strict_word_similarity_dist_op);
 PG_FUNCTION_INFO_V1(strict_word_similarity_dist_commutator_op);
+
+static int	CMPTRGM_CHOOSE(const void *a, const void *b);
+int			(*CMPTRGM) (const void *a, const void *b) = CMPTRGM_CHOOSE;
 
 /* Trigram with position */
 typedef struct
@@ -68,7 +77,7 @@ _PG_init(void)
 							 "Sets the threshold used by the % operator.",
 							 "Valid range is 0.0 .. 1.0.",
 							 &similarity_threshold,
-							 0.3,
+							 0.3f,
 							 0.0,
 							 1.0,
 							 PGC_USERSET,
@@ -80,7 +89,7 @@ _PG_init(void)
 							 "Sets the threshold used by the <% operator.",
 							 "Valid range is 0.0 .. 1.0.",
 							 &word_similarity_threshold,
-							 0.6,
+							 0.6f,
 							 0.0,
 							 1.0,
 							 PGC_USERSET,
@@ -92,7 +101,7 @@ _PG_init(void)
 							 "Sets the threshold used by the <<% operator.",
 							 "Valid range is 0.0 .. 1.0.",
 							 &strict_word_similarity_threshold,
-							 0.5,
+							 0.5f,
 							 0.0,
 							 1.0,
 							 PGC_USERSET,
@@ -102,6 +111,47 @@ _PG_init(void)
 							 NULL);
 
 	MarkGUCPrefixReserved("pg_trgm");
+}
+
+#define CMPCHAR(a,b) ( ((a)==(b)) ? 0 : ( ((a)<(b)) ? -1 : 1 ) )
+
+/*
+ * Functions for comparing two trgms while treating each char as "signed char" or
+ * "unsigned char".
+ */
+static inline int
+CMPTRGM_SIGNED(const void *a, const void *b)
+{
+#define CMPPCHAR_S(a,b,i)  CMPCHAR( *(((const signed char*)(a))+i), *(((const signed char*)(b))+i) )
+
+	return CMPPCHAR_S(a, b, 0) ? CMPPCHAR_S(a, b, 0)
+		: (CMPPCHAR_S(a, b, 1) ? CMPPCHAR_S(a, b, 1)
+		   : CMPPCHAR_S(a, b, 2));
+}
+
+static inline int
+CMPTRGM_UNSIGNED(const void *a, const void *b)
+{
+#define CMPPCHAR_UNS(a,b,i)  CMPCHAR( *(((const unsigned char*)(a))+i), *(((const unsigned char*)(b))+i) )
+
+	return CMPPCHAR_UNS(a, b, 0) ? CMPPCHAR_UNS(a, b, 0)
+		: (CMPPCHAR_UNS(a, b, 1) ? CMPPCHAR_UNS(a, b, 1)
+		   : CMPPCHAR_UNS(a, b, 2));
+}
+
+/*
+ * This gets called on the first call. It replaces the function pointer so
+ * that subsequent calls are routed directly to the chosen implementation.
+ */
+static int
+CMPTRGM_CHOOSE(const void *a, const void *b)
+{
+	if (GetDefaultCharSignedness())
+		CMPTRGM = CMPTRGM_SIGNED;
+	else
+		CMPTRGM = CMPTRGM_UNSIGNED;
+
+	return CMPTRGM(a, b);
 }
 
 /*
@@ -302,7 +352,7 @@ generate_trgm_only(trgm *trg, char *str, int slen, TrgmBound *bounds)
 	while ((bword = find_word(eword, slen - (eword - str), &eword, &charlen)) != NULL)
 	{
 #ifdef IGNORECASE
-		bword = lowerstr_with_len(bword, eword - bword);
+		bword = str_tolower(bword, eword - bword, DEFAULT_COLLATION_OID);
 		bytelen = strlen(bword);
 #else
 		bytelen = eword - bword;
@@ -376,7 +426,7 @@ generate_trgm(char *str, int slen)
 	 */
 	if (len > 1)
 	{
-		qsort((void *) GETARR(trg), len, sizeof(trgm), comp_trgm);
+		qsort(GETARR(trg), len, sizeof(trgm), comp_trgm);
 		len = qunique(GETARR(trg), len, sizeof(trgm), comp_trgm);
 	}
 
@@ -402,7 +452,7 @@ make_positional_trgm(trgm *trg1, int len1, trgm *trg2, int len2)
 	int			i,
 				len = len1 + len2;
 
-	result = (pos_trgm *) palloc(sizeof(pos_trgm) * len);
+	result = palloc_array(pos_trgm, len);
 
 	for (i = 0; i < len1; i++)
 	{
@@ -433,24 +483,20 @@ comp_ptrgm(const void *v1, const void *v2)
 	if (cmp != 0)
 		return cmp;
 
-	if (p1->index < p2->index)
-		return -1;
-	else if (p1->index == p2->index)
-		return 0;
-	else
-		return 1;
+	return pg_cmp_s32(p1->index, p2->index);
 }
 
 /*
  * Iterative search function which calculates maximum similarity with word in
- * the string. But maximum similarity is calculated only if check_only == false.
+ * the string. Maximum similarity is only calculated only if the flag
+ * WORD_SIMILARITY_CHECK_ONLY isn't set.
  *
  * trg2indexes: array which stores indexes of the array "found".
  * found: array which stores true of false values.
  * ulen1: count of unique trigrams of array "trg1".
  * len2: length of array "trg2" and array "trg2indexes".
  * len: length of the array "found".
- * lags: set of boolean flags parameterizing similarity calculation.
+ * flags: set of boolean flags parameterizing similarity calculation.
  * bounds: whether each trigram is left/right bound of word.
  *
  * Returns word similarity.
@@ -489,13 +535,17 @@ iterate_word_similarity(int *trg2indexes,
 	lower = (flags & WORD_SIMILARITY_STRICT) ? 0 : -1;
 
 	/* Memorise last position of each trigram */
-	lastpos = (int *) palloc(sizeof(int) * len);
+	lastpos = palloc_array(int, len);
 	memset(lastpos, -1, sizeof(int) * len);
 
 	for (i = 0; i < len2; i++)
 	{
+		int			trgindex;
+
+		CHECK_FOR_INTERRUPTS();
+
 		/* Get index of next trigram */
-		int			trgindex = trg2indexes[i];
+		trgindex = trg2indexes[i];
 
 		/* Update last position of this trigram */
 		if (lower >= 0 || found[trgindex])
@@ -661,8 +711,8 @@ calc_word_similarity(char *str1, int slen1, char *str2, int slen2,
 	 * Merge positional trigrams array: enumerate each trigram and find its
 	 * presence in required word.
 	 */
-	trg2indexes = (int *) palloc(sizeof(int) * len2);
-	found = (bool *) palloc0(sizeof(bool) * len);
+	trg2indexes = palloc_array(int, len2);
+	found = palloc0_array(bool, len);
 
 	ulen1 = 0;
 	j = 0;
@@ -888,7 +938,7 @@ generate_wildcard_trgm(const char *str, int slen)
 	tptr = GETARR(trg);
 
 	/* Allocate a buffer for blank-padded, but not yet case-folded, words */
-	buf = palloc(sizeof(char) * (slen + 4));
+	buf = palloc_array(char, slen + 4);
 
 	/*
 	 * Extract trigrams from each substring extracted by get_wildcard_part.
@@ -898,7 +948,7 @@ generate_wildcard_trgm(const char *str, int slen)
 									  buf, &bytelen, &charlen)) != NULL)
 	{
 #ifdef IGNORECASE
-		buf2 = lowerstr_with_len(buf, bytelen);
+		buf2 = str_tolower(buf, bytelen, DEFAULT_COLLATION_OID);
 		bytelen = strlen(buf2);
 #else
 		buf2 = buf;
@@ -924,7 +974,7 @@ generate_wildcard_trgm(const char *str, int slen)
 	 */
 	if (len > 1)
 	{
-		qsort((void *) GETARR(trg), len, sizeof(trgm), comp_trgm);
+		qsort(GETARR(trg), len, sizeof(trgm), comp_trgm);
 		len = qunique(GETARR(trg), len, sizeof(trgm), comp_trgm);
 	}
 
@@ -958,7 +1008,7 @@ show_trgm(PG_FUNCTION_ARGS)
 	int			i;
 
 	trg = generate_trgm(VARDATA_ANY(in), VARSIZE_ANY_EXHDR(in));
-	d = (Datum *) palloc(sizeof(Datum) * (1 + ARRNELEM(trg)));
+	d = palloc_array(Datum, 1 + ARRNELEM(trg));
 
 	for (i = 0, ptr = GETARR(trg); i < ARRNELEM(trg); i++, ptr++)
 	{
@@ -977,12 +1027,7 @@ show_trgm(PG_FUNCTION_ARGS)
 		d[i] = PointerGetDatum(item);
 	}
 
-	a = construct_array(d,
-						ARRNELEM(trg),
-						TEXTOID,
-						-1,
-						false,
-						TYPALIGN_INT);
+	a = construct_array_builtin(d, ARRNELEM(trg), TEXTOID);
 
 	for (i = 0; i < ARRNELEM(trg); i++)
 		pfree(DatumGetPointer(d[i]));
@@ -1091,7 +1136,7 @@ trgm_presence_map(TRGM *query, TRGM *key)
 				lenk = ARRNELEM(key),
 				i;
 
-	result = (bool *) palloc0(lenq * sizeof(bool));
+	result = palloc0_array(bool, lenq);
 
 	/* for each query trigram, do a binary search in the key array */
 	for (i = 0; i < lenq; i++)

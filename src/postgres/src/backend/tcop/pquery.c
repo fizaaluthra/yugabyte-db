@@ -3,7 +3,7 @@
  * pquery.c
  *	  POSTGRES process query command code
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -19,6 +19,7 @@
 
 #include "access/xact.h"
 #include "commands/prepare.h"
+#include "executor/executor.h"
 #include "executor/tstoreReceiver.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
@@ -81,8 +82,7 @@ CreateQueryDesc(PlannedStmt *plannedstmt,
 				int instrument_options)
 {
 	YbPgMemResetStmtConsumption();
-
-	QueryDesc  *qd = (QueryDesc *) palloc(sizeof(QueryDesc));
+	QueryDesc  *qd = palloc_object(QueryDesc);
 
 	qd->operation = plannedstmt->commandType;	/* operation */
 	qd->plannedstmt = plannedstmt;	/* plan */
@@ -171,34 +171,29 @@ ProcessQuery(PlannedStmt *plan,
 	/*
 	 * Run the plan to completion.
 	 */
-	ExecutorRun(queryDesc, ForwardScanDirection, 0L, true);
+	ExecutorRun(queryDesc, ForwardScanDirection, 0);
 
 	/*
 	 * Build command completion status data, if caller wants one.
 	 */
 	if (qc)
 	{
-		switch (queryDesc->operation)
-		{
-			case CMD_SELECT:
-				SetQueryCompletion(qc, CMDTAG_SELECT, queryDesc->estate->es_processed);
-				break;
-			case CMD_INSERT:
-				SetQueryCompletion(qc, CMDTAG_INSERT, queryDesc->estate->es_processed);
-				break;
-			case CMD_UPDATE:
-				SetQueryCompletion(qc, CMDTAG_UPDATE, queryDesc->estate->es_processed);
-				break;
-			case CMD_DELETE:
-				SetQueryCompletion(qc, CMDTAG_DELETE, queryDesc->estate->es_processed);
-				break;
-			case CMD_MERGE:
-				SetQueryCompletion(qc, CMDTAG_MERGE, queryDesc->estate->es_processed);
-				break;
-			default:
-				SetQueryCompletion(qc, CMDTAG_UNKNOWN, queryDesc->estate->es_processed);
-				break;
-		}
+		CommandTag	tag;
+
+		if (queryDesc->operation == CMD_SELECT)
+			tag = CMDTAG_SELECT;
+		else if (queryDesc->operation == CMD_INSERT)
+			tag = CMDTAG_INSERT;
+		else if (queryDesc->operation == CMD_UPDATE)
+			tag = CMDTAG_UPDATE;
+		else if (queryDesc->operation == CMD_DELETE)
+			tag = CMDTAG_DELETE;
+		else if (queryDesc->operation == CMD_MERGE)
+			tag = CMDTAG_MERGE;
+		else
+			tag = CMDTAG_UNKNOWN;
+
+		SetQueryCompletion(qc, tag, queryDesc->estate->es_processed);
 	}
 
 	/*
@@ -454,8 +449,8 @@ PortalStart(Portal portal, ParamListInfo params,
 	QueryDesc  *queryDesc;
 	int			myeflags;
 
-	AssertArg(PortalIsValid(portal));
-	AssertState(portal->status == PORTAL_DEFINED);
+	Assert(PortalIsValid(portal));
+	Assert(portal->status == PORTAL_DEFINED);
 
 	/*
 	 * Set up global portal context pointers.
@@ -684,8 +679,6 @@ PortalSetResultFormat(Portal portal, int nFormats, int16 *formats)
  * isTopLevel: true if query is being executed at backend "top level"
  * (that is, directly from a client command message)
  *
- * run_once: ignored, present only to avoid an API break in stable branches.
- *
  * dest: where to send output of primary (canSetTag) query
  *
  * altdest: where to send output of non-primary queries
@@ -697,7 +690,7 @@ PortalSetResultFormat(Portal portal, int nFormats, int16 *formats)
  * suspended due to exhaustion of the count parameter.
  */
 bool
-PortalRun(Portal portal, long count, bool isTopLevel, bool run_once,
+PortalRun(Portal portal, long count, bool isTopLevel,
 		  DestReceiver *dest, DestReceiver *altdest,
 		  QueryCompletion *qc)
 {
@@ -710,7 +703,7 @@ PortalRun(Portal portal, long count, bool isTopLevel, bool run_once,
 	MemoryContext savePortalContext;
 	MemoryContext saveMemoryContext;
 
-	AssertArg(PortalIsValid(portal));
+	Assert(PortalIsValid(portal));
 
 	TRACE_POSTGRESQL_QUERY_EXECUTE_START();
 
@@ -946,8 +939,7 @@ PortalRunSelect(Portal portal,
 		else
 		{
 			PushActiveSnapshot(queryDesc->snapshot);
-			ExecutorRun(queryDesc, direction, (uint64) count,
-						false);
+			ExecutorRun(queryDesc, direction, (uint64) count);
 			nprocessed = queryDesc->estate->es_processed;
 			PopActiveSnapshot();
 		}
@@ -986,8 +978,7 @@ PortalRunSelect(Portal portal,
 		else
 		{
 			PushActiveSnapshot(queryDesc->snapshot);
-			ExecutorRun(queryDesc, direction, (uint64) count,
-						false);
+			ExecutorRun(queryDesc, direction, (uint64) count);
 			nprocessed = queryDesc->estate->es_processed;
 			PopActiveSnapshot();
 		}
@@ -1193,10 +1184,11 @@ PortalRunUtility(Portal portal, PlannedStmt *pstmt,
 	MemoryContextSwitchTo(portal->portalContext);
 
 	/*
-	 * Some utility commands (e.g., VACUUM) pop the ActiveSnapshot stack from
-	 * under us, so don't complain if it's now empty.  Otherwise, our snapshot
-	 * should be the top one; pop it.  Note that this could be a different
-	 * snapshot from the one we made above; see EnsurePortalSnapshotExists.
+	 * Some utility commands (e.g., VACUUM, WAIT FOR) pop the ActiveSnapshot
+	 * stack from under us, so don't complain if it's now empty.  Otherwise,
+	 * our snapshot should be the top one; pop it.  Note that this could be a
+	 * different snapshot from the one we made above; see
+	 * EnsurePortalSnapshotExists.
 	 */
 	if (portal->portalSnapshot != NULL && ActiveSnapshotSet())
 	{
@@ -1380,24 +1372,15 @@ PortalRunMulti(Portal portal,
 		PopActiveSnapshot();
 
 	/*
-	 * If a query completion data was supplied, use it.  Otherwise use the
-	 * portal's query completion data.
-	 *
-	 * Exception: Clients expect INSERT/UPDATE/DELETE tags to have counts, so
-	 * fake them with zeros.  This can happen with DO INSTEAD rules if there
-	 * is no replacement query of the same type as the original.  We print "0
-	 * 0" here because technically there is no query of the matching tag type,
-	 * and printing a non-zero count for a different query type seems wrong,
-	 * e.g.  an INSERT that does an UPDATE instead should not print "0 1" if
-	 * one row was updated.  See QueryRewrite(), step 3, for details.
+	 * If a command tag was requested and we did not fill in a run-time-
+	 * determined tag above, copy the parse-time tag from the Portal.  (There
+	 * might not be any tag there either, in edge cases such as empty prepared
+	 * statements.  That's OK.)
 	 */
-	if (qc && qc->commandTag == CMDTAG_UNKNOWN)
-	{
-		if (portal->qc.commandTag != CMDTAG_UNKNOWN)
-			CopyQueryCompletion(qc, &portal->qc);
-		/* If the caller supplied a qc, we should have set it by now. */
-		Assert(qc->commandTag != CMDTAG_UNKNOWN);
-	}
+	if (qc &&
+		qc->commandTag == CMDTAG_UNKNOWN &&
+		portal->qc.commandTag != CMDTAG_UNKNOWN)
+		CopyQueryCompletion(qc, &portal->qc);
 }
 
 /*
@@ -1424,7 +1407,7 @@ PortalRunFetch(Portal portal,
 	MemoryContext savePortalContext;
 	MemoryContext oldContext;
 
-	AssertArg(PortalIsValid(portal));
+	Assert(PortalIsValid(portal));
 
 	/*
 	 * Check for improper portal use, and mark portal active.
@@ -1782,7 +1765,8 @@ PlannedStmtRequiresSnapshot(PlannedStmt *pstmt)
 		IsA(utilityStmt, ListenStmt) ||
 		IsA(utilityStmt, NotifyStmt) ||
 		IsA(utilityStmt, UnlistenStmt) ||
-		IsA(utilityStmt, CheckPointStmt))
+		IsA(utilityStmt, CheckPointStmt) ||
+		IsA(utilityStmt, WaitStmt))
 		return false;
 
 	return true;

@@ -3,7 +3,7 @@
  * pg_wchar.h
  *	  multibyte-character support
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/mb/pg_wchar.h
@@ -13,6 +13,9 @@
  *		included by libpq client programs.  In particular, a libpq client
  *		should not assume that the encoding IDs used by the version of libpq
  *		it's linked to match up with the IDs declared here.
+ *		To help prevent mistakes, relevant functions that are exported by
+ *		libpq have a physically different name when being referenced
+ *		statically.
  *
  *-------------------------------------------------------------------------
  */
@@ -221,11 +224,10 @@ typedef unsigned int pg_wchar;
 /*
  * PostgreSQL encoding identifiers
  *
- * WARNING: the order of this enum must be same as order of entries
- *			in the pg_enc2name_tbl[] array (in src/common/encnames.c), and
- *			in the pg_wchar_table[] array (in src/common/wchar.c)!
- *
- *			If you add some encoding don't forget to check
+ * WARNING: If you add some encoding don't forget to update
+ *			the pg_enc2name_tbl[] array (in src/common/encnames.c),
+ *			the pg_enc2gettext_tbl[] array (in src/common/encnames.c) and
+ *			the pg_wchar_table[] array (in src/common/wchar.c) and to check
  *			PG_ENCODING_BE_LAST macro.
  *
  * PG_SQL_ASCII is default encoding and must be = 0.
@@ -364,13 +366,7 @@ extern PGDLLIMPORT const pg_enc2name pg_enc2name_tbl[];
 /*
  * Encoding names for gettext
  */
-typedef struct pg_enc2gettext
-{
-	pg_enc		encoding;
-	const char *name;
-} pg_enc2gettext;
-
-extern PGDLLIMPORT const pg_enc2gettext pg_enc2gettext_tbl[];
+extern PGDLLIMPORT const char *pg_enc2gettext_tbl[];
 
 /*
  * pg_wchar stuff
@@ -536,29 +532,122 @@ typedef uint32 (*utf_local_conversion_func) (uint32 code);
  * Some handy functions for Unicode-specific tests.
  */
 static inline bool
-is_valid_unicode_codepoint(pg_wchar c)
+is_valid_unicode_codepoint(char32_t c)
 {
 	return (c > 0 && c <= 0x10FFFF);
 }
 
 static inline bool
-is_utf16_surrogate_first(pg_wchar c)
+is_utf16_surrogate_first(char32_t c)
 {
 	return (c >= 0xD800 && c <= 0xDBFF);
 }
 
 static inline bool
-is_utf16_surrogate_second(pg_wchar c)
+is_utf16_surrogate_second(char32_t c)
 {
 	return (c >= 0xDC00 && c <= 0xDFFF);
 }
 
-static inline pg_wchar
-surrogate_pair_to_codepoint(pg_wchar first, pg_wchar second)
+static inline char32_t
+surrogate_pair_to_codepoint(char16_t first, char16_t second)
 {
 	return ((first & 0x3FF) << 10) + 0x10000 + (second & 0x3FF);
 }
 
+/*
+ * Convert a UTF-8 character to a Unicode code point.
+ * This is a one-character version of pg_utf2wchar_with_len.
+ *
+ * No error checks here, c must point to a long-enough string.
+ */
+static inline char32_t
+utf8_to_unicode(const unsigned char *c)
+{
+	if ((*c & 0x80) == 0)
+		return (char32_t) c[0];
+	else if ((*c & 0xe0) == 0xc0)
+		return (char32_t) (((c[0] & 0x1f) << 6) |
+						   (c[1] & 0x3f));
+	else if ((*c & 0xf0) == 0xe0)
+		return (char32_t) (((c[0] & 0x0f) << 12) |
+						   ((c[1] & 0x3f) << 6) |
+						   (c[2] & 0x3f));
+	else if ((*c & 0xf8) == 0xf0)
+		return (char32_t) (((c[0] & 0x07) << 18) |
+						   ((c[1] & 0x3f) << 12) |
+						   ((c[2] & 0x3f) << 6) |
+						   (c[3] & 0x3f));
+	else
+		/* that is an invalid code on purpose */
+		return 0xffffffff;
+}
+
+/*
+ * Map a Unicode code point to UTF-8.  utf8string must have at least
+ * unicode_utf8len(c) bytes available.
+ */
+static inline unsigned char *
+unicode_to_utf8(char32_t c, unsigned char *utf8string)
+{
+	if (c <= 0x7F)
+	{
+		utf8string[0] = c;
+	}
+	else if (c <= 0x7FF)
+	{
+		utf8string[0] = 0xC0 | ((c >> 6) & 0x1F);
+		utf8string[1] = 0x80 | (c & 0x3F);
+	}
+	else if (c <= 0xFFFF)
+	{
+		utf8string[0] = 0xE0 | ((c >> 12) & 0x0F);
+		utf8string[1] = 0x80 | ((c >> 6) & 0x3F);
+		utf8string[2] = 0x80 | (c & 0x3F);
+	}
+	else
+	{
+		utf8string[0] = 0xF0 | ((c >> 18) & 0x07);
+		utf8string[1] = 0x80 | ((c >> 12) & 0x3F);
+		utf8string[2] = 0x80 | ((c >> 6) & 0x3F);
+		utf8string[3] = 0x80 | (c & 0x3F);
+	}
+
+	return utf8string;
+}
+
+/*
+ * Number of bytes needed to represent the given char in UTF8.
+ */
+static inline int
+unicode_utf8len(char32_t c)
+{
+	if (c <= 0x7F)
+		return 1;
+	else if (c <= 0x7FF)
+		return 2;
+	else if (c <= 0xFFFF)
+		return 3;
+	else
+		return 4;
+}
+
+/*
+ * The functions in this list are exported by libpq, and we need to be sure
+ * that we know which calls are satisfied by libpq and which are satisfied
+ * by static linkage to libpgcommon.  (This is because we might be using a
+ * libpq.so that's of a different major version and has encoding IDs that
+ * differ from the current version's.)  The nominal function names are what
+ * are actually used in and exported by libpq, while the names exported by
+ * libpgcommon.a and libpgcommon_srv.a end in "_private".
+ */
+#if defined(USE_PRIVATE_ENCODING_FUNCS) || !defined(FRONTEND)
+#define pg_char_to_encoding			pg_char_to_encoding_private
+#define pg_encoding_to_char			pg_encoding_to_char_private
+#define pg_valid_server_encoding	pg_valid_server_encoding_private
+#define pg_valid_server_encoding_id	pg_valid_server_encoding_id_private
+#define pg_utf_mblen				pg_utf_mblen_private
+#endif
 
 /*
  * These functions are considered part of libpq's exported API and
@@ -575,6 +664,8 @@ extern int	pg_valid_server_encoding_id(int encoding);
  */
 extern void pg_encoding_set_invalid(int encoding, char *dst);
 extern int	pg_encoding_mblen(int encoding, const char *mbstr);
+extern int	pg_encoding_mblen_or_incomplete(int encoding, const char *mbstr,
+											size_t remaining);
 extern int	pg_encoding_mblen_bounded(int encoding, const char *mbstr);
 extern int	pg_encoding_dsplen(int encoding, const char *mbstr);
 extern int	pg_encoding_verifymbchar(int encoding, const char *mbstr, int len);
@@ -585,8 +676,6 @@ extern int	pg_valid_server_encoding(const char *name);
 extern bool is_encoding_supported_by_icu(int encoding);
 extern const char *get_encoding_name_for_icu(int encoding);
 
-extern unsigned char *unicode_to_utf8(pg_wchar c, unsigned char *utf8string);
-extern pg_wchar utf8_to_unicode(const unsigned char *c);
 extern bool pg_utf8_islegal(const unsigned char *source, int length);
 extern int	pg_utf_mblen(const unsigned char *s);
 extern int	pg_mule_mblen(const unsigned char *s);
@@ -605,11 +694,11 @@ extern int	pg_encoding_wchar2mb_with_len(int encoding,
 extern int	pg_char_and_wchar_strcmp(const char *s1, const pg_wchar *s2);
 extern int	pg_wchar_strncmp(const pg_wchar *s1, const pg_wchar *s2, size_t n);
 extern int	pg_char_and_wchar_strncmp(const char *s1, const pg_wchar *s2, size_t n);
-extern size_t pg_wchar_strlen(const pg_wchar *wstr);
+extern size_t pg_wchar_strlen(const pg_wchar *str);
 extern int	pg_mblen(const char *mbstr);
 extern int	pg_dsplen(const char *mbstr);
 extern int	pg_mbstrlen(const char *mbstr);
-extern int	pg_mbstrlen_with_len(const char *mbstr, int len);
+extern int	pg_mbstrlen_with_len(const char *mbstr, int limit);
 extern int	pg_mbcliplen(const char *mbstr, int len, int limit);
 extern int	pg_encoding_mbcliplen(int encoding, const char *mbstr,
 								  int len, int limit);
@@ -640,7 +729,7 @@ extern int	pg_do_encoding_conversion_buf(Oid proc,
 										  int src_encoding,
 										  int dest_encoding,
 										  unsigned char *src, int srclen,
-										  unsigned char *dst, int dstlen,
+										  unsigned char *dest, int destlen,
 										  bool noError);
 
 extern char *pg_client_to_server(const char *s, int len);
@@ -648,7 +737,8 @@ extern char *pg_server_to_client(const char *s, int len);
 extern char *pg_any_to_server(const char *s, int len, int encoding);
 extern char *pg_server_to_any(const char *s, int len, int encoding);
 
-extern void pg_unicode_to_server(pg_wchar c, unsigned char *s);
+extern void pg_unicode_to_server(char32_t c, unsigned char *s);
+extern bool pg_unicode_to_server_noerror(char32_t c, unsigned char *s);
 
 extern unsigned short BIG5toCNS(unsigned short big5, unsigned char *lc);
 extern unsigned short CNStoBIG5(unsigned short cns, unsigned char lc);
@@ -678,9 +768,9 @@ extern void check_encoding_conversion_args(int src_encoding,
 										   int expected_src_encoding,
 										   int expected_dest_encoding);
 
-extern void report_invalid_encoding(int encoding, const char *mbstr, int len) pg_attribute_noreturn();
-extern void report_untranslatable_char(int src_encoding, int dest_encoding,
-									   const char *mbstr, int len) pg_attribute_noreturn();
+pg_noreturn extern void report_invalid_encoding(int encoding, const char *mbstr, int len);
+pg_noreturn extern void report_untranslatable_char(int src_encoding, int dest_encoding,
+												   const char *mbstr, int len);
 
 extern int	local2local(const unsigned char *l, unsigned char *p, int len,
 						int src_encoding, int dest_encoding,

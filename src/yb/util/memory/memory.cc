@@ -143,6 +143,33 @@ Buffer HeapBufferAllocator::AllocateInternal(
   }
 }
 
+namespace {
+
+constexpr size_t kArenaAlignment = 16;
+
+// On macOS ARM64 with gperftools tcmalloc, neither posix_memalign, tc_posix_memalign, nor
+// tc_memalign honor alignment requests — they all dispatch through the macOS malloc zone mechanism,
+// and tcmalloc's zone memalign handler returns 8-byte aligned memory for certain size classes.
+// We over-allocate and manually align, storing the original malloc pointer for free().
+void* AlignedMalloc(size_t size) {
+  size_t padded = size + kArenaAlignment + sizeof(void*);
+  void* raw = malloc(padded);
+  if (!raw) return nullptr;
+  uintptr_t addr = reinterpret_cast<uintptr_t>(raw) + sizeof(void*);
+  uintptr_t aligned = (addr + kArenaAlignment - 1) & ~(kArenaAlignment - 1);
+  reinterpret_cast<void**>(aligned)[-1] = raw;
+  return reinterpret_cast<void*>(aligned);
+}
+
+void AlignedFree(void* ptr) {
+  if (ptr) {
+    void* raw = reinterpret_cast<void**>(ptr)[-1];
+    free(raw);
+  }
+}
+
+}  // namespace
+
 bool HeapBufferAllocator::ReallocateInternal(
     const size_t requested,
     const size_t minimal,
@@ -153,7 +180,7 @@ bool HeapBufferAllocator::ReallocateInternal(
   size_t attempted = requested;
   while (true) {
     if (attempted == 0) {
-      if (buffer->size() > 0) free(buffer->data());
+      if (buffer->size() > 0) AlignedFree(buffer->data());
       data = &dummy_buffer[0];
     } else {
       if (buffer->size() > 0) {
@@ -172,38 +199,22 @@ bool HeapBufferAllocator::ReallocateInternal(
 }
 
 void HeapBufferAllocator::FreeInternal(Buffer* buffer) {
-  if (buffer->size() > 0) free(buffer->data());
+  if (buffer->size() > 0) AlignedFree(buffer->data());
 }
 
 void* HeapBufferAllocator::Malloc(size_t size) {
-  if (aligned_mode_) {
-    void* data;
-    if (posix_memalign(&data, 16, align_up(size, 16))) {
-       return nullptr;
-    }
-    return data;
-  } else {
-    return malloc(size);
-  }
+  return AlignedMalloc(align_up(size, kArenaAlignment));
 }
 
 void* HeapBufferAllocator::Realloc(void* previousData, size_t previousSize,
                                    size_t newSize) {
-  if (aligned_mode_) {
-    void* data = Malloc(newSize);
-    if (data) {
-// NOTE(ptab): We should use realloc here to avoid memmory coping,
-// but it doesn't work on memory allocated by posix_memalign(...).
-// realloc reallocates the memory but doesn't preserve the content.
-// TODO(ptab): reiterate after some time to check if it is fixed (tcmalloc ?)
-      memcpy(data, previousData, min(previousSize, newSize));
-      free(previousData);
-      return data;
-    } else {
-      return nullptr;
-    }
+  void* data = Malloc(newSize);
+  if (data) {
+    memcpy(data, previousData, min(previousSize, newSize));
+    AlignedFree(previousData);
+    return data;
   } else {
-    return realloc(previousData, newSize);
+    return nullptr;
   }
 }
 

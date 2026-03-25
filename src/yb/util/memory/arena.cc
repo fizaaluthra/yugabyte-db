@@ -349,7 +349,12 @@ struct AllocatedBuffer {
 
   char* Allocate(size_t bytes, size_t alignment) {
     auto* allocated = static_cast<char*>(malloc(allocation_size));
-    auto* result = align_up(allocated, alignment);
+    // On macOS ARM64 with tcmalloc, malloc may return 8-byte aligned memory.
+    // align_up can shift the pointer forward, making result != allocated.
+    // Store the original malloc pointer so deallocate can call free() correctly.
+    auto* base = allocated + sizeof(void*);
+    auto* result = align_up(base, alignment);
+    reinterpret_cast<void**>(result)[-1] = allocated;
     address = align_up(pointer_cast<char*>(result + bytes), 16);
     size = allocated + allocation_size - address;
     return result;
@@ -386,7 +391,8 @@ class SharedArenaAllocator {
   }
 
   void deallocate(pointer p, size_type n) {
-    free(p);
+    void* raw = reinterpret_cast<void**>(p)[-1];
+    free(raw);
   }
 
   template<class... Args>

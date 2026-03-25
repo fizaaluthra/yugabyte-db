@@ -8,7 +8,7 @@
  * be a measurable performance gain from doing this, but that might change
  * in the future as we add more options.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -29,6 +29,7 @@
 #include "utils/inval.h"
 #include "utils/spccache.h"
 #include "utils/syscache.h"
+#include "varatt.h"
 
 /* YB includes */
 #include "common/pg_yb_common.h"
@@ -76,7 +77,7 @@ InvalidateTableSpaceCacheCallback(Datum arg, int cacheid, uint32 hashvalue)
 		if (spc->opts.pg_opts)
 			pfree(spc->opts.pg_opts);
 		if (hash_search(TableSpaceCacheHash,
-						(void *) &spc->oid,
+						&spc->oid,
 						HASH_REMOVE,
 						NULL) == NULL)
 			elog(ERROR, "hash table corrupted");
@@ -134,7 +135,7 @@ get_tablespace(Oid spcid)
 	if (!TableSpaceCacheHash)
 		InitializeTableSpaceCache();
 	spc = (TableSpaceCacheEntry *) hash_search(TableSpaceCacheHash,
-											   (void *) &spcid,
+											   &spcid,
 											   HASH_FIND,
 											   NULL);
 	if (spc)
@@ -181,7 +182,7 @@ get_tablespace(Oid spcid)
 	 * flush.
 	 */
 	spc = (TableSpaceCacheEntry *) hash_search(TableSpaceCacheHash,
-											   (void *) &spcid,
+											   &spcid,
 											   HASH_ENTER,
 											   NULL);
 

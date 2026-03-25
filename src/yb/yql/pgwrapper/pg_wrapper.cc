@@ -610,9 +610,27 @@ Result<string> WritePostgresConfig(const PgProcessConf& conf) {
     metricsLibs.push_back("pg_stat_statements");
   }
   metricsLibs.push_back("yb_pg_metrics");
-  metricsLibs.push_back("pgaudit");
-  metricsLibs.push_back("pg_hint_plan");
-  metricsLibs.push_back("yb_xcluster_ddl_replication");
+
+  auto pg_lib_dir = JoinPathSegments(GetPostgresInstallRoot(), "lib");
+  auto LibExists = [&pg_lib_dir](const string& name) {
+#ifdef __APPLE__
+    auto path = JoinPathSegments(pg_lib_dir, name + ".dylib");
+    return Env::Default()->FileExists(path);
+#else
+    auto path = JoinPathSegments(pg_lib_dir, name + ".dylib");
+    if (Env::Default()->FileExists(path)) return true;
+    path = JoinPathSegments(pg_lib_dir, name + ".so");
+    return Env::Default()->FileExists(path);
+#endif
+  };
+
+  // TODO(PG19): re-enable pgaudit and pg_hint_plan once they are built for PG19.
+  if (LibExists("yb_xcluster_ddl_replication")) {
+    metricsLibs.push_back("yb_xcluster_ddl_replication");
+  } else {
+    LOG(WARNING) << "Shared preload library yb_xcluster_ddl_replication not found in "
+                 << pg_lib_dir << ", skipping";
+  }
 
   if (FLAGS_enable_pg_cron) {
     metricsLibs.push_back("pg_cron");

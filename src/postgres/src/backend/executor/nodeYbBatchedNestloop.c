@@ -531,7 +531,8 @@ InitHash(YbBatchedNestLoopState *bnlstate)
 		YbBuildTupleHashTableExt(&bnlstate->js.ps, outer_tdesc,
 								 num_hashClauseInfos, keyexprs, tab_eq_fn,
 								 eqFuncOids, bnlstate->outerHashFunctions,
-								 GetMaxBatchSize(plan), 0,
+								 GetMaxBatchSize(plan),
+								 sizeof(YbNLBucketInfo),
 								 econtext->ecxt_per_query_memory, tablecxt,
 								 econtext->ecxt_per_tuple_memory, econtext,
 								 false);
@@ -559,7 +560,7 @@ FlushTupleHash(YbBatchedNestLoopState *bnlstate, ExprContext *econtext)
 		entry = ScanTupleHashTable(bnlstate->hashtable, &bnlstate->hashiter);
 	while (entry != NULL)
 	{
-		YbNLBucketInfo *binfo = entry->additional;
+		YbNLBucketInfo *binfo = TupleHashEntryGetAdditional(bnlstate->hashtable, entry);
 
 		while (binfo->current != NULL)
 		{
@@ -595,11 +596,11 @@ GetNewOuterTupleHash(YbBatchedNestLoopState *bnlstate, ExprContext *econtext)
 
 	TupleHashEntry data;
 
-	data = FindTupleHashEntry(ht,
-							  inner,
-							  eq,
-							  bnlstate->innerHashFunctions,
-							  bnlstate->innerAttrs);
+	data = YbFindTupleHashEntry(ht,
+								inner,
+								eq,
+								bnlstate->innerHashFunctions,
+								bnlstate->innerAttrs);
 	if (data == NULL)
 	{
 		/* Inner plan returned a tuple that doesn't match with anything. */
@@ -607,7 +608,7 @@ GetNewOuterTupleHash(YbBatchedNestLoopState *bnlstate, ExprContext *econtext)
 		return false;
 	}
 
-	YbNLBucketInfo *binfo = (YbNLBucketInfo *) data->additional;
+	YbNLBucketInfo *binfo = (YbNLBucketInfo *) TupleHashEntryGetAdditional(ht, data);
 
 	while (binfo->current != NULL)
 	{
@@ -686,16 +687,17 @@ AddTupleToOuterBatchHash(YbBatchedNestLoopState *bnlstate,
 
 	Assert(orig_data != NULL);
 	Assert(orig_data->firstTuple != NULL);
-	MemoryContext cxt = MemoryContextSwitchTo(ht->tablecxt);
+	MemoryContext cxt = MemoryContextSwitchTo(ht->tuplescxt);
 	MinimalTuple tuple;
 
 	if (isnew)
 	{
 		/* We must create a new bucket. */
-		orig_data->additional = palloc0(sizeof(YbNLBucketInfo));
+		YbNLBucketInfo *newinfo = TupleHashEntryGetAdditional(ht, orig_data);
+		memset(newinfo, 0, sizeof(YbNLBucketInfo));
 		tuple = orig_data->firstTuple;
 	}
-	YbNLBucketInfo *binfo = (YbNLBucketInfo *) orig_data->additional;
+	YbNLBucketInfo *binfo = (YbNLBucketInfo *) TupleHashEntryGetAdditional(ht, orig_data);
 	List	   *tl = binfo->tuples;
 
 	if (!isnew)
@@ -724,7 +726,7 @@ FreeBatchHash(YbBatchedNestLoopState *bnlstate)
 	Assert(bnlstate->hashtable != NULL);
 	bnlstate->hashiterinit = false;
 	ResetTupleHashTable(bnlstate->hashtable);
-	MemoryContextReset(bnlstate->hashtable->tablecxt);
+	MemoryContextReset(bnlstate->hashtable->tuplescxt);
 	bnlstate->current_hash_entry = NULL;
 }
 
@@ -735,7 +737,7 @@ void
 EndHash(YbBatchedNestLoopState *bnlstate)
 {
 	(void) bnlstate;
-	MemoryContextDelete(bnlstate->hashtable->tablecxt);
+	MemoryContextDelete(bnlstate->hashtable->tuplescxt);
 	return;
 }
 
@@ -1137,11 +1139,6 @@ ExecEndYbBatchedNestLoop(YbBatchedNestLoopState *bnlstate)
 
 	EndSorting(bnlstate);
 	LOCAL_JOIN_FN(End, bnlstate);
-
-	/*
-	 * Free the exprcontext
-	 */
-	ExecFreeExprContext(&bnlstate->js.ps);
 
 	/*
 	 * clean out the tuple table

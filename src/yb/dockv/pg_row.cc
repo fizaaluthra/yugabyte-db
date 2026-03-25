@@ -27,6 +27,7 @@
 #include "yb/dockv/value_packing.h"
 #include "yb/dockv/value_type.h"
 
+#include "yb/util/debug-util.h"
 #include "yb/util/decimal.h"
 #include "yb/util/fast_varint.h"
 
@@ -172,6 +173,10 @@ struct VisitDoDecodeValueV2 {
   template <class T>
   Status Primitive() const {
 #ifdef IS_LITTLE_ENDIAN
+    if (PREDICT_FALSE(input->size() != sizeof(T))) {
+      return STATUS(Corruption, Format(
+          "V2 packed row size mismatch: expected $0, got $1", sizeof(T), input->size()));
+    }
     *value = 0;
     memcpy(value, input->data(), sizeof(T));
     return Status::OK();

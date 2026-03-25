@@ -100,9 +100,10 @@ MultiExecYbBitmapIndexScan(YbBitmapIndexScanState *node)
 		* Initialize scan descriptor.
 		*/
 		node->biss_ScanDesc =
-			index_beginscan_bitmap(node->biss_RelationDesc,
-								   estate->es_snapshot,
-								   node->biss_NumScanKeys);
+		index_beginscan_bitmap(node->biss_RelationDesc,
+							   estate->es_snapshot,
+							   NULL,
+							   node->biss_NumScanKeys);
 
 		node->biss_ScanDesc->xs_want_itup = true;
 		node->biss_ScanDesc->fetch_ybctids_only = true;

@@ -5,7 +5,7 @@
  *		bits of hard-wired knowledge
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -22,7 +22,6 @@
 
 #include "access/genam.h"
 #include "access/htup_details.h"
-#include "access/sysattr.h"
 #include "access/table.h"
 #include "access/transam.h"
 #include "catalog/catalog.h"
@@ -35,6 +34,7 @@
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_parameter_acl.h"
 #include "catalog/pg_replication_origin.h"
+#include "catalog/pg_seclabel.h"
 #include "catalog/pg_shdepend.h"
 #include "catalog/pg_shdescription.h"
 #include "catalog/pg_shseclabel.h"
@@ -42,7 +42,6 @@
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
-#include "storage/fd.h"
 #include "utils/fmgroids.h"
 #include "utils/fmgrprotos.h"
 #include "utils/rel.h"
@@ -151,6 +150,36 @@ IsCatalogRelationOid(Oid relid)
 	 * OIDs; see GetNewObjectId().
 	 */
 	return (relid < (Oid) FirstUnpinnedObjectId);
+}
+
+/*
+ * IsCatalogTextUniqueIndexOid
+ *		True iff the relation identified by this OID is a catalog UNIQUE index
+ *		having a column of type "text".
+ *
+ *		The relcache must not use these indexes.  Inserting into any UNIQUE
+ *		index compares index keys while holding BUFFER_LOCK_EXCLUSIVE.
+ *		bttextcmp() can search the COLLOID catcache.  Depending on concurrent
+ *		invalidation traffic, catcache can reach relcache builds.  A backend
+ *		would self-deadlock on LWLocks if the relcache build read the
+ *		exclusive-locked buffer.
+ *
+ *		To avoid being itself the cause of self-deadlock, this doesn't read
+ *		catalogs.  Instead, it uses a hard-coded list with a supporting
+ *		regression test.
+ */
+bool
+IsCatalogTextUniqueIndexOid(Oid relid)
+{
+	switch (relid)
+	{
+		case ParameterAclParnameIndexId:
+		case ReplicationOriginNameIndex:
+		case SecLabelObjectIndexId:
+		case SharedSecLabelObjectIndexId:
+			return true;
+	}
+	return false;
 }
 
 /*
@@ -329,6 +358,8 @@ IsSharedRelation(Oid relationId)
 		relationId == AuthIdRolnameIndexId ||
 		relationId == AuthMemMemRoleIndexId ||
 		relationId == AuthMemRoleMemIndexId ||
+		relationId == AuthMemOidIndexId ||
+		relationId == AuthMemGrantorIndexId ||
 		relationId == DatabaseNameIndexId ||
 		relationId == DatabaseOidIndexId ||
 		relationId == DbRoleSettingDatidRolidIndexId ||
@@ -352,16 +383,12 @@ IsSharedRelation(Oid relationId)
 		relationId == YBLogicalClientVersionDbOidIndexId)
 		return true;
 	/* These are their toast tables and toast indexes */
-	if (relationId == PgAuthidToastTable ||
-		relationId == PgAuthidToastIndex ||
-		relationId == PgDatabaseToastTable ||
+	if (relationId == PgDatabaseToastTable ||
 		relationId == PgDatabaseToastIndex ||
 		relationId == PgDbRoleSettingToastTable ||
 		relationId == PgDbRoleSettingToastIndex ||
 		relationId == PgParameterAclToastTable ||
 		relationId == PgParameterAclToastIndex ||
-		relationId == PgReplicationOriginToastTable ||
-		relationId == PgReplicationOriginToastIndex ||
 		relationId == PgShdescriptionToastTable ||
 		relationId == PgShdescriptionToastIndex ||
 		relationId == PgShseclabelToastTable ||
@@ -486,10 +513,10 @@ GetBackendOidFromRelPersistence(char relpersistence)
 	switch (relpersistence)
 	{
 		case RELPERSISTENCE_TEMP:
-			return BackendIdForTempRelations();
+			return ProcNumberForTempRelations();
 		case RELPERSISTENCE_UNLOGGED:
 		case RELPERSISTENCE_PERMANENT:
-			return InvalidBackendId;
+			return INVALID_PROC_NUMBER;
 		default:
 			elog(ERROR, "invalid relpersistence: %c", relpersistence);
 			return InvalidOid;	/* placate compiler */
@@ -504,8 +531,10 @@ bool
 DoesRelFileExist(const RelFileNodeBackend *rnode)
 {
 	bool		collides;
-	char	   *rpath = relpath(*rnode, MAIN_FORKNUM);
-	int			fd = BasicOpenFile(rpath, O_RDONLY | PG_BINARY);
+	RelPathStr	rpath = GetRelationPath(rnode->node.dbNode, rnode->node.spcNode,
+										rnode->node.relNode, rnode->backend,
+										MAIN_FORKNUM);
+	int			fd = BasicOpenFile(rpath.str, O_RDONLY | PG_BINARY);
 
 	if (fd >= 0)
 	{
@@ -529,7 +558,6 @@ DoesRelFileExist(const RelFileNodeBackend *rnode)
 		collides = false;
 	}
 
-	pfree(rpath);
 	return collides;
 }
 
@@ -642,10 +670,10 @@ GetNewOidWithIndex(Relation relation, Oid indexId, AttrNumber oidcolumn)
 			ereport(LOG,
 					(errmsg("still searching for an unused OID in relation \"%s\"",
 							RelationGetRelationName(relation)),
-					 errdetail_plural("OID candidates have been checked %llu time, but no unused OID has been found yet.",
-									  "OID candidates have been checked %llu times, but no unused OID has been found yet.",
+					 errdetail_plural("OID candidates have been checked %" PRIu64 " time, but no unused OID has been found yet.",
+									  "OID candidates have been checked %" PRIu64 " times, but no unused OID has been found yet.",
 									  retries,
-									  (unsigned long long) retries)));
+									  retries)));
 
 			/*
 			 * Double the number of retries to do before logging next until it
@@ -659,6 +687,19 @@ GetNewOidWithIndex(Relation relation, Oid indexId, AttrNumber oidcolumn)
 
 		retries++;
 	} while (DoesOidExistInRelation(newOid, relation, indexId, oidcolumn));
+
+	/*
+	 * If at least one log message is emitted, also log the completion of OID
+	 * assignment.
+	 */
+	if (retries > GETNEWOID_LOG_THRESHOLD)
+	{
+		ereport(LOG,
+				(errmsg_plural("new OID has been assigned in relation \"%s\" after %" PRIu64 " retry",
+							   "new OID has been assigned in relation \"%s\" after %" PRIu64 " retries",
+							   retries,
+							   RelationGetRelationName(relation), retries)));
+	}
 
 	return newOid;
 }
@@ -689,9 +730,9 @@ YbGetAllRelfilenodes()
 	 */
 	if (SPI_connect() != SPI_OK_CONNECT)
 		elog(ERROR, "SPI_connect failed");
-	char		query[100];
+	char		query[120];
 
-	sprintf(query, "SELECT relfilenode FROM pg_catalog.pg_class WHERE relfilenode >= %u",
+	sprintf(query, "SELECT oid, relfilenode FROM pg_catalog.pg_class WHERE relfilenode >= %u",
 			FirstNormalObjectId);
 	SPIPlanPtr	plan = SPI_prepare(query, 0, NULL);
 
@@ -715,7 +756,7 @@ YbGetAllRelfilenodes()
 		yb_is_calling_internal_sql_for_ddl = saved_yb_is_calling_internal_sql_for_ddl;
 		if (spirc != SPI_OK_SELECT)
 			elog(ERROR, "failed to get relfilenode tuple");
-		YBC_LOG_INFO("SPI_processed = %lu", SPI_processed);
+		YBC_LOG_INFO("SPI_processed = " UINT64_FORMAT, SPI_processed);
 	}
 	PG_CATCH();
 	{
@@ -736,11 +777,22 @@ YbGetAllRelfilenodes()
 
 	for (i = 0; i < SPI_processed; i++)
 	{
-		bool		isnull;
-		Datum		qdata = SPI_getbinval(SPI_tuptable->vals[i], SPI_tuptable->tupdesc, 1, &isnull);
+		bool		oid_isnull;
+		bool		rfn_isnull;
+		Datum		oid_datum = SPI_getbinval(SPI_tuptable->vals[i],
+											 SPI_tuptable->tupdesc, 1,
+											 &oid_isnull);
+		Datum		rfn_datum = SPI_getbinval(SPI_tuptable->vals[i],
+											 SPI_tuptable->tupdesc, 2,
+											 &rfn_isnull);
 
-		Assert(!isnull);
-		Oid			relfilenode = DatumGetObjectId(qdata);
+		if (rfn_isnull)
+		{
+			elog(WARNING, "pg_class row oid=%u has NULL relfilenode, skipping",
+				 oid_isnull ? InvalidOid : DatumGetObjectId(oid_datum));
+			continue;
+		}
+		Oid			relfilenode = DatumGetObjectId(rfn_datum);
 
 		hash_search(relfilenode_htab, &relfilenode, HASH_ENTER, NULL);
 	}
@@ -765,14 +817,14 @@ YbDoesRelfilenodeExist(HTAB *htab, Oid relfilenode)
 }
 
 /*
- * GetNewRelFileNode
- *		Generate a new relfilenode number that is unique within the
+ * GetNewRelFileNumber
+ *		Generate a new relfilenumber that is unique within the
  *		database of the given tablespace.
  *
- * If the relfilenode will also be used as the relation's OID, pass the
+ * If the relfilenumber will also be used as the relation's OID, pass the
  * opened pg_class catalog, and this routine will guarantee that the result
  * is also an unused OID within pg_class.  If the result is to be used only
- * as a relfilenode for an existing relation, pass NULL for pg_class.
+ * as a relfilenumber for an existing relation, pass NULL for pg_class.
  *
  * As with GetNewOidWithIndex(), there is some theoretical risk of a race
  * condition, but it doesn't seem worth worrying about.
@@ -780,10 +832,13 @@ YbDoesRelfilenodeExist(HTAB *htab, Oid relfilenode)
  * Note: we don't support using this in bootstrap mode.  All relations
  * created by bootstrap have preassigned OIDs, so there's no need.
  */
-Oid
-GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
+RelFileNumber
+GetNewRelFileNumber(Oid reltablespace, Relation pg_class, char relpersistence)
 {
-	RelFileNodeBackend rnode;
+	RelFileLocatorBackend rlocator;
+	RelPathStr	rpath;
+	bool		collides;
+	ProcNumber	procNumber;
 
 	HTAB	   *htab = NULL;
 
@@ -792,7 +847,7 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 
 	/*
 	 * If we ever get here during pg_upgrade, there's something wrong; all
-	 * relfilenode assignments during a binary-upgrade run should be
+	 * relfilenumber assignments during a binary-upgrade run should be
 	 * determined by commands in the dump script.
 	 * YB: We may get here during extension upgrade (while executing
 	 * ALTER EXTENSION). Extension upgrade in YB is done as part of
@@ -800,16 +855,32 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 	 */
 	Assert(!IsBinaryUpgrade || yb_binary_restore || yb_extension_upgrade);
 
+	switch (relpersistence)
+	{
+		case RELPERSISTENCE_TEMP:
+			procNumber = ProcNumberForTempRelations();
+			break;
+		case RELPERSISTENCE_UNLOGGED:
+		case RELPERSISTENCE_PERMANENT:
+			procNumber = INVALID_PROC_NUMBER;
+			break;
+		default:
+			elog(ERROR, "invalid relpersistence: %c", relpersistence);
+			return InvalidRelFileNumber;	/* placate compiler */
+	}
+
 	/* This logic should match RelationInitPhysicalAddr */
-	rnode.node.spcNode = reltablespace ? reltablespace : MyDatabaseTableSpace;
-	rnode.node.dbNode = (rnode.node.spcNode == GLOBALTABLESPACE_OID) ? InvalidOid : MyDatabaseId;
+	rlocator.locator.spcOid = reltablespace ? reltablespace : MyDatabaseTableSpace;
+	rlocator.locator.dbOid =
+		(rlocator.locator.spcOid == GLOBALTABLESPACE_OID) ?
+		InvalidOid : MyDatabaseId;
 
 	/*
-	 * The relpath will vary based on the backend ID, so we must initialize
-	 * that properly here to make sure that any collisions based on filename
-	 * are properly detected.
+	 * The relpath will vary based on the backend number, so we must
+	 * initialize that properly here to make sure that any collisions based on
+	 * filename are properly detected.
 	 */
-	rnode.backend = GetBackendOidFromRelPersistence(relpersistence);
+	rlocator.backend = procNumber;
 
 	/*
 	 * All the shared relations have relfilenode value as 0, which suggests
@@ -828,19 +899,38 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 
 		/* Generate the OID */
 		if (pg_class)
-			rnode.node.relNode = GetNewOidWithIndex(pg_class, ClassOidIndexId,
-													Anum_pg_class_oid);
+			rlocator.locator.relNumber = GetNewOidWithIndex(pg_class, ClassOidIndexId,
+															Anum_pg_class_oid);
 		else
-			rnode.node.relNode = GetNewObjectId();
+			rlocator.locator.relNumber = GetNewObjectId();
 
+		/* YB_TODO_PG19MERGE should the rest be blocked off for YB relations? */
 		/* Check for existing file of same name */
+		rpath = relpath(rlocator, MAIN_FORKNUM);
+
+		if (access(rpath.str, F_OK) == 0)
+		{
+			/* definite collision */
+			collides = true;
+		}
+		else
+		{
+			/*
+			 * Here we have a little bit of a dilemma: if errno is something
+			 * other than ENOENT, should we declare a collision and loop? In
+			 * practice it seems best to go ahead regardless of the errno.  If
+			 * there is a colliding file we will get an smgr failure when we
+			 * attempt to create the new relation file.
+			 */
+			collides = false;
+		}
 		/*
 		 * YB: also check for existing relfilenode in the pg_class catalog table.
 		 */
-	} while (DoesRelFileExist(&rnode) ||
-			 YbDoesRelfilenodeExist(htab, rnode.node.relNode));
+	} while (collides ||
+			 YbDoesRelfilenodeExist(htab, rlocator.locator.relNumber));
 
-	return rnode.node.relNode;
+	return rlocator.locator.relNumber;
 }
 
 /*

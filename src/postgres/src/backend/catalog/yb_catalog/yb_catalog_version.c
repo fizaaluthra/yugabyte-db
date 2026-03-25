@@ -400,14 +400,16 @@ YbCallNewSQLIncrementAllCatalogVersions(Oid functionId,
 static Oid
 YbGetSQLIncrementCatalogVersionFunctionOidHelper(char *fname)
 {
+	int			fgc_flags = 0;
 	List	   *names = list_make2(makeString("pg_catalog"), makeString(fname));
 	FuncCandidateList clist = FuncnameGetCandidates(names,
-													-1 /* nargs */ ,
-													NIL /* argnames */ ,
-													false /* expand_variadic */ ,
-													false /* expand_defaults */ ,
-													false /* include_out_arguments */ ,
-													false /* missing_ok */ );
+												-1 /* nargs */ ,
+												NIL /* argnames */ ,
+												false /* expand_variadic */ ,
+												false /* expand_defaults */ ,
+												false /* include_out_arguments */ ,
+												false /* missing_ok */ ,
+												&fgc_flags);
 
 	/* We expect exactly one candidate. */
 	if (clist && clist->next == NULL)
@@ -458,6 +460,16 @@ YbIncrementMasterDBCatalogVersionTableEntryImpl(Oid db_oid,
 			if (!YBCIsLegacyModeForCatalogOps())
 				LockRelationOid(YbInvalidationMessagesRelationId, ExclusiveLock);
 
+			/*
+			 * Temporarily disable expression pushdown while executing the
+			 * catalog version increment SQL functions. The YB single-row
+			 * optimization creates YbExprColrefDesc nodes that PG19's
+			 * expression walker/evaluator cannot handle when the UPDATE is
+			 * inside an SPI-executed SQL function.
+			 */
+			bool		save_pushdown = yb_enable_expression_pushdown;
+			yb_enable_expression_pushdown = false;
+
 			bool		is_null = false;
 			Datum		messages = GetInvalidationMessages(invalMessages, nmsgs, &is_null);
 			int			expiration_secs = yb_invalidation_message_expiration_secs;
@@ -476,6 +488,7 @@ YbIncrementMasterDBCatalogVersionTableEntryImpl(Oid db_oid,
 															is_null, expiration_secs);
 
 				YbSetNewCatalogVersion(new_version);
+				yb_enable_expression_pushdown = save_pushdown;
 				return;
 			}
 
@@ -485,9 +498,9 @@ YbIncrementMasterDBCatalogVersionTableEntryImpl(Oid db_oid,
 			 */
 			uint64_t	new_version =
 				YbCallNewSQLIncrementCatalogVersion(func_oid, db_oid,
-													is_breaking_change,
-													command_tag, messages,
-													is_null, expiration_secs);
+												is_breaking_change,
+												command_tag, messages,
+												is_null, expiration_secs);
 
 			/*
 			 * The new version of database_oid is only meaningful when
@@ -496,6 +509,7 @@ YbIncrementMasterDBCatalogVersionTableEntryImpl(Oid db_oid,
 			if (db_oid == MyDatabaseId)
 				YbSetNewCatalogVersion(new_version);
 
+			yb_enable_expression_pushdown = save_pushdown;
 			return;
 		}
 	}
@@ -810,8 +824,8 @@ YbDeleteMasterDBInvalidationMessagesTableEntries(Oid db_oid)
 		if (spirc != SPI_OK_DELETE)
 			elog(ERROR, "SPI_execute_plan failed for \"%s\"", query);
 		ereport((*YBCGetGFlags()->log_ysql_catalog_versions ? LOG : DEBUG1),
-				(errmsg("%s: deleted %lu invalidation messages for database %u",
-						__func__, SPI_processed, db_oid)));
+		(errmsg("%s: deleted " UINT64_FORMAT " invalidation messages for database %u",
+				__func__, SPI_processed, db_oid)));
 	}
 	PG_CATCH();
 	{

@@ -118,9 +118,7 @@ gin_extract_hstore_query(PG_FUNCTION_ARGS)
 					j;
 		text	   *item;
 
-		deconstruct_array(query,
-						  TEXTOID, -1, false, TYPALIGN_INT,
-						  &key_datums, &key_nulls, &key_count);
+		deconstruct_array_builtin(query, TEXTOID, &key_datums, &key_nulls, &key_count);
 
 		entries = (Datum *) palloc(sizeof(Datum) * key_count);
 
@@ -129,7 +127,7 @@ gin_extract_hstore_query(PG_FUNCTION_ARGS)
 			/* Nulls in the array are ignored, cf hstoreArrayToPairs */
 			if (key_nulls[i])
 				continue;
-			item = makeitem(VARDATA(key_datums[i]), VARSIZE(key_datums[i]) - VARHDRSZ, KEYFLAG);
+			item = makeitem(VARDATA(DatumGetPointer(key_datums[i])), VARSIZE(DatumGetPointer(key_datums[i])) - VARHDRSZ, KEYFLAG);
 			entries[j++] = PointerGetDatum(item);
 		}
 

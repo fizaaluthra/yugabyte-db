@@ -26,7 +26,9 @@
 #include <inttypes.h>
 
 #include "access/xact.h"
+#include "catalog/pg_class.h"
 #include "catalog/yb_type.h"
+#include "catalog/pg_publication.h"
 #include "commands/yb_cmds.h"
 #include "pg_yb_utils.h"
 #include "replication/slot.h"
@@ -208,7 +210,7 @@ YBCGetTables(List *publication_names, bool *yb_is_pub_all_tables)
 		 * it targets all the tables present in the database and it uses
 		 * publish_via_partition_root = false (default).
 		 */
-		tables = GetAllTablesPublicationRelations(false /* pubviaroot */ );
+		tables = GetAllPublicationRelations(RELKIND_RELATION, false /* pubviaroot */);
 		*yb_is_pub_all_tables = true;
 	}
 
@@ -639,8 +641,8 @@ YBCCalculatePersistAndGetRestartLSN(XLogRecPtr confirmed_flush)
 		return restart_lsn_hint;
 	}
 
-	elog(DEBUG1, "Updating confirmed_flush to %lu and restart_lsn_hint to %lu",
-		 confirmed_flush, restart_lsn_hint);
+		elog(DEBUG1, "Updating confirmed_flush to " UINT64_FORMAT " and restart_lsn_hint to " UINT64_FORMAT,
+		 (uint64) confirmed_flush, (uint64) restart_lsn_hint);
 
 	YBCUpdateAndPersistLSN(MyReplicationSlot->data.yb_stream_id,
 						   restart_lsn_hint, confirmed_flush, &restart_lsn);

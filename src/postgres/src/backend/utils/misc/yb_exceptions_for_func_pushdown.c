@@ -30,8 +30,9 @@
 #include "nodes/primnodes.h"
 #include "utils/fmgroids.h"
 
+/* 1598 is OID of random() (float8, no args) - F_RANDOM may be renamed in PG19 */
 const uint32 yb_funcs_safe_for_pushdown[] = {
-	F_RANDOM
+	1598
 };
 
 const uint32 yb_funcs_unsafe_for_pushdown[] = {
@@ -243,7 +244,12 @@ const SQLValueFunctionOp yb_pushdown_sqlvaluefunctions[] = {
 	SVFOP_LOCALTIMESTAMP_N,
 };
 
-#define DEFINE_ARRAY_SIZE(array) const int array##_count = lengthof(array)
+/* Avoid sizeof on incomplete type; use __builtin_num_elements when available */
+#if defined(__GNUC__) && (__GNUC__ >= 12)
+#define DEFINE_ARRAY_SIZE(array) const int array##_count = (int) __builtin_num_elements(array)
+#else
+#define DEFINE_ARRAY_SIZE(array) const int array##_count = (int) (sizeof(array) / sizeof((array)[0]))
+#endif
 
 DEFINE_ARRAY_SIZE(yb_funcs_safe_for_pushdown);
 DEFINE_ARRAY_SIZE(yb_funcs_unsafe_for_pushdown);

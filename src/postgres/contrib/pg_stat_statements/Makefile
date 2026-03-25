@@ -17,10 +17,14 @@ SHLIB_LINK += -L$(YB_BUILD_ROOT)/lib -lserver_process -lyb_pggate_webserver -lhd
 LDFLAGS_SL += $(filter -lm, $(LIBS))
 
 REGRESS_OPTS = --temp-config $(top_srcdir)/contrib/pg_stat_statements/pg_stat_statements.conf
-REGRESS = pg_stat_statements oldextversions
+REGRESS = select dml cursors utility level_tracking planning \
+	user_activity wal entry_timestamp privileges extended \
+	parallel plancache cleanup oldextversions squashing
 # Disabled because these tests require "shared_preload_libraries=pg_stat_statements",
 # which typical installcheck users do not have (e.g. buildfarm clients).
 NO_INSTALLCHECK = 1
+
+TAP_TESTS = 1
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config

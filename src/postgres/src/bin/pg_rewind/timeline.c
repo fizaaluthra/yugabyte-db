@@ -3,14 +3,13 @@
  * timeline.c
  *	  timeline-related functions.
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
  *-------------------------------------------------------------------------
  */
 #include "postgres_fe.h"
 
 #include "access/timeline.h"
-#include "access/xlog_internal.h"
 #include "pg_rewind.h"
 
 /*
@@ -67,7 +66,7 @@ rewind_parseTimeLineHistory(char *buffer, TimeLineID targetTLI, int *nentries)
 		if (*ptr == '\0' || *ptr == '#')
 			continue;
 
-		nfields = sscanf(fline, "%u\t%X/%X", &tli, &switchpoint_hi, &switchpoint_lo);
+		nfields = sscanf(fline, "%u\t%X/%08X", &tli, &switchpoint_hi, &switchpoint_lo);
 
 		if (nfields < 1)
 		{

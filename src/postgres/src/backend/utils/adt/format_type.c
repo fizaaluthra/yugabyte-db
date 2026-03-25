@@ -4,7 +4,7 @@
  *	  Display type names "nicely".
  *
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -294,6 +294,10 @@ format_type_extended(Oid type_oid, int32 typemod, bits16 flags)
 			else
 				buf = pstrdup("character varying");
 			break;
+
+		case JSONOID:
+			buf = pstrdup("json");
+			break;
 	}
 
 	if (buf == NULL)
@@ -374,7 +378,7 @@ printTypmod(const char *typname, int32 typmod, Oid typmodout)
 	if (typmodout == InvalidOid)
 	{
 		/* Default behavior: just print the integer typmod with parens */
-		res = psprintf("%s(%d)", typname, (int) typmod);
+		res = psprintf("%s(%d)", typname, typmod);
 	}
 	else
 	{

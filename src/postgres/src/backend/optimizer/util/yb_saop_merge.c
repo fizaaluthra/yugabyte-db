@@ -475,10 +475,10 @@ yb_get_sort_info_from_pathkeys(List *tlist,
 		sortop = get_opfamily_member(pathkey->pk_opfamily,
 									 pk_datatype,
 									 pk_datatype,
-									 pathkey->pk_strategy);
+									 pathkey->pk_cmptype);
 		if (!OidIsValid(sortop))	/* should not happen */
 			elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
-				 pathkey->pk_strategy, pk_datatype, pk_datatype,
+				 pathkey->pk_cmptype, pk_datatype, pk_datatype,
 				 pathkey->pk_opfamily);
 
 		/* Add the column to the sort arrays */

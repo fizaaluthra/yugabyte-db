@@ -509,15 +509,16 @@ ProcessRewrittenIndexes(Oid rel_oid, const char *schema_name, List **new_rel_lis
 	SPI_tuptable = saved_tuptable;
 }
 
+/* YB: PG19 uses JsonbInState instead of JsonbParseState */
 void
-ProcessNewRelationsList(JsonbParseState *state, List **rel_list)
+ProcessNewRelationsList(JsonbInState *state, List **rel_list)
 {
 	if (!*rel_list)
 		return;
 
 	/* Add the extra context to the JSON output. */
 	AddJsonKey(state, "new_rel_map");
-	(void) pushJsonbValue(&state, WJB_BEGIN_ARRAY, NULL);
+	pushJsonbValue(state, WJB_BEGIN_ARRAY, NULL);
 
 	ListCell   *l;
 
@@ -525,7 +526,7 @@ ProcessNewRelationsList(JsonbParseState *state, List **rel_list)
 	{
 		YbNewRelMapEntry *entry = (YbNewRelMapEntry *) lfirst(l);
 
-		(void) pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
+		pushJsonbValue(state, WJB_BEGIN_OBJECT, NULL);
 		AddStringJsonEntry(state, "rel_name", entry->name);
 		AddStringJsonEntry(state, "rel_namespace", entry->namespace);
 		AddNumericJsonEntry(state, "relfile_oid", entry->relfile_oid);
@@ -533,13 +534,13 @@ ProcessNewRelationsList(JsonbParseState *state, List **rel_list)
 			AddNumericJsonEntry(state, "colocation_id", entry->colocation_id);
 		if (entry->is_index)
 			AddBoolJsonEntry(state, "is_index", true);
-		(void) pushJsonbValue(&state, WJB_END_OBJECT, NULL);
+		pushJsonbValue(state, WJB_END_OBJECT, NULL);
 
 		pfree(entry->name);
 		pfree(entry);
 	}
 
-	(void) pushJsonbValue(&state, WJB_END_ARRAY, NULL);
+	pushJsonbValue(state, WJB_END_ARRAY, NULL);
 }
 
 bool
@@ -696,7 +697,7 @@ GetSourceEventTriggerDDLCommands(YbCommandInfo **info_array_out)
 }
 
 void
-PushEnumLabelMap(JsonbParseState *state, char *map_key,
+PushEnumLabelMap(JsonbInState *state, char *map_key,
 				 List *enum_label_list)
 {
 	if (!enum_label_list)
@@ -711,7 +712,7 @@ PushEnumLabelMap(JsonbParseState *state, char *map_key,
 	 *----------
 	 */
 	AddJsonKey(state, map_key);
-	(void) pushJsonbValue(&state, WJB_BEGIN_ARRAY, NULL);
+	pushJsonbValue(state, WJB_BEGIN_ARRAY, NULL);
 
 	ListCell   *l;
 
@@ -719,21 +720,21 @@ PushEnumLabelMap(JsonbParseState *state, char *map_key,
 	{
 		YbEnumLabelMapEntry *entry = (YbEnumLabelMapEntry *) lfirst(l);
 
-		(void) pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
+		pushJsonbValue(state, WJB_BEGIN_OBJECT, NULL);
 		AddNumericJsonEntry(state, "enum_oid", entry->enum_oid);
 		AddStringJsonEntry(state, "label", entry->label_name);
 		AddNumericJsonEntry(state, "label_oid", entry->label_oid);
-		(void) pushJsonbValue(&state, WJB_END_OBJECT, NULL);
+		pushJsonbValue(state, WJB_END_OBJECT, NULL);
 
 		pfree(entry->label_name);
 		pfree(entry);
 	}
 
-	(void) pushJsonbValue(&state, WJB_END_ARRAY, NULL);
+	pushJsonbValue(state, WJB_END_ARRAY, NULL);
 }
 
 void
-PushNameToOidMap(JsonbParseState *state, char *map_key,
+PushNameToOidMap(JsonbInState *state, char *map_key,
 				 List *name_to_oid_info_list)
 {
 	if (!name_to_oid_info_list)
@@ -748,7 +749,7 @@ PushNameToOidMap(JsonbParseState *state, char *map_key,
 	 *----------
 	 */
 	AddJsonKey(state, map_key);
-	(void) pushJsonbValue(&state, WJB_BEGIN_ARRAY, NULL);
+	pushJsonbValue(state, WJB_BEGIN_ARRAY, NULL);
 
 	ListCell   *l;
 
@@ -756,22 +757,23 @@ PushNameToOidMap(JsonbParseState *state, char *map_key,
 	{
 		YbNameToOidMapEntry *entry = (YbNameToOidMapEntry *) lfirst(l);
 
-		(void) pushJsonbValue(&state, WJB_BEGIN_OBJECT, NULL);
+		pushJsonbValue(state, WJB_BEGIN_OBJECT, NULL);
 		AddStringJsonEntry(state, "schema", entry->schema);
 		AddStringJsonEntry(state, "name", entry->name);
 		AddNumericJsonEntry(state, "oid", entry->oid);
-		(void) pushJsonbValue(&state, WJB_END_OBJECT, NULL);
+		pushJsonbValue(state, WJB_END_OBJECT, NULL);
 
 		pfree(entry->schema);
 		pfree(entry->name);
 		pfree(entry);
 	}
 
-	(void) pushJsonbValue(&state, WJB_END_ARRAY, NULL);
+	pushJsonbValue(state, WJB_END_ARRAY, NULL);
 }
 
+/* YB: PG19 uses JsonbInState instead of JsonbParseState */
 bool
-ProcessSourceEventTriggerDDLCommands(JsonbParseState *state)
+ProcessSourceEventTriggerDDLCommands(JsonbInState *state)
 {
 	/*
 	 * First copy the command information that we get by using SPI_execute so

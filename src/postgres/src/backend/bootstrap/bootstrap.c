@@ -4,7 +4,7 @@
  *	  routines to support running postgres in 'bootstrap' mode
  *	bootstrap mode is used to create the initial template database
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -23,24 +23,21 @@
 #include "access/tableam.h"
 #include "access/toast_compression.h"
 #include "access/xact.h"
-#include "access/xlog_internal.h"
 #include "bootstrap/bootstrap.h"
 #include "catalog/index.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
 #include "common/link-canary.h"
-#include "libpq/pqsignal.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "pg_getopt.h"
-#include "storage/bufmgr.h"
+#include "postmaster/postmaster.h"
 #include "storage/bufpage.h"
-#include "storage/condition_variable.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
-#include "tcop/tcopprot.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
+#include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/relmapper.h"
@@ -53,9 +50,6 @@
 #include "pg_yb_utils.h"
 #include "storage/pg_shmem.h"
 #include <sys/stat.h>
-
-uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
-
 
 static void CheckerModeMain(void);
 static void bootstrap_signals(void);
@@ -123,6 +117,8 @@ static const struct typinfo TypInfo[] = {
 	F_REGROLEIN, F_REGROLEOUT},
 	{"regnamespace", REGNAMESPACEOID, 0, 4, true, TYPALIGN_INT, TYPSTORAGE_PLAIN, InvalidOid,
 	F_REGNAMESPACEIN, F_REGNAMESPACEOUT},
+	{"regdatabase", REGDATABASEOID, 0, 4, true, TYPALIGN_INT, TYPSTORAGE_PLAIN, InvalidOid,
+	F_REGDATABASEIN, F_REGDATABASEOUT},
 	{"text", TEXTOID, 0, -1, false, TYPALIGN_INT, TYPSTORAGE_EXTENDED, DEFAULT_COLLATION_OID,
 	F_TEXTIN, F_TEXTOUT},
 	{"oid", OIDOID, 0, 4, true, TYPALIGN_INT, TYPSTORAGE_PLAIN, InvalidOid,
@@ -215,6 +211,8 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	char	   *progname = argv[0];
 	int			flag;
 	char	   *userDoption = NULL;
+	uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
+	yyscan_t	scanner;
 
 	Assert(!IsUnderPostmaster);
 
@@ -237,6 +235,45 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 			case 'B':
 				SetConfigOption("shared_buffers", optarg, PGC_POSTMASTER, PGC_S_ARGV);
 				break;
+			case '-':
+
+				/*
+				 * Error if the user misplaced a special must-be-first option
+				 * for dispatching to a subprogram.  parse_dispatch_option()
+				 * returns DISPATCH_POSTMASTER if it doesn't find a match, so
+				 * error for anything else.
+				 */
+				if (parse_dispatch_option(optarg) != DISPATCH_POSTMASTER)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("--%s must be first argument", optarg)));
+
+			yb_switch_fallthrough();
+		case 'c':
+				{
+					char	   *name,
+							   *value;
+
+					ParseLongOption(optarg, &name, &value);
+					if (!value)
+					{
+						if (flag == '-')
+							ereport(ERROR,
+									(errcode(ERRCODE_SYNTAX_ERROR),
+									 errmsg("--%s requires a value",
+											optarg)));
+						else
+							ereport(ERROR,
+									(errcode(ERRCODE_SYNTAX_ERROR),
+									 errmsg("-c %s requires a value",
+											optarg)));
+					}
+
+					SetConfigOption(name, value, PGC_POSTMASTER, PGC_S_ARGV);
+					pfree(name);
+					pfree(value);
+					break;
+				}
 			case 'D':
 				userDoption = pstrdup(optarg);
 				break;
@@ -263,44 +300,8 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 				strlcpy(OutputFileName, optarg, MAXPGPATH);
 				break;
 			case 'X':
-				{
-					int			WalSegSz = strtoul(optarg, NULL, 0);
-
-					if (!IsValidWalSegSize(WalSegSz))
-						ereport(ERROR,
-								(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-								 errmsg("-X requires a power of two value between 1 MB and 1 GB")));
-					SetConfigOption("wal_segment_size", optarg, PGC_INTERNAL,
-									PGC_S_DYNAMIC_DEFAULT);
-				}
+				SetConfigOption("wal_segment_size", optarg, PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
 				break;
-			case 'c':
-			case '-':
-				{
-					char	   *name,
-							   *value;
-
-					ParseLongOption(optarg, &name, &value);
-					if (!value)
-					{
-						if (flag == '-')
-							ereport(ERROR,
-									(errcode(ERRCODE_SYNTAX_ERROR),
-									 errmsg("--%s requires a value",
-											optarg)));
-						else
-							ereport(ERROR,
-									(errcode(ERRCODE_SYNTAX_ERROR),
-									 errmsg("-c %s requires a value",
-											optarg)));
-					}
-
-					SetConfigOption(name, value, PGC_POSTMASTER, PGC_S_ARGV);
-					free(name);
-					if (value)
-						free(value);
-					break;
-				}
 			default:
 				write_stderr("Try \"%s --help\" for more information.\n",
 							 progname);
@@ -333,7 +334,22 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 
 	InitializeMaxBackends();
 
+	/*
+	 * Even though bootstrapping runs in single-process mode, initialize
+	 * postmaster child slots array so that --check can detect running out of
+	 * shared memory or other resources if max_connections is set too high.
+	 */
+	InitPostmasterChildSlots();
+
+	InitializeFastPathLocks();
+
 	CreateSharedMemoryAndSemaphores();
+
+	/*
+	 * Estimate number of openable files.  This is essential too in --check
+	 * mode, because on some platforms semaphores count as open files.
+	 */
+	set_max_safe_fds();
 
 	/*
 	 * XXX: It might make sense to move this into its own function at some
@@ -363,7 +379,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	umask(yb_oumask);
 
 	bootstrap_signals();
-	BootStrapXLOG();
+	BootStrapXLOG(bootstrap_data_checksum_version);
 
 	/*
 	 * To ensure that src/common/link-canary.c is linked into the backend, we
@@ -372,7 +388,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	if (pg_link_canary_is_frontend())
 		elog(ERROR, "backend is incorrectly linked to frontend functions");
 
-	InitPostgres(NULL, InvalidOid, NULL, InvalidOid, false, false, NULL);
+	InitPostgres(NULL, InvalidOid, NULL, InvalidOid, 0, NULL);
 
 	/* Initialize stuff for bootstrap-file processing */
 	for (i = 0; i < MAXATTR; i++)
@@ -381,6 +397,8 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 		Nulls[i] = false;
 	}
 
+	if (boot_yylex_init(&scanner) != 0)
+		elog(ERROR, "yylex_init() failed: %m");
 
 	/*
 	 * In YugaByte we only need to create the template1 database
@@ -401,7 +419,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	 * Process bootstrap input.
 	 */
 	StartTransactionCommand();
-	boot_yyparse();
+	boot_yyparse(scanner);
 	CommitTransactionCommand();
 
 	/* We do not use a relation map file in YugaByte mode yet */
@@ -484,8 +502,8 @@ boot_openrel(char *relname)
 	{
 		if (attrtypes[i] == NULL)
 			attrtypes[i] = AllocateAttribute();
-		memmove((char *) attrtypes[i],
-				(char *) TupleDescAttr(boot_reldesc->rd_att, i),
+		memmove(attrtypes[i],
+				TupleDescAttr(boot_reldesc->rd_att, i),
 				ATTRIBUTE_FIXED_PART_SIZE);
 
 		{
@@ -503,19 +521,19 @@ boot_openrel(char *relname)
  * ----------------
  */
 void
-closerel(char *name)
+closerel(char *relname)
 {
-	if (name)
+	if (relname)
 	{
 		if (boot_reldesc)
 		{
-			if (strcmp(RelationGetRelationName(boot_reldesc), name) != 0)
+			if (strcmp(RelationGetRelationName(boot_reldesc), relname) != 0)
 				elog(ERROR, "close of %s when %s was expected",
-					 name, RelationGetRelationName(boot_reldesc));
+					 relname, RelationGetRelationName(boot_reldesc));
 		}
 		else
 			elog(ERROR, "close of %s before any relation was opened",
-				 name);
+				 relname);
 	}
 
 	if (boot_reldesc == NULL)
@@ -601,8 +619,6 @@ DefineAttr(char *name, char *type, int attnum, int nullness)
 	if (OidIsValid(attrtypes[attnum]->attcollation))
 		attrtypes[attnum]->attcollation = C_COLLATION_OID;
 
-	attrtypes[attnum]->attstattarget = -1;
-	attrtypes[attnum]->attcacheoff = -1;
 	attrtypes[attnum]->atttypmod = -1;
 	attrtypes[attnum]->attislocal = true;
 
@@ -699,7 +715,7 @@ InsertOneValue(char *value, int i)
 	Oid			typinput;
 	Oid			typoutput;
 
-	AssertArg(i >= 0 && i < MAXATTR);
+	Assert(i >= 0 && i < MAXATTR);
 
 	elog(DEBUG4, "inserting column %d value \"%s\"", i, value);
 
@@ -774,7 +790,7 @@ populate_typ_list(void)
 		Form_pg_type typForm = (Form_pg_type) GETSTRUCT(tup);
 		struct typmap *newtyp;
 
-		newtyp = (struct typmap *) palloc(sizeof(struct typmap));
+		newtyp = palloc_object(struct typmap);
 		Typ = lappend(Typ, newtyp);
 
 		newtyp->am_oid = typForm->oid;
@@ -965,7 +981,7 @@ AllocateAttribute(void)
 void
 index_register(Oid heap,
 			   Oid ind,
-			   IndexInfo *indexInfo)
+			   const IndexInfo *indexInfo)
 {
 	IndexList  *newind;
 	MemoryContext oldcxt;
@@ -983,10 +999,10 @@ index_register(Oid heap,
 
 	oldcxt = MemoryContextSwitchTo(nogc);
 
-	newind = (IndexList *) palloc(sizeof(IndexList));
+	newind = palloc_object(IndexList);
 	newind->il_heap = heap;
 	newind->il_ind = ind;
-	newind->il_info = (IndexInfo *) palloc(sizeof(IndexInfo));
+	newind->il_info = palloc_object(IndexInfo);
 
 	memcpy(newind->il_info, indexInfo, sizeof(IndexInfo));
 	/* expressions will likely be null, but may as well copy it */

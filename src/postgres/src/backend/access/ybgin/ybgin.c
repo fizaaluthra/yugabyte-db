@@ -32,6 +32,24 @@
 #include "postgres_ext.h"
 
 /*
+ * PG19 requires aminsert != NULL (Assert in GetIndexAmRoutine). YB indexes use
+ * yb_aminsert instead; this stub satisfies the assert and should never run.
+ */
+static bool
+ybgin_aminsert_stub(Relation indexRelation,
+					Datum *values,
+					bool *isnull,
+					ItemPointer heap_tid,
+					Relation heapRelation,
+					IndexUniqueCheck checkUnique,
+					bool indexUnchanged,
+					IndexInfo *indexInfo)
+{
+	elog(ERROR, "aminsert called on YBGIN index; use yb_aminsert path");
+	return false;
+}
+
+/*
  * YBGIN handler function: return IndexAmRoutine with access method parameters
  * and callbacks.
  */
@@ -60,7 +78,7 @@ ybginhandler(PG_FUNCTION_ARGS)
 
 	amroutine->ambuild = ybginbuild;
 	amroutine->ambuildempty = ybginbuildempty;
-	amroutine->aminsert = NULL; /* use yb_aminsert below instead */
+	amroutine->aminsert = ybgin_aminsert_stub;
 	amroutine->ambulkdelete = ybginbulkdelete;
 	amroutine->amvacuumcleanup = ybginvacuumcleanup;
 	amroutine->amcanreturn = NULL;

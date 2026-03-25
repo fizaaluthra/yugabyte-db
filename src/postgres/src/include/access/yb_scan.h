@@ -412,7 +412,7 @@ extern void ybFetchNext(YbcPgStatement handle, TupleTableSlot *slot, Oid relid);
 
 extern int	ybParallelWorkers(double numrows);
 
-extern Size yb_estimate_parallel_size(void);
+extern Size yb_estimate_parallel_size(Relation rel, int nkeys, int norderbys);
 extern void yb_init_partition_key_data(void *data);
 extern void ybParallelPrepare(YBParallelPartitionKeys ppk, Relation relation,
 							  YbcPgExecParameters *exec_params,

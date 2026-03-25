@@ -32,14 +32,11 @@
 #include "access/htup_details.h"
 #include "access/nbtree.h"
 #include "access/relation.h"
-#include "access/table.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_am.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
-#include "storage/lmgr.h"
-#include "utils/builtins.h"
 #include "utils/rel.h"
 #include "utils/varlena.h"
 
@@ -311,7 +308,7 @@ pgstatindex_impl(Relation rel, FunctionCallInfo fcinfo)
 
 			max_avail = BLCKSZ - (BLCKSZ - ((PageHeader) page)->pd_special + SizeOfPageHeaderData);
 			indexStat.max_avail += max_avail;
-			indexStat.free_space += PageGetFreeSpace(page);
+			indexStat.free_space += PageGetExactFreeSpace(page);
 
 			indexStat.leaf_pages++;
 
@@ -517,6 +514,10 @@ pgstatginindex_internal(Oid relid, FunctionCallInfo fcinfo)
 	bool		nulls[3] = {false, false, false};
 	Datum		result;
 
+	/*
+	 * This uses relation_open() and not index_open().  The latter allows
+	 * partitioned indexes, and these are forbidden here.
+	 */
 	rel = relation_open(relid, AccessShareLock);
 
 	if (!IS_INDEX(rel) || !IS_GIN(rel))
@@ -594,12 +595,16 @@ pgstathashindex(PG_FUNCTION_ARGS)
 	HeapTuple	tuple;
 	TupleDesc	tupleDesc;
 	Datum		values[8];
-	bool		nulls[8];
+	bool		nulls[8] = {0};
 	Buffer		metabuf;
 	HashMetaPage metap;
 	float8		free_percent;
 	uint64		total_space;
 
+	/*
+	 * This uses relation_open() and not index_open().  The latter allows
+	 * partitioned indexes, and these are forbidden here.
+	 */
 	rel = relation_open(relid, AccessShareLock);
 
 	if (!IS_INDEX(rel) || !IS_HASH(rel))
@@ -650,7 +655,7 @@ pgstathashindex(PG_FUNCTION_ARGS)
 		buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
 								 bstrategy);
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
-		page = (Page) BufferGetPage(buf);
+		page = BufferGetPage(buf);
 
 		if (PageIsNew(page))
 			stats.unused_pages++;
@@ -694,7 +699,7 @@ pgstathashindex(PG_FUNCTION_ARGS)
 	}
 
 	/* Done accessing the index */
-	index_close(rel, AccessShareLock);
+	relation_close(rel, AccessShareLock);
 
 	/* Count unused pages as free space. */
 	stats.free_space += (uint64) stats.unused_pages * stats.space_per_page;
@@ -722,7 +727,6 @@ pgstathashindex(PG_FUNCTION_ARGS)
 	/*
 	 * Build and return the tuple
 	 */
-	MemSet(nulls, 0, sizeof(nulls));
 	values[0] = Int32GetDatum(stats.version);
 	values[1] = Int64GetDatum((int64) stats.bucket_pages);
 	values[2] = Int64GetDatum((int64) stats.overflow_pages);

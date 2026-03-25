@@ -548,7 +548,7 @@ ybcinrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys, ScanKey orderbys
 		ScanDirection direction = ForwardScanDirection;
 
 		ybScan->pscan = (YBParallelPartitionKeys)
-			OffsetToPointer(target, target->ps_offset);
+			OffsetToPointer(target, target->ps_offset_am);
 		Relation	rel = scan->indexRelation;
 
 		/* If scan is by the PK, use the main relation instead */
@@ -731,6 +731,24 @@ ybcinbindschema(YbcPgStatement handle,
 }
 
 /*
+ * PG19 requires aminsert != NULL (Assert in GetIndexAmRoutine). YB indexes use
+ * yb_aminsert instead; this stub satisfies the assert and should never run.
+ */
+static bool
+ybcin_aminsert_stub(Relation indexRelation,
+					Datum *values,
+					bool *isnull,
+					ItemPointer heap_tid,
+					Relation heapRelation,
+					IndexUniqueCheck checkUnique,
+					bool indexUnchanged,
+					IndexInfo *indexInfo)
+{
+	elog(ERROR, "aminsert called on YB LSM index; use yb_aminsert path");
+	return false;
+}
+
+/*
  * LSM handler function: return IndexAmRoutine with access method parameters
  * and callbacks.
  */
@@ -759,7 +777,7 @@ ybcinhandler(PG_FUNCTION_ARGS)
 
 	amroutine->ambuild = ybcinbuild;
 	amroutine->ambuildempty = ybcinbuildempty;
-	amroutine->aminsert = NULL; /* use yb_aminsert below instead */
+	amroutine->aminsert = ybcin_aminsert_stub;
 	amroutine->ambulkdelete = ybcinbulkdelete;
 	amroutine->amvacuumcleanup = ybcinvacuumcleanup;
 	amroutine->amcanreturn = ybcincanreturn;
@@ -786,6 +804,8 @@ ybcinhandler(PG_FUNCTION_ARGS)
 	amroutine->yb_ammightrecheck = ybcinmightrecheck;
 	amroutine->yb_amgetbitmap = ybcgetbitmap;
 	amroutine->yb_ambindschema = ybcinbindschema;
+	amroutine->amtranslatestrategy = bttranslatestrategy;
+	amroutine->amtranslatecmptype = bttranslatecmptype;
 
 	PG_RETURN_POINTER(amroutine);
 }

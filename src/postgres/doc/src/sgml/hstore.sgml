@@ -1,7 +1,7 @@
 <!-- doc/src/sgml/hstore.sgml -->
 
 <sect1 id="hstore" xreflabel="hstore">
- <title>hstore</title>
+ <title>hstore &mdash; hstore key/value datatype</title>
 
  <indexterm zone="hstore">
   <primary>hstore</primary>
@@ -21,7 +21,7 @@
   on the current database.
  </para>
 
- <sect2>
+ <sect2 id="hstore-external-rep">
   <title><type>hstore</type> External Representation</title>
 
   <para>
@@ -88,7 +88,7 @@ key =&gt; NULL
 
  </sect2>
 
- <sect2>
+ <sect2 id="hstore-ops-funcs">
   <title><type>hstore</type> Operators and Functions</title>
 
   <para>
@@ -600,7 +600,7 @@ b
         Extracts an <type>hstore</type>'s keys and values as a set of records.
        </para>
        <para>
-        <literal>select * from each('a=&gt;1,b=&gt;2')</literal>
+        <literal>SELECT * FROM each('a=&gt;1,b=&gt;2')</literal>
         <returnvalue></returnvalue>
 <programlisting>
  key | value
@@ -738,7 +738,7 @@ SELECT h FROM mytable;
   </para>
  </sect2>
 
- <sect2>
+ <sect2 id="hstore-indexes">
   <title>Indexes</title>
 
   <para>
@@ -784,7 +784,7 @@ CREATE INDEX hidx ON testhstore USING HASH (h);
 </programlisting>
  </sect2>
 
- <sect2>
+ <sect2 id="hstore-examples">
   <title>Examples</title>
 
   <para>
@@ -799,7 +799,7 @@ UPDATE tab SET h = h || hstore('c', '3');
    If multiple keys are to be added or changed in one operation,
    the concatenation approach is more efficient than subscripting:
 <programlisting>
-UPDATE tab SET h = h || hstore(array['q', 'w'], array['11', '12']);
+UPDATE tab SET h = h || hstore(ARRAY['q', 'w'], ARRAY['11', '12']);
 </programlisting>
   </para>
 
@@ -853,7 +853,7 @@ SELECT (r).* FROM (SELECT t #= '"col3"=&gt;"baz"' AS r FROM test t) s;
   </para>
  </sect2>
 
- <sect2>
+ <sect2 id="hstore-statistics">
   <title>Statistics</title>
 
   <para>
@@ -900,7 +900,7 @@ SELECT key, count(*) FROM
   </para>
  </sect2>
 
- <sect2>
+ <sect2 id="hstore-compatibility">
   <title>Compatibility</title>
 
   <para>
@@ -933,7 +933,7 @@ ALTER TABLE tablename ALTER hstorecol TYPE hstore USING hstorecol || '';
 
  </sect2>
 
- <sect2>
+ <sect2 id="hstore-transforms">
   <title>Transforms</title>
 
   <para>
@@ -946,18 +946,9 @@ ALTER TABLE tablename ALTER hstorecol TYPE hstore USING hstorecol || '';
    extension for PL/Python is called <literal>hstore_plpython3u</literal>.
    If you use it, <type>hstore</type> values are mapped to Python dictionaries.
   </para>
-
-  <caution>
-   <para>
-    It is strongly recommended that the transform extensions be installed in
-    the same schema as <filename>hstore</filename>.  Otherwise there are
-    installation-time security hazards if a transform extension's schema
-    contains objects defined by a hostile user.
-   </para>
-  </caution>
  </sect2>
 
- <sect2>
+ <sect2 id="hstore-authors">
   <title>Authors</title>
 
   <para>

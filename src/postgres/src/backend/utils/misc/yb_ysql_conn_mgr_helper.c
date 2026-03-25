@@ -34,6 +34,8 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_yb_role_profile.h"
+#include "catalog/indexing.h"
+#include "catalog/pg_database.h"
 #include "commands/dbcommands.h"
 #include "common/ip.h"
 #include "libpq/libpq-be.h"
@@ -41,6 +43,7 @@
 #include "libpq/pqformat.h"
 #include "pg_yb_utils.h"
 #include "storage/dsm_impl.h"
+#include "storage/procarray.h"
 #include "storage/procarray.h"
 #include "utils/acl.h"
 #include "utils/guc.h"
@@ -795,6 +798,82 @@ SetLogicalClientUserDetailsIfValid(const char *rolename, bool *is_superuser,
 
 	ReleaseSysCache(roleTup);
 	return 0;
+}
+
+/*
+ * YbCheckMyDatabase -- Check database connect permission (adapted from
+ * CheckMyDatabase in postinit.c). Used during connection manager auth
+ * passthrough when MyDatabaseId is not yet set. On failure, sets
+ * MyProcPort->yb_has_auth_passthrough_failed and returns.
+ */
+static void
+YbCheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connections,
+				  Oid database_oid)
+{
+	HeapTuple	tup;
+	Form_pg_database dbform;
+
+	MyProcPort->yb_has_auth_passthrough_failed = false;
+
+	if (!OidIsValid(database_oid))
+		return;
+
+	tup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(database_oid));
+	if (!HeapTupleIsValid(tup))
+		return;
+
+	dbform = (Form_pg_database) GETSTRUCT(tup);
+
+	if (strcmp(name, NameStr(dbform->datname)) != 0)
+	{
+		ReleaseSysCache(tup);
+		return;
+	}
+
+	if (IsUnderPostmaster)
+	{
+		if (!dbform->datallowconn && !override_allow_connections)
+		{
+			ReleaseSysCache(tup);
+			MyProcPort->yb_has_auth_passthrough_failed = true;
+			YbSendFatalForLogicalConnectionPacket();
+			ereport(WARNING,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("database \"%s\" is not currently accepting connections",
+							name)));
+			return;
+		}
+
+		if (!am_superuser && !override_allow_connections &&
+			object_aclcheck(DatabaseRelationId, database_oid, GetUserId(),
+							ACL_CONNECT) != ACLCHECK_OK)
+		{
+			ReleaseSysCache(tup);
+			MyProcPort->yb_has_auth_passthrough_failed = true;
+			YbSendFatalForLogicalConnectionPacket();
+			ereport(WARNING,
+					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					 errmsg("permission denied for database \"%s\"", name),
+					 errdetail("User does not have CONNECT privilege.")));
+			return;
+		}
+
+		if (dbform->datconnlimit >= 0 &&
+			AmRegularBackendProcess() &&
+			!am_superuser &&
+			CountDBConnections(database_oid) > dbform->datconnlimit)
+		{
+			ReleaseSysCache(tup);
+			MyProcPort->yb_has_auth_passthrough_failed = true;
+			YbSendFatalForLogicalConnectionPacket();
+			ereport(WARNING,
+					(errcode(ERRCODE_TOO_MANY_CONNECTIONS),
+					 errmsg("too many connections for database \"%s\"", name)));
+			return;
+		}
+	}
+
+	ReleaseSysCache(tup);
 }
 
 static inline void

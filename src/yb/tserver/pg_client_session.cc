@@ -2928,7 +2928,7 @@ class PgClientSession::Impl {
     // any operations postponed to the end of transaction. If the status is known
     // (commit.has_value() is true), then report the status of the transaction and wait for the
     // post-processing by YB-Master to end.
-    if (YsqlDdlRollbackEnabled() && metadata) {
+    if (YsqlDdlRollbackEnabled() && metadata && !metadata->transaction_id.IsNil()) {
       if (has_docdb_schema_changes ) {
         if (commit.has_value() && FLAGS_report_ysql_ddl_txn_status_to_master) {
           // If we failed to report the status of this DDL transaction, we can just log and ignore
@@ -3757,9 +3757,15 @@ class PgClientSession::Impl {
       }
       metadata = &ddl_txn_metadata_;
     }
+    // DDL abort might not have metadata set in the following cases:
+    // 1. backend detects timeout before the previous rpc (which sets ddl_txn_metadata_) returns.
+    // 2. DDL fails even before moving to the phase where ddl_txn_metadata_ gets set.
+    //
+    // In all such cases, no state would exist with the master's ddl verifier, it is ok to
+    // just abort the YBTransaction and move on.
     RSTATUS_DCHECK(
-        !has_docdb_schema_changes || !metadata->transaction_id.IsNil(), IllegalState,
-        "Valid ddl metadata is required");
+        !has_docdb_schema_changes || !metadata->transaction_id.IsNil() || !req.commit(),
+        IllegalState, "Valid ddl metadata is required for ddl commit");
 
     if (req.commit()) {
       auto commit_status = Commit(
@@ -3837,8 +3843,6 @@ class PgClientSession::Impl {
       return ResultToStatus(
           DoReleaseObjectLocks(txn->id(), subtxn_id, deadline, has_exclusive_locks));
     }
-    // It could happen that transaction_provider_.next_plain_ is null when txn finish
-    // calls are redundant. If so, treat it as a no-op instead of setting next_plain_.
     if (!transaction_provider_.HasNextTxnForPlain()) {
       return Status::OK();
     }

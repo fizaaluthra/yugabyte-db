@@ -77,6 +77,8 @@
 
 COMPILER = $(CC) $(CFLAGS)
 LINK.static = $(AR) $(AROPT)
+# YB: PG19 no longer sets RANLIB via configure; default to system ranlib.
+RANLIB ?= ranlib
 
 LDFLAGS_INTERNAL += $(SHLIB_LINK_INTERNAL)
 

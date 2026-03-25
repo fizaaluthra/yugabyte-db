@@ -3,7 +3,7 @@
  * postinit.c
  *	  postgres initialization utilities
  *
- * Portions Copyright (c) 1996-2022, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -38,12 +38,10 @@
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/session.h"
-#include "access/sysattr.h"
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
-#include "catalog/catalog.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_collation.h"
@@ -58,22 +56,27 @@
 #include "postmaster/autovacuum.h"
 #include "postmaster/postmaster.h"
 #include "replication/slot.h"
+#include "replication/slotsync.h"
 #include "replication/walsender.h"
+#include "storage/aio_subsys.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "storage/procnumber.h"
 #include "storage/procsignal.h"
 #include "storage/sinvaladt.h"
 #include "storage/smgr.h"
 #include "storage/sync.h"
+#include "tcop/backend_startup.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
-#include "utils/guc.h"
+#include "utils/guc_hooks.h"
+#include "utils/injection_point.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/portal.h"
@@ -91,7 +94,6 @@
 #include "catalog/pg_yb_tablegroup.h"
 #include "catalog/yb_catalog_version.h"
 #include "catalog/yb_logical_client_version.h"
-#include "commands/dbcommands.h"
 #include "utils/yb_inheritscache.h"
 #include "yb/yql/pggate/ybc_gflags.h"
 
@@ -103,6 +105,7 @@ static void ShutdownPostgres(int code, Datum arg);
 static void StatementTimeoutHandler(void);
 static void LockTimeoutHandler(void);
 static void IdleInTransactionSessionTimeoutHandler(void);
+static void TransactionTimeoutHandler(void);
 static void IdleSessionTimeoutHandler(void);
 static void IdleStatsUpdateTimeoutHandler(void);
 static void ClientCheckTimeoutHandler(void);
@@ -249,7 +252,8 @@ PerformAuthentication(Port *port)
 		 * since there is no way to connect to the database in this case.
 		 */
 		ereport(FATAL,
-				(errmsg("could not load pg_hba.conf")));
+		/* translator: %s is a configuration file */
+				(errmsg("could not load %s", HbaFileName)));
 	}
 
 	if (!load_ident())
@@ -262,6 +266,9 @@ PerformAuthentication(Port *port)
 		 */
 	}
 #endif
+
+	/* Capture authentication start time for logging */
+	conn_timing.auth_start = GetCurrentTimestamp();
 
 	/*
 	 * Set up a timeout in case a buggy or malicious client fails to respond
@@ -281,7 +288,10 @@ PerformAuthentication(Port *port)
 	 */
 	disable_timeout(STATEMENT_TIMEOUT, false);
 
-	if (Log_connections)
+	/* Capture authentication end time for logging */
+	conn_timing.auth_end = GetCurrentTimestamp();
+
+	if (log_connections & LOG_CONNECTION_AUTHORIZATION)
 	{
 		StringInfoData logmsg;
 
@@ -313,15 +323,17 @@ PerformAuthentication(Port *port)
 
 			if (princ)
 				appendStringInfo(&logmsg,
-								 _(" GSS (authenticated=%s, encrypted=%s, principal=%s)"),
+								 _(" GSS (authenticated=%s, encrypted=%s, delegated_credentials=%s, principal=%s)"),
 								 be_gssapi_get_auth(port) ? _("yes") : _("no"),
 								 be_gssapi_get_enc(port) ? _("yes") : _("no"),
+								 be_gssapi_get_delegation(port) ? _("yes") : _("no"),
 								 princ);
 			else
 				appendStringInfo(&logmsg,
-								 _(" GSS (authenticated=%s, encrypted=%s)"),
+								 _(" GSS (authenticated=%s, encrypted=%s, delegated_credentials=%s)"),
 								 be_gssapi_get_auth(port) ? _("yes") : _("no"),
-								 be_gssapi_get_enc(port) ? _("yes") : _("no"));
+								 be_gssapi_get_enc(port) ? _("yes") : _("no"),
+								 be_gssapi_get_delegation(port) ? _("yes") : _("no"));
 		}
 #endif
 
@@ -337,143 +349,6 @@ PerformAuthentication(Port *port)
 	ClientAuthInProgress = false;	/* client_min_messages is active now */
 }
 
-static int
-YbHandleAuthPassthroughFailureAndGetElevel()
-{
-	Assert(YbIsAuthPassthroughInProgress(MyProcPort));
-
-	MyProcPort->yb_has_auth_passthrough_failed = true;
-	YbSendFatalForLogicalConnectionPacket();
-
-	return YbAuthFailedErrorLevel(true /* auth_passthrough */ );
-}
-
-/*
- * YB: This function is essentially a copy of the first half of CheckMyDatabase.
- * This is used in the Auth Passthrough mode of Connection Manager to performs
- * checks on db CONNECT privileges during authentication, while avoiding
- * changing other state on the control backend.
- * This functions checks:
- *   1) Whether the supplied dbname matches the dboid
- *   2) Whether the database is accepting connections
- *   3) Whether the user has login privileges for this db
- *
- * We do not perform the GUC settings in the latter half of the function to
- * avoid unnecessary state changes on the control backend as these will be done
- * on the appropriate transactional backend when the client fires a query.
- */
-void
-YbCheckMyDatabase(const char *name, bool am_superuser,
-				  bool override_allow_connections, Oid db_oid)
-{
-	Assert(YbIsAuthPassthroughInProgress(MyProcPort));
-
-	HeapTuple	tup;
-	Form_pg_database dbform;
-
-	/* Fetch our pg_database row normally, via syscache */
-	tup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(db_oid));
-	if (!HeapTupleIsValid(tup))
-	{
-		elog(YbHandleAuthPassthroughFailureAndGetElevel(),
-			 "cache lookup failed for database %u or "
-			 "database \"%s\" does not exist", db_oid, name);
-		return;
-	}
-	dbform = (Form_pg_database) GETSTRUCT(tup);
-
-	/* This recheck is strictly paranoia */
-	if (strcmp(name, NameStr(dbform->datname)) != 0)
-	{
-		ereport(YbHandleAuthPassthroughFailureAndGetElevel(),
-				(errcode(ERRCODE_UNDEFINED_DATABASE),
-				 errmsg("database \"%s\" has disappeared from pg_database", name),
-				 errdetail("Database OID %u now seems to belong to \"%s\".", db_oid,
-						   NameStr(dbform->datname))));
-
-		return;
-	}
-
-	/*
-	 * Check permissions to connect to the database.
-	 *
-	 * These checks are not enforced when in standalone mode, so that there is
-	 * a way to recover from disabling all access to all databases, for
-	 * example "UPDATE pg_database SET datallowconn = false;".
-	 */
-	if (IsUnderPostmaster)
-	{
-		/*
-		 * Check that the database is currently allowing connections.
-		 * (Background processes can override this test and the next one by
-		 * setting override_allow_connections.)
-		 */
-		if (!dbform->datallowconn && !override_allow_connections)
-		{
-			ereport(YbHandleAuthPassthroughFailureAndGetElevel(),
-					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-					 errmsg("database \"%s\" is not currently accepting "
-							"connections",
-							name)));
-
-			return;
-		}
-
-		/*
-		 * Check privilege to connect to the database.  (The am_superuser test
-		 * is redundant, but since we have the flag, might as well check it
-		 * and save a few cycles.)
-		 */
-		if (!am_superuser && !override_allow_connections &&
-			pg_database_aclcheck(db_oid, GetUserId(), ACL_CONNECT) !=
-			ACLCHECK_OK)
-		{
-			ereport(YbHandleAuthPassthroughFailureAndGetElevel(),
-					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					 errmsg("permission denied for database \"%s\"", name),
-					 errdetail("User does not have CONNECT privilege.")));
-
-			return;
-		}
-
-		/*
-		 * Check connection limit for this database.  We enforce the limit
-		 * only for regular backends, since other process types have their own
-		 * PGPROC pools.
-		 *
-		 * There is a race condition here --- we create our PGPROC before
-		 * checking for other PGPROCs.  If two backends did this at about the
-		 * same time, they might both think they were over the limit, while
-		 * ideally one should succeed and one fail.  Getting that to work
-		 * exactly seems more trouble than it is worth, however; instead we
-		 * just document that the connection limit is approximate.
-		 */
-		if (dbform->datconnlimit >= 0 && AmRegularBackendProcess() &&
-			!am_superuser && CountDBConnections(db_oid) > dbform->datconnlimit)
-		{
-			ereport(YbHandleAuthPassthroughFailureAndGetElevel(),
-					(errcode(ERRCODE_TOO_MANY_CONNECTIONS),
-					 errmsg("too many connections for database \"%s\"", name)));
-
-			return;
-		}
-	}
-
-	/*
-	 * OK, we're golden.  Next to-do item is to save the encoding info out of
-	 * the pg_database tuple.
-	 * YB: GUC SOURCE has been changed to PGC_S_CLIENT from
-	 * PGC_S_DEFAULT_DYNAMIC in order to avoid setting defaults and sending
-	 * PARAMETER STATUS packets back on auth failure.
-	 */
-	SetDatabaseEncoding(dbform->encoding);
-	/* Record it as a GUC internal option, too */
-	SetConfigOption("server_encoding", GetDatabaseEncodingName(), PGC_INTERNAL,
-					PGC_S_CLIENT);
-	/* If we have no other source of client_encoding, use server encoding */
-	SetConfigOption("client_encoding", GetDatabaseEncodingName(), PGC_BACKEND,
-					PGC_S_CLIENT);
-}
 
 /*
  * CheckMyDatabase -- fetch information from the pg_database entry for our DB
@@ -487,7 +362,6 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	bool		isnull;
 	char	   *collate;
 	char	   *ctype;
-	char	   *iculocale;
 
 	/* Fetch our pg_database row normally, via syscache */
 	tup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
@@ -530,8 +404,8 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 		 * and save a few cycles.)
 		 */
 		if (!am_superuser && !override_allow_connections &&
-			pg_database_aclcheck(MyDatabaseId, GetUserId(),
-								 ACL_CONNECT) != ACLCHECK_OK)
+			object_aclcheck(DatabaseRelationId, MyDatabaseId, GetUserId(),
+							ACL_CONNECT) != ACLCHECK_OK)
 			ereport(FATAL,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied for database \"%s\"", name),
@@ -572,19 +446,16 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 					PGC_BACKEND, PGC_S_DYNAMIC_DEFAULT);
 
 	/* assign locale variables */
-	datum = SysCacheGetAttr(DATABASEOID, tup, Anum_pg_database_datcollate, &isnull);
-	Assert(!isnull);
+	datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datcollate);
 	collate = TextDatumGetCString(datum);
-	datum = SysCacheGetAttr(DATABASEOID, tup, Anum_pg_database_datctype, &isnull);
-	Assert(!isnull);
+	datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datctype);
 	ctype = TextDatumGetCString(datum);
 
-	if (pg_perm_setlocale(LC_COLLATE, collate) == NULL)
-		ereport(FATAL,
-				(errmsg("database locale is incompatible with operating system"),
-				 errdetail("The database was initialized with LC_COLLATE \"%s\", "
-						   " which is not recognized by setlocale().", collate),
-				 errhint("Recreate the database with another locale or install the missing locale.")));
+	/*
+	 * Historically, we set LC_COLLATE from datcollate, as well. That's no
+	 * longer necessary because all collation behavior is handled through
+	 * pg_locale_t.
+	 */
 
 	if (pg_perm_setlocale(LC_CTYPE, ctype) == NULL)
 		ereport(FATAL,
@@ -593,41 +464,13 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 						   " which is not recognized by setlocale().", ctype),
 				 errhint("Recreate the database with another locale or install the missing locale.")));
 
-	if (strcmp(ctype, "C") == 0 ||
-		strcmp(ctype, "POSIX") == 0)
-		database_ctype_is_c = true;
-
-	/* YbPresetDatabaseCollation may have already populated default_locale */
-	if (IsYugaByteEnabled())
-	{
-		if (default_locale.info.icu.locale)
-			pfree((void *) default_locale.info.icu.locale);
-		if (default_locale.info.icu.ucol)
-			ucol_close(default_locale.info.icu.ucol);
-		default_locale = (struct pg_locale_struct)
-		{
-			0
-		};
-	}
-
-	if (dbform->datlocprovider == COLLPROVIDER_ICU)
-	{
-		datum = SysCacheGetAttr(DATABASEOID, tup, Anum_pg_database_daticulocale, &isnull);
-		Assert(!isnull);
-		iculocale = TextDatumGetCString(datum);
-		make_icu_collator(iculocale, &default_locale);
-	}
-	else
-		iculocale = NULL;
-
-	default_locale.provider = dbform->datlocprovider;
-
 	/*
-	 * Default locale is currently always deterministic.  Nondeterministic
-	 * locales currently don't support pattern matching, which would break a
-	 * lot of things if applied globally.
+	 * In YB mode, init_database_collation() was already called from
+	 * YbPresetDatabaseCollation() during early InitPostgres processing.
+	 * Skip it here to avoid re-initializing.
 	 */
-	default_locale.deterministic = true;
+	if (!IsYugaByteEnabled())
+		init_database_collation();
 
 	/*
 	 * Check collation version.  See similar code in
@@ -640,10 +483,19 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 	{
 		char	   *actual_versionstr;
 		char	   *collversionstr;
+		char	   *locale;
 
 		collversionstr = TextDatumGetCString(datum);
 
-		actual_versionstr = get_collation_actual_version(dbform->datlocprovider, dbform->datlocprovider == COLLPROVIDER_ICU ? iculocale : collate);
+		if (dbform->datlocprovider == COLLPROVIDER_LIBC)
+			locale = collate;
+		else
+		{
+			datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datlocale);
+			locale = TextDatumGetCString(datum);
+		}
+
+		actual_versionstr = get_collation_actual_version(dbform->datlocprovider, locale);
 		if (!actual_versionstr)
 			/* should not happen */
 			elog(WARNING,
@@ -661,12 +513,6 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 							 "or build PostgreSQL with the right library version.",
 							 quote_identifier(name))));
 	}
-
-	/* Make the locale settings visible as GUC variables, too */
-	SetConfigOption("lc_collate", collate, PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
-	SetConfigOption("lc_ctype", ctype, PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
-
-	check_strxfrm_bug();
 
 	ReleaseSysCache(tup);
 }
@@ -745,13 +591,48 @@ InitializeMaxBackends(void)
 {
 	Assert(MaxBackends == 0);
 
-	/* the extra unit accounts for the autovacuum launcher */
-	MaxBackends = MaxConnections + autovacuum_max_workers + 1 +
-		max_worker_processes + max_wal_senders;
+	/* Note that this does not include "auxiliary" processes */
+	MaxBackends = MaxConnections + autovacuum_worker_slots +
+		max_worker_processes + max_wal_senders + NUM_SPECIAL_WORKER_PROCS;
 
-	/* internal error because the values were all checked previously */
 	if (MaxBackends > MAX_BACKENDS)
-		elog(ERROR, "too many backends configured");
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("too many server processes configured"),
+				 errdetail("\"max_connections\" (%d) plus \"autovacuum_worker_slots\" (%d) plus \"max_worker_processes\" (%d) plus \"max_wal_senders\" (%d) must be less than %d.",
+						   MaxConnections, autovacuum_worker_slots,
+						   max_worker_processes, max_wal_senders,
+						   MAX_BACKENDS - (NUM_SPECIAL_WORKER_PROCS - 1))));
+}
+
+/*
+ * Initialize the number of fast-path lock slots in PGPROC.
+ *
+ * This must be called after modules have had the chance to alter GUCs in
+ * shared_preload_libraries and before shared memory size is determined.
+ */
+void
+InitializeFastPathLocks(void)
+{
+	/* Should be initialized only once. */
+	Assert(FastPathLockGroupsPerBackend == 0);
+
+	/*
+	 * Based on the max_locks_per_transaction GUC, as that's a good indicator
+	 * of the expected number of locks, figure out the value for
+	 * FastPathLockGroupsPerBackend.  This must be a power-of-two.  We cap the
+	 * value at FP_LOCK_GROUPS_PER_BACKEND_MAX and insist the value is at
+	 * least 1.
+	 *
+	 * The default max_locks_per_transaction = 64 means 4 groups by default.
+	 */
+	FastPathLockGroupsPerBackend =
+		Max(Min(pg_nextpower2_32(max_locks_per_xact) / FP_LOCK_SLOTS_PER_GROUP,
+				FP_LOCK_GROUPS_PER_BACKEND_MAX), 1);
+
+	/* Validate we did get a power-of-two */
+	Assert(FastPathLockGroupsPerBackend ==
+		   pg_nextpower2_32(FastPathLockGroupsPerBackend));
 }
 
 /*
@@ -786,10 +667,16 @@ BaseInit(void)
 	 */
 	pgstat_initialize();
 
+	/*
+	 * Initialize AIO before infrastructure that might need to actually
+	 * execute AIO.
+	 */
+	pgaio_init_backend();
+
 	/* Do local initialization of storage and buffer managers */
 	InitSync();
 	smgrinit();
-	InitBufferPoolAccess();
+	InitBufferManagerAccess();
 
 	/*
 	 * Initialize temporary file access after pgstat, so that the temporary
@@ -802,6 +689,12 @@ BaseInit(void)
 	 * try to insert XLOG.
 	 */
 	InitXLogInsert();
+
+	/* Initialize lock manager's local structs */
+	InitLockManagerAccess();
+
+	/* Initialize logical info WAL logging state */
+	InitializeProcessXLogLogicalInfo();
 
 	/*
 	 * Initialize replication slots after pgstat. The exit hook might need to
@@ -818,8 +711,10 @@ BaseInit(void)
  * Parameters:
  *	in_dbname, dboid: specify database to connect to, as described below
  *	username, useroid: specify role to connect as, as described below
- *	load_session_libraries: TRUE to honor [session|local]_preload_libraries
- *	override_allow_connections: TRUE to connect despite !datallowconn
+ *	flags:
+ *	  - INIT_PG_LOAD_SESSION_LIBS to honor [session|local]_preload_libraries.
+ *	  - INIT_PG_OVERRIDE_ALLOW_CONNS to connect despite !datallowconn.
+ *	  - INIT_PG_OVERRIDE_ROLE_LOGIN to connect despite !rolcanlogin.
  *	out_dbname: optional output parameter, see below; pass NULL if not used
  *
  * The database can be specified by name, using the in_dbname parameter, or by
@@ -838,8 +733,8 @@ BaseInit(void)
  * database but not a username; conversely, a physical walsender specifies
  * username but not database.
  *
- * By convention, load_session_libraries should be passed as true in
- * "interactive" sessions (including standalone backends), but false in
+ * By convention, INIT_PG_LOAD_SESSION_LIBS should be passed in "flags" in
+ * "interactive" sessions (including standalone backends), but not in
  * background processes such as autovacuum.  Note in particular that it
  * shouldn't be true in parallel worker processes; those have another
  * mechanism for replicating their leader's set of loaded libraries.
@@ -858,19 +753,18 @@ BaseInit(void)
 void
 InitPostgres(const char *in_dbname, Oid dboid,
 			 const char *username, Oid useroid,
-			 bool load_session_libraries,
-			 bool override_allow_connections,
+			 bits32 flags,
 			 char *out_dbname)
 {
-	YbInitPostgres(in_dbname, dboid, username, useroid, load_session_libraries,
-				   override_allow_connections, out_dbname, NULL);
+	/* YB: Delegate to YB-specific initialization wrapper */
+	YbInitPostgres(in_dbname, dboid, username, useroid, flags,
+				   out_dbname, NULL);
 }
 
 static void
 InitPostgresImpl(const char *in_dbname, Oid dboid,
 				 const char *username, Oid useroid,
-				 bool load_session_libraries,
-				 bool override_allow_connections,
+				 bits32 flags,
 				 char *out_dbname,
 				 const YbcPgInitPostgresInfo *yb_init_info,
 				 bool *yb_sys_table_prefetching_started)
@@ -879,6 +773,7 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 	bool		am_superuser;
 	char	   *fullpath;
 	char		dbname[NAMEDATALEN];
+	int			nfree = 0;
 
 	elog(DEBUG3, "InitPostgres");
 
@@ -889,21 +784,27 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 	 */
 	InitProcessPhase2();
 
+	/* Initialize status reporting */
+	pgstat_beinit();
+
+	/*
+	 * And initialize an entry in the PgBackendStatus array.  That way, if
+	 * LWLocks or third-party authentication should happen to hang, it is
+	 * possible to retrieve some information about what is going on.
+	 */
+	if (!bootstrap)
+	{
+		pgstat_bestart_initial();
+		INJECTION_POINT("init-pre-auth", NULL);
+	}
+
 	/*
 	 * Initialize my entry in the shared-invalidation manager's array of
 	 * per-backend data.
-	 *
-	 * Sets up MyBackendId, a unique backend identifier.
 	 */
-	MyBackendId = InvalidBackendId;
-
 	SharedInvalBackendInit(false);
 
-	if (MyBackendId > MaxBackends || MyBackendId <= 0)
-		elog(FATAL, "bad backend ID: %d", MyBackendId);
-
-	/* Now that we have a BackendId, we can participate in ProcSignal */
-	ProcSignalInit(MyBackendId);
+	ProcSignalInit(MyCancelKey, MyCancelKeyLength);
 
 	/*
 	 * Also set up timeout handlers needed for backend operation.  We need
@@ -916,6 +817,7 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 		RegisterTimeout(LOCK_TIMEOUT, LockTimeoutHandler);
 		RegisterTimeout(IDLE_IN_TRANSACTION_SESSION_TIMEOUT,
 						IdleInTransactionSessionTimeoutHandler);
+		RegisterTimeout(TRANSACTION_TIMEOUT, TransactionTimeoutHandler);
 		RegisterTimeout(IDLE_SESSION_TIMEOUT, IdleSessionTimeoutHandler);
 		RegisterTimeout(CLIENT_CONNECTION_CHECK_TIMEOUT, ClientCheckTimeoutHandler);
 		RegisterTimeout(IDLE_STATS_UPDATE_TIMEOUT,
@@ -968,9 +870,6 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 
 	/* Initialize portal manager */
 	EnablePortalManager();
-
-	/* Initialize status reporting */
-	pgstat_beinit();
 
 	/*
 	 * YB: Set client_addr and client_host in ASH metadata which will remain
@@ -1059,25 +958,16 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 	before_shmem_exit(ShutdownPostgres, 0);
 
 	/* The autovacuum launcher is done here */
-	if (IsAutoVacuumLauncherProcess())
+	if (AmAutoVacuumLauncherProcess())
 	{
-		/* report this backend in the PgBackendStatus array */
-		pgstat_bestart();
+		/* fill in the remainder of this entry in the PgBackendStatus array */
+		pgstat_bestart_final();
 
 		return;
 	}
 
 	/*
-	 * Start a new transaction here before first access to db, and get a
-	 * snapshot.  We don't have a use for the snapshot itself, but we're
-	 * interested in the secondary effect that it sets RecentGlobalXmin. (This
-	 * is critical for anything that reads heap pages, because HOT may decide
-	 * to prune them even if the process doesn't attempt to modify any
-	 * tuples.)
-	 *
-	 * FIXME: This comment is inaccurate / the code buggy. A snapshot that is
-	 * not pushed/active does not reliably prevent HOT pruning (->xmin could
-	 * e.g. be cleared when cache invalidations are processed).
+	 * Start a new transaction here before first access to db.
 	 */
 	if (!bootstrap)
 	{
@@ -1092,18 +982,17 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 		 * Fortunately, "read committed" is plenty good enough.
 		 */
 		XactIsoLevel = XACT_READ_COMMITTED;
-
-		(void) GetTransactionSnapshot();
 	}
 
 	/*
 	 * Perform client authentication if necessary, then figure out our
 	 * postgres user ID, and see if we are a superuser.
 	 *
-	 * In standalone mode and in autovacuum worker processes, we use a fixed
-	 * ID, otherwise we figure it out from the authenticated user name.
+	 * In standalone mode, autovacuum worker processes and slot sync worker
+	 * process, we use a fixed ID, otherwise we figure it out from the
+	 * authenticated user name.
 	 */
-	if (bootstrap || IsAutoVacuumWorkerProcess())
+	if (bootstrap || AmAutoVacuumWorkerProcess() || AmLogicalSlotSyncWorkerProcess())
 	{
 		InitializeSessionUserIdStandalone();
 		am_superuser = true;
@@ -1119,7 +1008,7 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 					 errhint("You should immediately run CREATE USER \"%s\" SUPERUSER;.",
 							 username != NULL ? username : "postgres")));
 	}
-	else if (IsBackgroundWorker)
+	else if (AmBackgroundWorkerProcess())
 	{
 		if (username == NULL && !OidIsValid(useroid))
 		{
@@ -1128,7 +1017,8 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 		}
 		else
 		{
-			InitializeSessionUserId(username, useroid);
+			InitializeSessionUserId(username, useroid,
+									(flags & INIT_PG_OVERRIDE_ROLE_LOGIN) != 0);
 			am_superuser = superuser();
 		}
 	}
@@ -1137,16 +1027,27 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 		/* normal multiuser case */
 		Assert(MyProcPort != NULL);
 		PerformAuthentication(MyProcPort);
-		InitializeSessionUserId(username, useroid);
+		InitializeSessionUserId(username, useroid, false);
+		/* ensure that auth_method is actually valid, aka authn_id is not NULL */
+		if (MyClientConnectionInfo.authn_id)
+			InitializeSystemUser(MyClientConnectionInfo.authn_id,
+								 hba_authname(MyClientConnectionInfo.auth_method));
 		am_superuser = superuser();
 
 		/*
 		 * In YSQL upgrade mode (uses tserver auth method), we allow connecting to
 		 * databases with disabled connections (normally it's just template0).
 		 */
-		if (IsYugaByteEnabled())
-			override_allow_connections = (override_allow_connections ||
-										  MyProcPort->yb_is_tserver_auth_method);
+		if (IsYugaByteEnabled() && MyProcPort->yb_is_tserver_auth_method)
+			flags |= INIT_PG_OVERRIDE_ALLOW_CONNS;
+	}
+
+	/* Report any SSL/GSS details for the session. */
+	if (MyProcPort != NULL)
+	{
+		Assert(!bootstrap);
+
+		pgstat_bestart_security();
 	}
 
 	/*
@@ -1160,26 +1061,43 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 	}
 
 	/*
-	 * The last few regular connection slots are reserved for superusers. We
-	 * do not apply this limit to background processes, since they all have
-	 * their own pools of PGPROC slots.
+	 * The last few regular connection slots are reserved for superusers and
+	 * roles with privileges of pg_use_reserved_connections.  We do not apply
+	 * these limits to background processes, since they all have their own
+	 * pools of PGPROC slots.
+	 *
+	 * Note: At this point, the new backend has already claimed a proc struct,
+	 * so we must check whether the number of free slots is strictly less than
+	 * the reserved connection limits.
 	 */
 	if (AmRegularBackendProcess() && !am_superuser &&
-		ReservedBackends > 0 &&
-		!HaveNFreeProcs(ReservedBackends))
-		ereport(FATAL,
-				(errcode(ERRCODE_TOO_MANY_CONNECTIONS),
-				 errmsg("remaining connection slots are reserved for non-replication superuser connections")));
+		(SuperuserReservedConnections + ReservedConnections) > 0 &&
+		!HaveNFreeProcs(SuperuserReservedConnections + ReservedConnections, &nfree))
+	{
+		if (nfree < SuperuserReservedConnections)
+			ereport(FATAL,
+					(errcode(ERRCODE_TOO_MANY_CONNECTIONS),
+					 errmsg("remaining connection slots are reserved for roles with the %s attribute",
+							"SUPERUSER")));
+
+		if (!has_privs_of_role(GetUserId(), ROLE_PG_USE_RESERVED_CONNECTIONS))
+			ereport(FATAL,
+					(errcode(ERRCODE_TOO_MANY_CONNECTIONS),
+					 errmsg("remaining connection slots are reserved for roles with privileges of the \"%s\" role",
+							"pg_use_reserved_connections")));
+	}
 
 	/* Check replication permissions needed for walsender processes. */
 	if (am_walsender)
 	{
 		Assert(!bootstrap);
 
-		if (!superuser() && !has_rolreplication(GetUserId()))
+		if (!has_rolreplication(GetUserId()))
 			ereport(FATAL,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-					 errmsg("must be superuser or replication role to start walsender")));
+					 errmsg("permission denied to start WAL sender"),
+					 errdetail("Only roles with the %s attribute may start a WAL sender process.",
+							   "REPLICATION")));
 	}
 
 	/*
@@ -1201,8 +1119,8 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 		/* initialize client encoding */
 		InitializeClientEncoding();
 
-		/* report this backend in the PgBackendStatus array */
-		pgstat_bestart();
+		/* fill in the remainder of this entry in the PgBackendStatus array */
+		pgstat_bestart_final();
 
 		/* close the transaction we started above */
 		CommitTransactionCommand();
@@ -1245,7 +1163,7 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 		 */
 		if (!bootstrap)
 		{
-			pgstat_bestart();
+			pgstat_bestart_final();
 			CommitTransactionCommand();
 		}
 		return;
@@ -1314,6 +1232,7 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 		}
 
 		MyDatabaseTableSpace = datform->dattablespace;
+		MyDatabaseHasLoginEventTriggers = datform->dathasloginevt;
 		/* pass the database name back to the caller */
 		if (out_dbname)
 			strcpy(out_dbname, dbname);
@@ -1376,6 +1295,7 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 		datform = (Form_pg_database) GETSTRUCT(tuple);
 
 		SetDatabaseEncoding(datform->encoding);
+		/* YB: Preset database collation early for prefetching support */
 		YbPresetDatabaseCollation(tuple);
 		if (yb_enable_ash)
 			YbAshSetDatabaseId(MyDatabaseId);
@@ -1469,7 +1389,8 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 	 * user is a superuser, so the above stuff has to happen first.)
 	 */
 	if (!bootstrap)
-		CheckMyDatabase(dbname, am_superuser, override_allow_connections);
+		CheckMyDatabase(dbname, am_superuser,
+						(flags & INIT_PG_OVERRIDE_ALLOW_CONNS) != 0);
 
 	/*
 	 * YB: We are done with the authentication. Now we can send the db oid to
@@ -1545,12 +1466,12 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 	 * during the initial transaction in case anything that requires database
 	 * access needs to be done.
 	 */
-	if (load_session_libraries)
+	if ((flags & INIT_PG_LOAD_SESSION_LIBS) != 0)
 		process_session_preload_libraries();
 
-	/* report this backend in the PgBackendStatus array */
+	/* fill in the remainder of this entry in the PgBackendStatus array */
 	if (!bootstrap)
-		pgstat_bestart();
+		pgstat_bestart_final();
 
 	/* close the transaction we started above */
 	if (!bootstrap)
@@ -1564,11 +1485,11 @@ YbEnsureSysTablePrefetchingStopped()
 		YBCStopSysTablePrefetching();
 }
 
+/* YB: YB-specific wrapper around InitPostgresImpl with error handling for sys table prefetching */
 void
 YbInitPostgres(const char *in_dbname, Oid dboid,
 			   const char *username, Oid useroid,
-			   bool load_session_libraries,
-			   bool override_allow_connections,
+			   bits32 flags,
 			   char *out_dbname, const YbcPgInitPostgresInfo *yb_init_info)
 {
 	bool		sys_table_prefetching_started = false;
@@ -1576,7 +1497,7 @@ YbInitPostgres(const char *in_dbname, Oid dboid,
 	PG_TRY();
 	{
 		InitPostgresImpl(in_dbname, dboid, username, useroid,
-						 load_session_libraries, override_allow_connections,
+						 flags,
 						 out_dbname, yb_init_info, &sys_table_prefetching_started);
 	}
 	PG_CATCH();
@@ -1591,7 +1512,7 @@ YbInitPostgres(const char *in_dbname, Oid dboid,
 }
 
 /*
- * Check and set database collation once MyDatabaseId is resolved. In YB we
+ * YB: Check and set database collation once MyDatabaseId is resolved. In YB we
  * need to do this earlier because of prefetching where we may need to
  * compare text values with DEFAULT_COLLATION_OID. For example,
  * CREATE TABLE t1 (a INT, region VARCHAR, c INT, PRIMARY KEY(a, region))
@@ -1604,7 +1525,6 @@ YbInitPostgres(const char *in_dbname, Oid dboid,
 static void
 YbPresetDatabaseCollation(HeapTuple tuple)
 {
-	Form_pg_database dbform = (Form_pg_database) GETSTRUCT(tuple);
 	Datum		datum;
 	bool		isnull;
 	char	   *collate;
@@ -1620,17 +1540,14 @@ YbPresetDatabaseCollation(HeapTuple tuple)
 						   " which is not recognized by setlocale().", collate),
 				 errhint("Recreate the database with another locale or install the missing locale.")));
 	elog(DEBUG1, "LC_COLLATE of %u is set to %s", MyDatabaseId, collate);
-	if (dbform->datlocprovider == COLLPROVIDER_ICU)
-	{
-		datum = SysCacheGetAttr(DATABASEOID, tuple, Anum_pg_database_daticulocale, &isnull);
-		Assert(!isnull);
-		char	   *iculocale = TextDatumGetCString(datum);
 
-		make_icu_collator(iculocale, &default_locale);
-		elog(DEBUG1, "iculocale of %u is set to %s", MyDatabaseId, iculocale);
-	}
-	default_locale.provider = dbform->datlocprovider;
-	default_locale.deterministic = true;
+	/*
+	 * Use PG19's init_database_collation() to set up the default locale.
+	 * This handles ICU, libc, and builtin providers via the appropriate
+	 * create_pg_locale_* functions and sets the static default_locale
+	 * in pg_locale.c.
+	 */
+	init_database_collation();
 	yb_default_collation_resolved = true;
 }
 
@@ -1638,44 +1555,6 @@ long
 YbGetAuthorizedConnections()
 {
 	return YbNumAuthorizedConnections;
-}
-
-/*
- * YB: Used in Connection Manager with Auth Passthrough mode.
- * Initialise GUC state on the control backend and report GUC vars back to
- * connection manager.
- */
-void
-YbAuthPassthroughSetupGUCAndReport(void)
-{
-	/* This function is only for auth passthrough via Connection Manager */
-	Assert(YbIsAuthPassthroughInProgress(MyProcPort));
-
-	const char *dbname = MyProcPort->database_name;
-	Oid			dboid = get_database_oid(dbname, false);
-
-	/*
-	 * Process any options passed in the startup packet. This is important
-	 * to do here since this is what sets the GUC values sent to the client.
-	 */
-	if (MyProcPort != NULL)
-		process_startup_options(MyProcPort, superuser_arg(GetSessionUserId()));
-
-	if (YBIsDBLogicalClientVersionMode())
-	{
-		int32_t		logical_client_version = YbGetMasterLogicalClientVersion();
-
-		elog(DEBUG1, "set logical_client_version to %d",
-			 logical_client_version);
-		YbResetLogicalClientCacheVersion();
-		YbSetLogicalClientCacheVersion(logical_client_version);
-		SendLogicalClientCacheVersionToFrontend();
-	}
-
-	/* Process pg_db_role_setting options */
-	process_settings(dboid, GetSessionUserId());
-
-	BeginReportingGUCOptions();
 }
 
 /*
@@ -1707,7 +1586,7 @@ process_startup_options(Port *port, bool am_superuser)
 
 		maxac = 2 + (strlen(port->cmdline_options) + 1) / 2;
 
-		av = (char **) palloc(maxac * sizeof(char *));
+		av = palloc_array(char *, maxac);
 		ac = 0;
 
 		av[ac++] = "postgres";
@@ -1828,6 +1707,14 @@ LockTimeoutHandler(void)
 	kill(-MyProcPid, SIGINT);
 #endif
 	kill(MyProcPid, SIGINT);
+}
+
+static void
+TransactionTimeoutHandler(void)
+{
+	TransactionTimeoutPending = true;
+	InterruptPending = true;
+	SetLatch(MyLatch);
 }
 
 static void

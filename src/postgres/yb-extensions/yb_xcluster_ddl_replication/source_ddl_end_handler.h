@@ -37,7 +37,8 @@ extern bool IsPassThroughDdlCommandSupported(CommandTag command_tag);
  *    the DDL are temp) - This function returns false.
  * 3. The DDL is valid and should be replicated - This function returns true.
  */
-extern bool ProcessSourceEventTriggerDDLCommands(JsonbParseState *state);
+/* YB: PG19 uses JsonbInState instead of JsonbParseState */
+extern bool ProcessSourceEventTriggerDDLCommands(JsonbInState *state);
 
 /*
  * Same as above but for pg_catalog.pg_event_trigger_dropped_objects().

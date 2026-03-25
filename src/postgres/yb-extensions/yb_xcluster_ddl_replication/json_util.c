@@ -19,8 +19,9 @@
 #include "json_util.h"
 #include "utils/fmgrprotos.h"
 
+/* YB: PG19 uses JsonbInState instead of JsonbParseState */
 void
-AddJsonKey(JsonbParseState *state, char *key_buf)
+AddJsonKey(JsonbInState *state, char *key_buf)
 {
 	JsonbValue	key;
 
@@ -28,11 +29,11 @@ AddJsonKey(JsonbParseState *state, char *key_buf)
 	key.val.string.len = strlen(key_buf);
 	key.val.string.val = pstrdup(key_buf);
 
-	(void) pushJsonbValue(&state, WJB_KEY, &key);
+	pushJsonbValue(state, WJB_KEY, &key);
 }
 
 void
-AddNumericJsonEntry(JsonbParseState *state, char *key_buf, int64 val)
+AddNumericJsonEntry(JsonbInState *state, char *key_buf, int64 val)
 {
 	AddJsonKey(state, key_buf);
 
@@ -41,11 +42,11 @@ AddNumericJsonEntry(JsonbParseState *state, char *key_buf, int64 val)
 	value.type = jbvNumeric;
 	value.val.numeric = DatumGetNumeric(DirectFunctionCall1(int8_numeric, val));
 
-	(void) pushJsonbValue(&state, WJB_VALUE, &value);
+	pushJsonbValue(state, WJB_VALUE, &value);
 }
 
 void
-AddBoolJsonEntry(JsonbParseState *state, char *key_buf, bool val)
+AddBoolJsonEntry(JsonbInState *state, char *key_buf, bool val)
 {
 	AddJsonKey(state, key_buf);
 
@@ -54,17 +55,17 @@ AddBoolJsonEntry(JsonbParseState *state, char *key_buf, bool val)
 	value.type = jbvBool;
 	value.val.boolean = val;
 
-	(void) pushJsonbValue(&state, WJB_VALUE, &value);
+	pushJsonbValue(state, WJB_VALUE, &value);
 }
 
 void
-AddStringJsonEntry(JsonbParseState *state, char *key_buf, const char *val)
+AddStringJsonEntry(JsonbInState *state, char *key_buf, const char *val)
 {
 	AddNStringJsonEntry(state, key_buf, val, strlen(val));
 }
 
 void
-AddNStringJsonEntry(JsonbParseState *state, char *key_buf, const char *val, Size len)
+AddNStringJsonEntry(JsonbInState *state, char *key_buf, const char *val, Size len)
 {
 	AddJsonKey(state, key_buf);
 
@@ -74,5 +75,5 @@ AddNStringJsonEntry(JsonbParseState *state, char *key_buf, const char *val, Size
 	value.val.string.len = len;
 	value.val.string.val = pnstrdup(val, len);
 
-	(void) pushJsonbValue(&state, WJB_VALUE, &value);
+	pushJsonbValue(state, WJB_VALUE, &value);
 }

@@ -22,16 +22,19 @@ typedef int BackendId;			/* unique currently active backend identifier */
 
 #define InvalidBackendId		(-1)
 
-extern PGDLLIMPORT BackendId MyBackendId;	/* backend id of this backend */
-
-/* backend id of our parallel session leader, or InvalidBackendId if none */
-extern PGDLLIMPORT BackendId ParallelLeaderBackendId;
+/*
+ * PG19 removed MyBackendId and ParallelLeaderBackendId in favor of
+ * MyProcNumber and ParallelLeaderProcNumber.  Provide compatibility.
+ */
+#include "storage/procnumber.h"
+#define MyBackendId			MyProcNumber
+#define ParallelLeaderBackendId	ParallelLeaderProcNumber
 
 /*
  * The BackendId to use for our session's temp relations is normally our own,
  * but parallel workers should use their leader's ID.
  */
 #define BackendIdForTempRelations() \
-	(ParallelLeaderBackendId == InvalidBackendId ? MyBackendId : ParallelLeaderBackendId)
+	ProcNumberForTempRelations()
 
 #endif							/* BACKENDID_H */
