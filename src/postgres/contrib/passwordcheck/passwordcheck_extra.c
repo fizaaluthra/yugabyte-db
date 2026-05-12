@@ -25,6 +25,9 @@
 #include "lib/stringinfo.h"
 #include "utils/guc.h"
 
+/*
+ * YB_TODO_PG19MERGE: port PG19 changes to passwordcheck.c
+ */
 PG_MODULE_MAGIC;
 
 /* GUC variables */

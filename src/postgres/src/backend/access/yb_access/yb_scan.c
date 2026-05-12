@@ -1928,9 +1928,20 @@ YbCullArray(ArrayType *arrayval,
 	 * sort in the same ordering used by the index column, so that the
 	 * successive primitive indexscans produce data in index order.
 	 */
+	/*
+	 * YB_TODO_PG19MERGE: _bt_sort_array_elements moved from nbtutils.c into
+	 * nbtpreprocesskeys.c (PG commit 597b1ffbf12352a3863a894f16741864aaf2242f),
+	 * changed signature.
+	 * The YB-only IsYugaByteEnabled() fallback that used to live inside the old
+	 * function (lookup_type_cache when get_opfamily_proc returns InvalidOid) is
+	 * also gone.
+	 */
+#if 0
 	*culled_num_elems = _bt_sort_array_elements(&tmp_scan_desc, key,
 												false,	/* reverse */
 												elem_values, num_valid);
+#endif
+	*culled_num_elems = num_valid;
 
 	return true;
 }
@@ -4380,7 +4391,7 @@ ybcIndexCostEstimate(struct PlannerInfo *root, IndexPath *path,
 				 */
 				if (OidIsValid(clause_op) &&
 					(!yb_ignore_bool_cond_for_legacy_estimate ||
-					 !IsBooleanOpfamily(opfamily)))
+					 !IsBuiltinBooleanOpfamily(opfamily)))
 				{
 					ybcAddAttributeColumn(&scan_plan, attnum);
 					if (other_operand && IsA(other_operand, Const))

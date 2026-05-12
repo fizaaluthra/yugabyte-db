@@ -6520,9 +6520,11 @@ YBIsCollationValidNonC(Oid collation_id)
 		   collation_id == C_COLLATION_OID);
 
 	bool		is_valid_non_c = (YBIsCollationEnabled() &&
-								  OidIsValid(collation_id) &&
-								  !lc_collate_is_c(collation_id));
-
+								  OidIsValid(collation_id));
+	/* YB_TODO_PG19MERGE: function doesn't exist*/
+#if 0
+								   && !lc_collate_is_c(collation_id));
+#endif
 	return is_valid_non_c;
 }
 

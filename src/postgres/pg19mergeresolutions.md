@@ -1,0 +1,4217 @@
+All these files share the same pattern: PG replaced `/* FALL THRU */` / `/* FALLTHROUGH */` / `/* fall through */` comments with the `pg_fallthrough;` macro. YB independently added `yb_switch_fallthrough()` macro calls for the same purpose. Both macros expand to `__attribute__((fallthrough))`, so `pg_fallthrough;` is sufficient.
+
+- src/port/snprintf.c, contrib/btree_gin/btree_gin.c, contrib/pgcrypto/pgp-info.c, src/backend/access/transam/xlogrecovery.c, src/backend/regex/regc_lex.c, src/backend/regex/regcomp.c, src/backend/replication/walreceiver.c, src/backend/replication/walreceiverfuncs.c, src/backend/utils/adt/xml.c, src/backend/utils/sort/tuplestore.c, src/interfaces/libpq/fe-secure.c, src/pl/tcl/pltcl.c, src/timezone/zic.c, src/backend/executor/nodeHash.c, src/pl/plpgsql/src/pl_exec.c, src/tools/pg_bsd_indent/parse.c, src/backend/utils/adt/formatting.c, src/backend/utils/adt/jsonpath.c, src/backend/utils/mb/mbutils.c, src/interfaces/ecpg/pgtypeslib/interval.c, src/common/hashfn.c, src/backend/partitioning/partprune.c, src/common/wchar.c:
+    - all `pg_fallthrough` / `yb_switch_fallthrough()` conflict sites:
+        - PG commit 8354b9d6b602ea549bc8d85cb404771505662a7b replaced fallthrough comments with `pg_fallthrough;` macro.
+        - YB added `yb_switch_fallthrough()` macro calls for the same purpose (various YB commits per file).
+        - Took PG's `pg_fallthrough;`. Both macros are functionally identical (`__attribute__((fallthrough))`), and PG's is the standard going forward.
+
+LSM AM checks: PG commit ce62f2f2a0a48d021f250ba84dfcab5d45ddc914 generalized many `BTREE_AM_OID` checks using new fields (`amconsistentequality`, `amconsistentordering`, `amtranslatestrategy`, `amtranslatecmptype`). YB had added explicit `LSM_AM_OID` checks at those same sites. All such conflicts are resolved by taking PG's generalized form; LSM is covered because `ybcinhandler` sets these fields to the btree equivalents. See src/backend/access/yb_access/yb_lsm.c entry below for the ybcinhandler update.
+
+- src/backend/access/yb_access/yb_lsm.c (ybcinhandler):
+    - PG commit ce62f2f2a0a48d021f250ba84dfcab5d45ddc914 added `amconsistentequality`, `amconsistentordering`, `amtranslatestrategy`, and `amtranslatecmptype` to `IndexAmRoutine`.
+    - YB added explicit `LSM_AM_OID` checks at those sites.
+    - Took PG's generalized form; added `amconsistentequality=true`, `amconsistentordering=true`, `amtranslatestrategy=bttranslatestrategy`, `amtranslatecmptype=bttranslatecmptype` to `ybcinhandler`.
+
+- src/backend/jit/jit.c:
+    - `jit_enabled` declaration: PG commit 7f8c88c2b872cb74882ab93dcb05529dab2a10bc changed jit default to off; YB commit c1a4632453751094ada4a39ec26f97c7170d2567 added `/* YB: changed to false */` comment. Kept PG's declaration with YB comment.
+
+- src/backend/catalog/partition.c: 
+    - `build_attrmap_by_name` call:
+        - kept both PGG (`bool missing_ok`) and YB (`bool yb_ignore_type_mismatch`) parameters.
+
+- src/backend/access/common/attmap.c:
+    - `build_attrmap_by_name` definition and `build_attrmap_by_name_if_req` call: kept both PG and YB parameters
+
+- src/include/access/attmap.h:
+    - `build_attrmap_by_name` declaration:
+        - kept both PG and YB parameters
+
+- src/backend/storage/lmgr/s_lock.c:
+    - copyright header comment: PG updated copyright year to 2026; YB added `YB: change 2 or so minutes to 30 seconds.` comment. Kept both.
+
+- src/backend/utils/adt/int8.c:
+    - includes: PG added `#include "utils/fmgroids.h"`, removed `#include "utils/lsyscache.h"`; YB added `#include <inttypes.h>`. Kept PG's `fmgroids.h` and YB's `<inttypes.h>`.
+
+- src/backend/utils/sort/logtape.c:
+    - `thisbuf` / `datablocknum` declarations:
+        - adjacent line conflict.
+        - PG commit b1e5c9fa9ac4399895bf312398c5d441baba0c3b changed `long datablocknum` to `int64 datablocknum`.
+        - YB commit 3a45d7100646d7536c7b3e07032e0c8a929e34db added null-pointer guard for `thisbuf` with explanatory comment.
+        - Combined both: YB's changes + PG's `int64` type.
+
+- src/bin/pg_upgrade/controldata.c:
+    - shutdown check: PG commit a3f695e645d0363d845a828db45deac5af1b4c0e removed `\n` from `"shut down"` comparison; YB commit 8b270c2843fce04c38d2ef6c395cb4e0e090867a added `!is_yugabyte_enabled() &&` guard. Combined both.
+
+- src/test/regress/pg_regress.c:
+    - psql binary name: PG commit 558fff0adfa02b6db6b003c64cca75e55f5187e2 added `-q` flag; YB commit c6b56875b569cd81ca3f37740c9f0f583e42da55 renamed `psql` to `ysqlsh`. Combined: `"\"%s%sysqlsh\" -X -q"`.
+
+- src/test/regress/regress.c:
+    - includes and macros: PG commit 8c498479d70f963533d57d8bb1b3a58e00fe0d03 added `TEXTDOMAIN` macro; YB PG15 initial merge 55782d561e55ef972f2470a4ae887dd791bb4a97 added `#include "utils/syscache.h"`. Kept both: YB's include first, then PG's macro.
+
+- src/backend/utils/hash/dynahash.c:
+    - `HASH_ENTER_NULL` case reordering: PG commit 9c911ec065df0f660e3add65d986f95928914375 moved `case HASH_ENTER: case HASH_ENTER_NULL:`; YB had added `yb_switch_fallthrough()`. Took PG's changes fallthrough pattern.
+
+- src/backend/utils/mb/conversion_procs/euc_tw_and_big5/big5.c:
+    - `break` vs `yb_switch_fallthrough()`: PG commit 3a63b76571ba253e2784ba34377cdcbdb8ad6796 has `break;` before `default:`; YB had `yb_switch_fallthrough();`. Took PG's `break;`.
+
+- contrib/isn/isn.c:
+    - `break` vs `yb_switch_fallthrough()`: same as big5.c above.
+
+- contrib/auto_explain/auto_explain.c:
+    - PG_MODULE_MAGIC + includes:
+        - PG commit 9324c8c580655800331b0582b770e88c01b7a5c4 introduced `PG_MODULE_MAGIC_EXT` macro.
+        - YB commit 5cf466690abb9c5bb78fbe13c5dc404751c28f50 added `#include "pg_yb_utils.h"`.
+        - Kept YB include + PG's `PG_MODULE_MAGIC_EXT`.
+    - GUC variables:
+        - PG commit e972dff6c30447ebcfa2f8601b67f926247463b6 added `auto_explain_log_extension_options` and related structs.
+        - YB commit 2ff1d9624194b36973e92d03205c8797f648ae75 added `auto_explain_log_dist`. YB commit 5cf466690abb9c5bb78fbe13c5dc404751c28f50 added `auto_explain_log_debug` and `yb_auto_explain_debug_metrics_needed`.
+        - Kept both. PG GUCs, then YB GUCs appended after PG GUCs, YB variables section placed after the GUCs, before the `auto_explain_option` structs.
+
+- contrib/fuzzystrmatch/fuzzystrmatch.c:
+    - PG_MODULE_MAGIC + includes:
+        - PG commit 55527368bd07248e91e3d37a782bf66b76f06865 changed to `PG_MODULE_MAGIC_EXT`.
+        - YB commit 5398ff25ab6805e760151030e82782af4decb608 added `#include "common/pg_yb_common.h"`.
+        - Kept YB include + PG's `PG_MODULE_MAGIC_EXT`.
+
+- contrib/pgcrypto/px-crypt.c:
+    - crypt generator table:
+        - PG commit 749a9e20c9790006f3af47f7a8faf4ad8dc358d9 added `sha256crypt` and `sha512crypt` entries.
+        - YB commit d6368fb4ad6b9f2ed38d4967800de38c13074289 renamed 4 existing entries.
+        - Kept YB's `yb_` prefixed names for existing entries + PG's new sha entries with original names.
+
+- contrib/pgcrypto/px-crypt.h:
+    - function declarations:
+        - PG commit 749a9e20c9790006f3af47f7a8faf4ad8dc358d9 added sha256/sha512 declarations.
+        - YB commit d6368fb4ad6b9f2ed38d4967800de38c13074289 added `yb_` prefix to 4 existing declarations.
+        - Kept YB's `yb_` prefixed declarations + PG's new sha declarations. Add a YB_TODO_PG19MERGE to add a `yb_` prefix to the new functions.
+
+- contrib/pg_trgm/trgm_regexp.c:
+    - printSourceNFA, variable declarations:
+        - PG commit cdaa67565867ba443afb66b9e82023d65487dc7c moved `int state` and `int i` into for-loop declarations.
+        - YB commit d714b60297567789913c68f5937e5e16943ce6d9 added `const char *yb_tmp_dir = YbGetTmpDir();`.
+        - Kept only YB's `yb_tmp_dir`.
+
+- src/backend/nodes/nodeFuncs.c:
+    - exprType() switch:
+        - PG commit c649fa24a42ba89bf5460c7110e4fc8eeca65959 added `case T_MergeSupportFunc`.
+        - YB commit 49ed1065dabd2a9456b830c69b4bb8d584491ff8 added `case T_YbBatchedExpr`.
+        - Kept both cases (PG first, YB after).
+    - expression_tree_mutator T_MergeSupportFunc / T_YbBatchedExpr:
+        - PG commit c649fa24a42ba89bf5460c7110e4fc8eeca65959 added `T_MergeSupportFunc` handler and removed `(Node *)` cast from `copyObject()`.
+        - YB commit 49ed1065dabd2a9456b830c69b4bb8d584491ff8 added `T_YbBatchedExpr` handler.
+        - Kept PG's `T_MergeSupportFunc` (without cast) then YB's `T_YbBatchedExpr`.
+    - expression_tree_mutator T_PartitionPruneStepCombine / T_YbPartitionPruneStepFuncOp:
+        - PG commit 665785d85f8b9a7250802d7fadd84841bb0aafa1 removed `(Node *)` cast from `copyObject()` return.
+        - YB commit 49ed1065dabd2a9456b830c69b4bb8d584491ff8 added `T_YbPartitionPruneStepFuncOp` handler.
+        - Kept PG's cast-free return + YB's new handler.
+
+- src/backend/parser/parse_relation.c:
+    - `selectedCols` / attribute number:
+        - PG commit a61b1f74823c9c4f79c95226a461f1e7a367764b moved `selectedCols` from `RangeTblEntry` to `RTEPermissionInfo` (`perminfo->selectedCols`).
+        - YB commit 1308c0d131c1344a290d7ab491e186e4850fb5cb replaced `FirstLowInvalidHeapAttributeNumber` with `YBGetFirstLowInvalidAttributeNumberFromOid(rte->relid)` (later touched by commit 06cd4073e15e99b983787faaa1fb5f9f717a5e04).
+        - Combined both: `perminfo->selectedCols` with YB's attribute number function.
+
+- src/backend/optimizer/prep/prepjointree.c:
+    - PlannerInfo fields:
+        - PG commit 64095d157482136ee609586266f8a37467c69bde added `subroot->assumeReplanning = false`.
+        - YB commit 12e23adb6ac517cde3bacfcbe64a8292470701cf added `yb_cur_batched_relids` and other `yb_` batching fields.
+        - Kept both: PG's field first, then YB's batching fields.
+
+- src/backend/access/common/toast_compression.c:
+    - default compression method:
+        - PG commit 34dfca293432e206b8f80431f81535aff69782ca introduced `DEFAULT_TOAST_COMPRESSION` macro.
+        - YB commit 40f556645f42e36ae80df470ba0c428d778b0c0b hardcoded `TOAST_LZ4_COMPRESSION`.
+        - Took PG's `DEFAULT_TOAST_COMPRESSION` (which selects LZ4 if available).
+
+- src/backend/access/index/indexam.c:
+    - new functions:
+        - PG commit c1ec02be1d79eac95160dea7ced32ace84664617 added `index_insert_cleanup()`.
+        - YB commit 25b52c194f4cdb0c896b019840533ecd3d72b7b9 added `yb_index_delete()` and `yb_index_update()` (later touched by other commits).
+        - Kept both: PG's function first, then YB's functions.
+
+- src/backend/access/table/toast_helper.c:
+    - Datum/pointer conversion:
+        - PG commit 0f5ade7a367c16d823c75a81abb10e2ec98b4206 changed to `DatumGetPointer(value)`.
+        - YB initial merge 55782d561e55ef972f2470a4ae887dd791bb4a97 changed to `PointerGetDatum(value)`
+        - Took PG's `DatumGetPointer(value)`.
+
+- src/backend/access/transam/xlog.c:
+    - GUC defaults:
+        - adjacent line conflict.
+        - PG commit 8d140c58229d6224882f881d9b62ba06236e71d3 renamed `sync_method` to `wal_sync_method`.
+        - YB commit 22b6a4730da37612836f17fc29d54790c78db952 changed `wal_level` default to `WAL_LEVEL_LOGICAL` with explanatory comment.
+        - Kept PG's `wal_sync_method` + YB's `WAL_LEVEL_LOGICAL` default.
+
+- src/backend/bootstrap/bootparse.y:
+    - includes:
+        - PG commit 9fb855fe1ae04a147bd4cdaa571a1c9de5f03682 added `#include "bootparse.h"`.
+        - YB has YB includes.
+        - Kept both: PG's `bootparse.h` first (followed by a blank line), then YB includes.
+
+- src/backend/bootstrap/bootscanner.l:
+    - token definitions:
+        - PG commit 3e4bacb171001644583ac14e29ae1b09ce818c92 changed `yylval.kw` to `yylval->kw` (reentrant scanner).
+        - YB commit be0908b45827c69ff010d9263ff865310ce722a1 added `yb_declare` and `primary` tokens.
+        - Used PG's `yylval->kw` arrow syntax for all entries + adding YB's new tokens.
+
+- src/backend/libpq/crypt.c:
+    - includes and variables:
+        - PG commit 1d92e0c2cc4789255c630d8776bbe85ca9ebc27f added `password_expiration_warning_threshold` and `md5_password_warnings`.
+        - YB commit 5b9094c701a760c266e42d3464c598a8b8c81f8b added YB includes (`pg_yb_utils.h`, `ybc_pggate.h`).
+        - Kept both: YB includes first, then PG's variables.
+
+- src/backend/commands/view.c:
+    - includes and function declaration:
+        - PG commit 20e58105badff383bd43f0b97e532771768f94df renamed `checkViewTupleDesc` to `checkViewColumns`.
+        - YB commit 3f15bfc977553ae08468c707b7152a08a56b90aa added YB includes.
+        - Kept YB includes + PG's renamed function declaration.
+
+- src/backend/commands/dropcmds.c:
+    - ownership check:
+        - PG commit afbfc02983f86c4d71825efa6befd547fe81a926 changed `pg_namespace_ownercheck` to `object_ownercheck`.
+        - YB commit cc010e90cb8c9634ea678f4c9b5b1f4a8b9a51f5 added `&& !is_yb_db_admin_droppable_object` guard (later touched by commit 06cd4073e15e99b983787faaa1fb5f9f717a5e04).
+        - Combined both: PG's `object_ownercheck` + YB's admin guard.
+
+- src/backend/replication/repl_gram.y:
+    - snapshot_action alternatives:
+        - PG commit dc212340058b4e7ecfc5a7a81ec50e7a207bf288 added `K_UPLOAD_MANIFEST`.
+        - YB commit added `K_YB_SEQUENCE`, `K_YB_HYBRID_TIME`, `K_YB_ROW`, `K_YB_TRANSACTION`.
+        - Kept both: PG's entry first, then YB's entries.
+
+- src/bin/psql/startup.c:
+    - SetVariableHooks calls:
+        - PG commit 1a759c83278fcdae11ee5da8318b646b9d47129c added `WATCH_INTERVAL` hook.
+        - YB commit d258233f964b5743dc59c46e4fa59fc0dab3b9ce added `YB_DISABLE_ERROR_PREFIX` hook.
+        - Kept both: PG's `WATCH_INTERVAL` first, then YB's `YB_DISABLE_ERROR_PREFIX`.
+
+- src/backend/utils/adt/regexp.c:
+    - RE_compile_and_cache variable declarations:
+        - PG commit bea3d7e3831fa6a1395eadbad7d97cebc7aa8aee added `MemoryContext oldcontext`.
+        - YB commit a20d9474f423a1d365c2eb2e25eea0d70646a166 added `cached_re_str *re_array = YbGetReCacheInfo().array`.
+        - Kept both declarations.
+
+- src/backend/nodes/read.c:
+    - function definitions and ifdef guard:
+        - PG commit a292c98d62ddc0ad681f772ab91bf68ee399cb4b changed `#ifdef WRITE_READ_PARSE_PLAN_TREES` to `#ifdef DEBUG_NODE_TESTS_ENABLED`.
+        - YB commit 6ff6db4c68fcdee7280d2c6b4a8a4fd42c03da21 added `ybDeserializeNode()` function.
+        - Kept YB's function + PG's `DEBUG_NODE_TESTS_ENABLED` guard.
+
+- src/backend/commands/constraint.c:
+    - index_insert call:
+        - PG commit 41d2c6f952edc4841763d05296b65f3c0edad4f2 added `index_insert_cleanup()` call after `index_insert()`.
+        - YB commit 73bad43e870fa2d596e3ab09ca7ac1b4d44f2e75 added `false /* yb_shared_insert */` parameter (later touched by 06cd4073e15e99b983787faaa1fb5f9f717a5e04).
+        - Kept both: YB's extra parameter + PG's cleanup call.
+
+- src/backend/executor/nodeBitmapIndexscan.c:
+    - `tbm_create` call:
+        - PG commit 041e8b95b8cd251bfec6a3c9c3dd6614de6a4c9b changed `work_mem * 1024L` to `work_mem * (Size) 1024`.
+        - YB (commit a81450b9dbcb1690b9bfdbd547e458ec589651e9 and others) changed `tbm` to `bitmap`.
+        - Kept both `(Size)` and `bitmap`
+
+- src/backend/executor/nodeBitmapOr.c:
+    - `tbm_create` call:
+        - same as above
+
+- src/backend/utils/sort/sortsupport.c:
+    - `amcanorder` check: generalized AM check pattern
+
+- src/backend/utils/adt/jsonb_util.c:
+    - `uniqueifyJsonbObject` call and fallthrough:
+        - PG commits 7081ac46ace8c459966174400b53418683c9fe5c changed `uniqueifyJsonbObject` and commit 8354b9d6b602ea549bc8d85cb404771505662a7b added `pg_fallthrough`.
+        - YB had `yb_switch_fallthrough()` with old API.
+        - Took PG's new API + `pg_fallthrough`.
+
+- src/backend/replication/logical/worker.c:
+    - `ExecuteTruncateGuts` final argument:
+        - PG commit 482675987bcdffb390ae735cfd5f34b485ae97c6 added `!MySubscription->runasowner` parameter.
+        - YB commit d5f1e0bd719df34ba6581c04b4a6c2cb393517fa added `false /* yb_is_top_level */` parameter.
+        - Kept both parameters: PG's first, then YB's.
+
+- src/backend/optimizer/plan/setrefs.c:
+    - set_subqueryscan_references:
+        - PG commit 0d4391b265f83023d0b7eed71817517410f76e60 added `record_elided_node()` call.
+        - YB commit f2f0d6f49f84c0916bc2834ad7d577da9e3c212e added some logic to deal with hint aliases.
+        - Kept both: PG's `record_elided_node()` first, then YB's hint alias block.
+
+- src/backend/optimizer/util/appendinfo.c:
+    - add_row_identity_columns:
+        - PG commit 5f2e179bd31e5f5803005101eb12a8d7bf8db8f3 removed `commandType == CMD_MERGE ||` from the if condition.
+        - YB PG15 initial merge 55782d561e55ef972f2470a4ae887dd791bb4a97 added `IsYBRelation` block with `ybctid` emission, and still had `commandType == CMD_MERGE ||` in the else-if condition.
+        - Put YB's `IsYBRelation` block first, then PG's condition (without `CMD_MERGE`) in `else if`.
+
+- src/backend/postmaster/autovacuum.c:
+    - `InitPostgres` call:
+        - PG commit 15b4c46c328b25be9463db6d2960eeb16a784aad replaced two boolean params (`load_session_libraries`, `override_allow_connections`) with a single bitwise `flags` param (`INIT_PG_OVERRIDE_ALLOW_CONNS`).
+        - YB commit caa636fcd02f59d0dfab103b52fd59703745ff64 removed a previously-added `session_id` parameter from `InitPostgres`, reformatting the call onto one line in the process.
+        - Took PG's version
+
+- src/backend/utils/adt/dbsize.c:
+    - calculate_indexes_size:
+        - PG commit b0a55e43299c4ea2a9a8c757f9c26352407d0ccc changed `rd_node` to `rd_locator`.
+        - YB commit 8b2f5c5165700db851a1429bd6e92f157c1ca4b1 added `IsYBRelation(idxRel)` check with YB-specific `YBCPgGetTableDiskSize` call, and moved the PG code to the else block.
+        - Kept YB's `IsYBRelation` block first, PG's `rd_locator`-based loop in the `else` branch.
+
+- src/backend/commands/copyfrom.c:
+    - CopyFromErrorCallback:
+        - PG commit 97da48246d34807196b404626f019c767b7af0df added `relname_only` early-return logic, and PG commit a2145605ee3d92faccd769010059b110c44104ff changed `cstate->opts.binary` to `cstate->opts.format == COPY_FORMAT_BINARY`.
+        - YB PG15 initial merge 55782d561e55ef972f2470a4ae887dd791bb4a97 added `pgstat_progress_update_param(PROGRESS_COPY_STATUS, CP_ERROR)`.
+        - Kept both: YB's progress update first, then PG's relname_only guard.
+
+- src/backend/commands/createas.c:
+    - ExecCreateTableAs:
+        - PG commit 4b74ebf726d444ba820830cad986a1f92f724649 added `RefreshMatViewByOid()` call for materialized views.
+        - YB commit 159dde75013bf54db488e4959bc9b2011cda254d added `yb_xcluster_automatic_mode_target_ddl` block to mark materialized view as populated for xCluster replication.
+        - Kept both: PG's refresh call first, then YB's xCluster block.
+
+- src/backend/executor/nodeSubplan.c:
+    - hash subplan lookup:
+        - PG commit 0f5738202b812a976e8612c85399b52d16a0abb6 changed `FindTupleHashEntry` API to use `lhs_hash_expr` instead of `lhs_hash_funcs`. PG commit abdeacdb0920d94dec7500d09f6f29fbb2f6310d removed `ExecClearTuple(slot)` calls and early returns, replacing them with a `result` variable assignment.
+        - YB commit 49ed1065dabd2a9456b830c69b4bb8d584491ff8 added `node->hashtable->keyColIdx` as an extra parameter to `FindTupleHashEntry`.
+        - Took PG's changes, while keeping YB's `node->hashtable->keyColIdx` parameter
+
+- src/backend/tcop/pquery.c:
+    - CreateQueryDesc top of the function:
+        - PG commit 1b105f9472bdb9a68f709778afafb494997267bd changed to `palloc_object(QueryDesc)`.
+        - YB commit d65a1e2a6bb55167cac02c37823a7f85083dd8ad added `YbPgMemResetStmtConsumption()` call.
+        - Kept YB's `YbPgMemResetStmtConsumption()` + PG's `palloc_object`.
+    - CreateQueryDesc field assignment:
+        - PG commit 2c16deee2f7d52d6567dcbad046f74a8e880ee52 changed `totaltime` to `query_instr`.
+        - YB commit 536e4b1974268041302274d6a45ffba157d10283 added `yb_query_stats` field initialization.
+        - Kept PG's `query_instr` + YB's `yb_query_stats`.
+
+- src/bin/psql/tab-complete.in.c:
+    - match_previous_words:
+        - PG commit 4b3d173629f4cd7ab6cd700d1053af5d5c7c9e37 added `SPLIT PARTITION` completions. PG commit f2e4cc427951b7c46629fb7625a22f7898586f3a added `MERGE PARTITIONS` completions.
+        - YB commit ec65f397d75beeec92182b8902ae7e1c41aa7c11 added `ALTER TABLEGROUP` completions (originally placed below TABLESPACE; PG15 initial merge commit 55782d561e55ef972f2470a4ae887dd791bb4a97 moved it above TABLESPACE, right after DETACH PARTITION).
+        - Kept both: PG's partition completions first, then YB's tablegroup completions.
+
+- src/bin/pg_dump/pg_dump.h:
+    - DumpableObjectType enum:
+        - PG commit 9a17be1e244a45a77de25ed2ada246fd34e4557d added `DO_SUBSCRIPTION_REL` and bumped `NUM_DUMPABLE_OBJECT_TYPES`.
+        - YB commit 01a8c97ac545386c3439f231e5da6a43492f7020 added `DO_TABLEGROUP`.
+        - Kept both: `DO_SUBSCRIPTION_REL` then `DO_TABLEGROUP`, `NUM_DUMPABLE_OBJECT_TYPES` set to `DO_TABLEGROUP + 1`.
+
+- src/bin/pg_dump/pg_dump_sort.c:
+    - `dbObjectTypePriority` array:
+        - PG commit afd8ef39094b0dff9d1f2bfecb1d9fa056b85e19 changed to C99 designated initializer syntax. PG also added `DO_SUBSCRIPTION_REL` and `DO_REL_STATS` entries.
+        - YB commit 01a8c97ac545386c3439f231e5da6a43492f7020 added `DO_TABLEGROUP` entry.
+        - Took PG's designated initializer style + adding `[DO_TABLEGROUP] = PRIO_TABLEGROUP,`.
+
+- src/bin/pg_dump/pg_backup.h:
+    - struct fields:
+        - PG commit 67a2fbb8f9e9f75df08208e75da412c43a814688 added `restrict_key` field.
+        - YB added YB-specific fields (`no_tablegroups`, etc.).
+        - Kept both: PG's field first, then YB's fields.
+
+- src/bin/pg_dump/common.c:
+    - generated column handling:
+        - PG commit 8bf6ec3ba3a44448817af47a080587f3b71bee08 refined condition to `foundSameGenerated && !foundDiffGenerated` with `DUMP_COMPONENT_NONE`.
+        - YB commit 6deb862d0affa6124c446098d94ec944405ffaae added `!dopt->include_yb_metadata` guard.
+        - Combined PG's refined logic with YB's metadata guard.
+
+- contrib/seg/Makefile:
+    - REGRESS list:
+        - PG commit 681d9e4621aac0a9c71364b6f54f00f6d8c4337f (CVE-2023-2454 fix) added `security` test. PG commit 68dfecbef210dc000271553cfcb2342989d4ca0f added `partition` test.
+        - YB only has `seg`. YB did import PG commit 681d9e4621aac0a9c71364b6f54f00f6d8c4337f via commit dac89aaf39b11c794c4d9eb2e9a6db76a3d19c97, but it omit the test files and the Makefile change.
+        - Took PG's `security seg partition`. The test files `security.sql` and `security.out` are present in PG19.
+
+- src/backend/access/Makefile:
+    - SUBDIRS:
+        - PG commit 449e798c77ed9a03f8bb04e5d324d4e3cfbbae8e added `sequence` subdirectory. PG also uses multi-line backslash format.
+        - YB PG15 initial merge commit 55782d561e55ef972f2470a4ae887dd791bb4a97 added `yb_access` and `ybgin` subdirectories.
+        - Kept PG's multi-line format with `sequence` + YB's `yb_access` and `ybgin`.
+
+- src/backend/access/heap/heapam_handler.c:
+    - heapam_relation_copy_for_cluster switch block:
+        - PG commits 28d534e2ae0ac888b5460f977a10cd9bb017ef98 wrapped the switch block inside `if (!concurrent)` (for REPACK CONCURRENTLY), increasing indentation by one level. PG commit 852558b9ec9d54194195a7b7418d57e83a2fda70 changed `LockBuffer(buf, BUFFER_LOCK_SHARE)` to `LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE)` with detailed comment about hint bits. PG commit 8354b9d6b602ea549bc8d85cb404771505662a7b replaced `/* fall through */` comment with `pg_fallthrough;` inside the `HEAPTUPLE_RECENTLY_DEAD` case.
+        - YB side added `yb_switch_fallthrough()` after the `HEAPTUPLE_RECENTLY_DEAD` fall-through comment.
+        - Took PG's restructured code with `if (!concurrent)` wrapper, `LockBuffer` EXCLUSIVE change, and using `pg_fallthrough;` instead of `yb_switch_fallthrough()`.
+
+- src/backend/access/index/genam.c:
+    - systable_beginscan:
+        - PG commit 0d3dba38c777384a9dd7dffe924355c9683a6b71 added an `Assert`.
+        - YB commit ca30a3ab5252858103cf6f3f92697821e9b718df added `IsYBRelation` early return to `ybc_systable_beginscan`.
+        - Kept both: PG's assert first, then YB's `IsYBRelation` early return.
+
+- src/backend/catalog/system_functions.sql:
+    - function definitions:
+        - PG commits 759b03b24ce96f0ba6d734b570d1a6f4a0fb1177 and f95d73ed433207c4323802dc96e52f3e5553a86c simplified creation of built-in functions with default arguments and non-default ACLs so that they no longer require definitions in system_functions.sql, only entries in pg_proc.dat
+        - YB commits fc46b4029bf6762522eac4c8160cfb4ff3c5390d and c23b217504aa5fc7437977cf763c35d7f8468398 added YB-specific parameters to `pg_create_logical_replication_slot`.
+        - Took PG's removal. YB's parameters will be handled in `pg_proc.dat`.
+
+- src/backend/catalog/system_views.sql:
+    - pg_replication_slots view columns: PG added columns; YB added columns. Kept both: PG's first, YB's appended.
+
+- src/backend/catalog/toasting.c:
+    - index_create() call:
+        - adjacent line conflict.
+        - PG commit 23382b0f8b21e3f5330d765d1abfcef58d086111 renamed variables (`collationIds`, `opclassIds`). PG commit 784162357130f63b5130cd6517db21451692f9b3 added first `NULL` parameter, PG commit 6a004f1be87d34cfe51acf2fe2552d2b08a79273 added second `NULL` parameter.
+        - YB has YB-specific trailing parameters (`skip_index_backfill`, `is_colocated`, etc.) (last touched by lint changes 06cd4073e15e99b983787faaa1fb5f9f717a5e04).
+        - Combined PG's renamed variables + YB's extra trailing parameters.
+
+- src/backend/commands/collationcmds.c:
+    - pg_import_system_collations locale handling:
+        - PG commit bf03cfd162176d543da79f9398131abc251ddbb9 refactored to `create_collation_from_locale()` (which includes the ASCII filter internally).
+        - YB commit 6c8deb0504274a16bae390dcbabf45aa5ac23fbb added `YBIsSupportedLibcLocale` filter.
+        - Kept YB's locale filter before PG's `create_collation_from_locale()` call. (PG's ASCII filter is now after YB's locale filter).
+
+- src/backend/executor/execScan.c:
+    - ExecScan body:
+        - PG commit fb9f955025f7609fd3da0d7e33b77438ddc765de refactored ExecScan to call `ExecScanExtended()`.
+        - YB commit 565f56692b42c01ce56025cb7f1c535de5022cdc added `yb_exec_params.limit_use_default = true` for qual-based prefetching.
+        - Kept PG's changes and moving YB's logic to `ExecScanExtended()` (in execScan.h).
+
+- src/backend/lib/Makefile:
+    - OBJS list:
+        - PG commit 5af0263afd7beaf947e22115b7e9ade000b0387d removed `binaryheap.o`.
+        - YB commit 39f519ea2ec49e67b6bd9902c8804036fb7d9f5e added `yb_percentile.o` (later reformatted by c1a4632453751094ada4a39ec26f97c7170d2567).
+        - Kept PG's removal of `binaryheap.o` and keeping YB's `yb_percentile.o`.
+
+- src/backend/optimizer/path/equivclass.c:
+    - end-of-file — new functions:
+        - PG commit 88f55bc97622bce000a8c90f8ef58dacc926de19 new functions.
+        - YB commit 4f3536eb726d54d6d0f1115b27395fe36df8bf74 added `yb_find_ec_member_for_var`.
+        - Kept all PG's new functions, then appending YB's `yb_find_ec_member_for_var` at the end.
+
+- src/backend/optimizer/prep/prepunion.c:
+    - choose_hashed_setop function:
+        - PG commit 8d96f57d5cc79c0c51050bb707c19bf07d2895eb removed `choose_hashed_setop`.
+        - YB commit f2f0d6f49f84c0916bc2834ad7d577da9e3c212e modified `choose_hashed_setop` with `IsYugaByteEnabled()` logic.
+        - Left the function commented out with a YB_TODO_PG19MERGE.
+
+- src/backend/replication/logical/origin.c:
+    - replorigin_drop_by_name catalog deletion:
+        - PG commit 3e577ff602fe3438ac60771c4a6d027d881619b0 removed `replorigin_drop_guts`, refactored it into `replorigin_state_clear` and moved the catalog tuple deletion logic into `replorigin_drop_by_name`.
+        - YB commit 98b8079235fc30bf0f8365e48601999ca2cb3be7 and others added DDL transaction nesting logic inside `replorigin_drop_guts` and changed the CatalogTupleDelete call.
+        - Accepted PG's changes and keeping YB's DDL nesting logic and CatalogTupleDelete call inside `replorigin_drop_by_name`.
+
+- src/backend/replication/logical/Makefile:
+    - OBJS list: PG added `applyparallelworker.o` and `conflict.o`; YB has `yb_decode.o` and `yb_virtual_wal_client.o`. Kept both: YB objects first, then PG's.
+
+- src/backend/replication/logical/snapbuild.c:
+    - includes and struct definition:
+        - PG commit e2fd615ecc177493b9a961a640ec0dcc4a25755c moved `struct SnapBuild` definition to `snapbuild_internal.h`.
+        - YB commit 4776752ad4f713a1701bdcbc45c32418983f3c8e added `#include "pg_yb_utils.h"`.
+        - `struct SnapBuild` has no YB-specific fields; kept YB's include, accepted PG's removal of the struct (now in `snapbuild_internal.h`).
+
+- src/backend/rewrite/rewriteDefine.c:
+    - relation-to-view conversion checks:
+        - PG commit b23cd185fd5410e5204683933f848d4583e34b35 completely removed the logic for converting relation to view
+        - YB added a check to prevent converting system tables
+        - Accepted PG's removal, discarding YB's changes
+
+- src/backend/storage/ipc/ipci.c:
+    - shared memory initialization in `AttachSharedMemoryStructs`:
+        - PG commits 283e823f9dcb03d0be720928b261628af06d3fd4 (new shmem registration mechanism) through 9b5acad3f40fa6015f367fbf887ae5c1a93a3698 (convert all remaining subsystems) replaced all individual `*ShmemInit()` calls with `ShmemAttachRequested()` and `RegisterShmemCallbacks` API.
+        - YB commit 9fe42a056de4ba96831dd517c16b86d4d6c8f070 added `YbAshShmemInit()`, `YbQueryDiagnosticsShmemInit()`, `YbQpmShmemInit()`, `YbTerminatedQueriesShmemInit()`.
+        - Took PG's `ShmemAttachRequested()` + appending YB's shmem init calls. Added YB_TODO_PG19MERGE to verify if YB calls need changes.
+
+- src/backend/utils/adt/network.c:
+    - opfamily check:
+        - PG commit be1cc9aaf5b79f07bc0483a0c95366c77a844d0a removed explicit opfamily check and switched to `get_opfamily_member_for_cmptype()` which works with any opfamily generically.
+        - YB added `NETWORK_LSM_FAM_OID` to the opfamily check.
+        - Took PG's approach — removed the explicit opfamily check entirely since `get_opfamily_member_for_cmptype()` handles any opfamily (including LSM) and returns `InvalidOid` for unsupported ones.
+
+- src/backend/utils/init/miscinit.c:
+    - GetBackendTypeDesc switch:
+        - PG commit dbf8cfb4f02eb9ec5525de1761675f9babfd30e3 replaced explicit case list with `PG_PROCTYPE` macro from `proctypelist.h`.
+        - YB added `YB_YSQL_CONN_MGR`, `YB_YSQL_CONN_MGR_WAL_SENDER`, `YB_AUTO_ANALYZE_BACKEND`, `YB_INDEX_BACKFILL_DDL`, `YB_MATVIEW_REFRESH_DDL` cases.
+        - Took PG's macro expansion + appending YB's custom cases after. Add a YB_TODO_PG19MERGE to use PG macro for YB cases as well.
+
+- src/backend/utils/misc/Makefile:
+    - OBJS list:
+        - PG commit a1a7bb8f16cd5529d76850c85625039ad7aa348a added `conffiles.o`.
+        - YB added `pg_yb_utils.o`, `yb_ash.o`, `yb_exceptions_for_func_pushdown.o`, etc.
+        - Kept both: YB objects first, then PG's `conffiles.o`.
+
+- src/backend/utils/misc/help_config.c:
+    - mixedStruct union moved into config_generic:
+        - PG commit a13833c35f9b42fdef3f34ef1acc221c2e781cfe moved the `mixedStruct` union into `config_generic` and removed the standalone `mixedStruct` typedef. Function signatures changed from `mixedStruct *` to `const struct config_generic *`.
+        - YB commit 399c47632a45b66545b7f4579cbaa1d70abc2c89 added `struct yb_config_oid oid` member to `mixedStruct`.
+        - Accepted PG's removal of standalone `mixedStruct` in `help_config.c`. Added `struct yb_config_oid oid` to the union inside `config_generic` in `guc_tables.h`.
+
+- src/bin/pg_dump/Makefile:
+    - pg_dumpall / ysql_dumpall target:
+        - PG commit c1da7281060d646f863e920a1aac3b9dbc997672 removed dumputils.o and added `$OBJS`.
+        - YB changed to `ysql_dumpall` and uses `$(YB_CCLD)`.
+        - Accepted PG's changes and keeping YB's `ysql_dumpall`, `$(YB_CCLD)`.
+
+- src/bin/pg_waldump/.gitignore:
+    - rmgrdesc source file entries:
+        - PG commit db6957bae8d7716785aa3748b25a9a4b7c3ff304 added `/rmgrdesc_utils.c` entry.
+        - YB commented out the source file entries.
+        - Took YB's commented-out style for `*desc.c` files (symlinked by YB's build, per commit 56b36bdb38c7fea8a13a5e489e08046b289623f5) + keeping PG's `/rmgrdesc_utils.c` uncommented for now (not matched by the `*desc.c` wildcard in the Makefile, so it gets copied not symlinked). Added a YB_TODO_PG19MERGE comment to consider adding `rmgrdesc_utils.c` to the symlink list in the Makefile.
+
+- src/include/Makefile:
+    - SUBDIRS: PG added `archive`, switched to multi-line backslash format; YB added `ybgate`. Kept PG's format with `archive` + YB's `ybgate`.
+
+- src/include/access/amapi.h:
+    - IndexAmRoutine struct fields:
+        - PG commit c09e5a6a01659a66dd84f3e745694999d3414ddd added `amtranslatestrategy` and `amtranslatecmptype` function pointers.
+        - YB added additional fields.
+        - Kept both: PG's functions pointers first, then YB's fields.
+
+- src/include/access/heapam.h:
+    - function declarations:
+        - PG replaced `heap_inplace_update` with `heap_inplace_update_and_unlock` (commit a07e03fd8fa7daf4d1356f7cb501ffe784ea6257) and added new functions.
+        - The PG15 backpatch for a07e03fd8fa7daf4d1356f7cb501ffe784ea6257 retained `heap_inplace_update` as deprecated, which arrived in YB via merge commit e99df6f4d97e5c002d3c4b89c74a778ad0ac0932.
+        - YB also added `yb_shared_update` parameter to `heap_inplace_update`.
+        - Accepted PG's declarations only.
+
+- src/backend/access/heap/heapam.c:
+    - heap_inplace_unlock / heap_inplace_update:
+        - See above resolution.  Dropped `heap_inplace_update` declaration and definition from `heapam.c` — no callers exist in YB. Added a YB_TODO_PG19MERGE to a comment in `ybModifyTable.c` referencing this function.
+
+- src/include/access/htup_details.h:
+    - HeapTupleNoNulls / HeapTupleHeaderHasNulls:
+        - PG changed `HeapTupleNoNulls` from a macro to an inline function.
+        - YB commit 12e23adb6ac517cde3bacfcbe64a8292470701cf added `HeapTupleHeaderHasNulls` 
+        - Kept PG's inline `HeapTupleNoNulls` and making YB's macro an inline function as well.
+
+- src/include/access/tupconvert.h:
+    - `execute_attr_map_cols` signature:
+        - PG commit bfcf1b34805f70df48eedeec237230d0cc1154a6 renamed parameter from `inbitmap` to `in_cols`.
+        - YB commit bb737232781348657e8efc44e89c7f38c6c63013 added `Relation rel` parameter. Although this commit is a PG import, the additional parameter was a YB change.
+        - Combined both: PG's `in_cols` name + YB's extra parameter renamed to `yb_rel`.
+
+- src/include/access/xact.h:
+    - Isolation level comment block:
+        - PG commit dafaa3efb75ce1aae2e6dbefaf6f3a889dea0d21 changed the comment.
+        - YB commit 9124c053cc8ba7824ec87e8a02a0afe2c354ed35 added a YB note in the comment.
+        - Kept PG's rewritten comment and appending YB's Read Committed note.
+
+- src/include/catalog/catversion.h:
+    - CATALOG_VERSION_NO:
+        - PG updated to `202604061`.
+        - YB has `202209061` with a comment about not needing to bump on import.
+        - Took PG's version `202604061` and keeping YB's comment.
+
+- src/include/catalog/heap.h:
+    - `InsertPgAttributeTuples` signature:
+        - adjacent line conflict.
+        - PG commit d939cb2fd612acde0304913213cfbdb01994e682 changed `Datum *attoptions` to `const FormExtraData_pg_attribute tupdesc_extra[]`.
+        - YB commit 73bad43e870fa2d596e3ab09ca7ac1b4d44f2e75 added `bool yb_relisshared` parameter (last touched by PG15 initial merge 55782d561e55ef972f2470a4ae887dd791bb4a97).
+        - Took PG's new parameter type and appending YB's `bool yb_relisshared`.
+
+- src/include/catalog/pg_default_acl.h:
+    - Default ACL object types:
+        - PG commit 0d6c4776647feeee26f3e29fff6a5edb222fa260 added `DEFACLOBJ_LARGEOBJECT 'L'`.
+        - YB commit b4505ac446b3a1e7f3bd171973e618e5897f8b3a added `DEFACLOBJ_TABLEGROUP 'g'`.
+        - Kept both defines, PG's first then YB's.
+
+- src/include/catalog/pg_opfamily.h:
+    - Boolean opfamily macro:
+        - adjacent line conflict.
+        - PG commit ff720a597c0a53a8fcdf2cf4e45248dc5c37f9ab renamed `IsBooleanOpfamily` to `IsBuiltinBooleanOpfamily` with a comment about non-core opfamilies.
+        - YB commit 5c6b021522ac936a5e5150f79c1a2de61a481a3e added `BOOL_LSM_FAM_OID` to the condition.
+        - Used PG's macro name `IsBuiltinBooleanOpfamily` and adding YB's `BOOL_LSM_FAM_OID` to the OR condition.
+
+- src/include/commands/copy.h:
+    - `DoCopy` declaration and batch macro:
+        - PG commit bfcf1b34805f70df48eedeec237230d0cc1154a6 renamed `DoCopy` parameter from `state` to `pstate`.
+        - YB commit 55782d561e55ef972f2470a4ae887dd791bb4a97 added `DEFAULT_BATCH_ROWS_PER_TRANSACTION` macro and `yb_default_copy_from_rows_per_transaction` extern.
+        - Kept YB's macro/extern first, then PG's `DoCopy` declaration.
+
+- src/include/commands/copyfrom_internal.h:
+    - `CopyInsertMethod` enum:
+        - PG commit 97da48246d34807196b404626f019c767b7af0df updated enum comments.
+        - YB added a comment about `YBCExecuteInsert`.
+        - Took PG's enum descriptions and keeping YB's comment about YB insert methods.
+
+- src/include/commands/explain.h:
+    - ExplainState extraction:
+        - PG commit c65bc2e1d14a2d4daed7c1921ac518f2c5ac3d17 moved `ExplainState` to `explain_state.h`, leaving only a forward declaration.
+        - YB commit 536e4b1974268041302274d6a45ffba157d10283 added `YbExplainExecStats` struct YB also has a bunch of YB fields in `ExplainState`.
+        - Took PG's forward declaration in `explain.h` + adding YB include. YB-specific fields moved to `explain_state.h` where PG relocated the struct.
+
+- src/include/commands/repack.h:
+    - `finish_heap_swap` signature:
+        - PG commit 4bac9600f09a9b9ba7daa3ba69495a877f51e6c3 renamed `minMulti` to `cutoffMulti`.
+        - YB commit ce62d6c567cb358a9595def17d9092b27b7e26b4 added `yb_copy_split_options` parameter (last touched by 5627af5d6009b6d5b14bbbb552f6fd2a9ae43c3a). YB commit 03507f91525729e1eb0e2790c1a96e3a5c19e4e3 added `changedIndexNames`, `changedIndexSplitOpts` parameters.
+        - Used PG's `cutoffMulti` name and appending YB's extra parameters.
+
+- src/include/commands/tablecmds.h:
+    - `ExecuteTruncateGuts` signature:
+        - PG commit 1e10d49b65d6c26c61fee07999e4cd59eab2b765 added `bool run_as_table_owner`.
+        - YB commit d5f1e0bd719df34ba6581c04b4a6c2cb393517fa added `bool yb_is_top_level`.
+        - Kept both parameters, PG's first then YB's.
+
+- src/include/executor/execExpr.h:
+    - ExprEvalStep union members:
+        - PG commit 6ee30209a6f161d0a267a33f090c70c579c87c00 added `is_json` struct. PG commit 6185c9737cf48c9540782d88f12bd2912d6ca1cc added `jsonexpr`, `jsonexpr_coercion` structs.
+        - YB commit ada31e719db783e6c26b1b0b8c9447174ad7cbc5 added `row_array_compare` struct.
+        - Kept PG's JSON structs first, then YB's `row_array_compare`.
+
+- src/include/executor/execdesc.h:
+    - QueryDesc instrumentation field:
+        - PG commit 2c16deee2f7d52d6567dcbad046f74a8e880ee52 changed `totaltime` to `query_instr` with updated comment.
+        - YB commit 536e4b1974268041302274d6a45ffba157d10283 added `yb_query_stats` field.
+        - Took PG's `query_instr`, appending YB's `yb_query_stats`, add a YB_TODO_PG19MERGE to update the YB comment and verify if the note about the life cycle still applies to `query_instr`.
+
+- src/include/fmgr.h:
+    - FmgrInfo struct:
+        - adjacent line conflict.
+        - PG commit 4bd91912987d794c48dd4ba4c337906bd23759be changed fmgr.h typedefs to use `Node *fn_expr`.
+        - YB commit 544122690311196d40059d9ea1311211df216247 added `void *fn_alt` (last touched by lint fix f0f54c4a7ade831f367aceb936800cbe18bf4822).
+        - Took PG's `Node *fn_expr` type and adding YB's `void *fn_alt` field.
+
+- src/include/libpq/libpq-be.h: 
+    - Port struct fields:
+        - PG commit d951052a9e02bfacad8bd6f0f53a4dcd3b7e6d1f moved `authn_id` and its comment block out of `Port` into a new `ClientConnectionInfo` struct.
+        - YB has YB fields.
+        - Kept YB's fields after `hba`.
+
+- src/include/nodes/nodeFuncs.h:
+    - End-of-file declarations:
+        - PG commit 1c27d16e6e5c1f463bbe1e9ece88dda811235165 removed the `struct PlanState;` forward declaration and the `planstate_tree_walker` function declaration from the end of the file (moved/refactored elsewhere).
+        - YB commit 9ed10e1cc21f64540dd775993ca59adacac48284 added `YbPlanStateTryGetAggrefs` declaration after `planstate_tree_walker`.
+        - Kept YB's `YbPlanStateTryGetAggrefs` declaration.
+
+- src/include/optimizer/pathnode.h:
+    - Function declarations:
+        - PG commit 8e11859102f947e6145acdd809e5cdcdfbe90fa5 added `create_rel_agg_info`.
+        - YB has YB functions.
+        - Kept PG's function first, then appending YB's functions.
+
+- src/include/optimizer/paths.h:
+    - Function declarations:
+        - PG commit 88f55bc97622bce000a8c90f8ef58dacc926de19 added `ec_clear_derived_clauses`.
+        - YB commit 4f3536eb726d54d6d0f1115b27395fe36df8bf74 added `yb_find_ec_member_for_var`.
+        - Kept both declarations.
+
+- src/include/optimizer/planner.h:
+    - Function declarations:
+        - PG added some functions.
+        - YB has YB functions.
+        - Kept PG's declarations first, then YB's.
+
+- src/include/optimizer/restrictinfo.h:
+    - Inline function and declarations:
+        - PG commit 2453196107de66cff0257feef2ff8585dcf9d924 moved `clause_sides_match_join` inline function here.
+        - YB has YB batching-related functions (`yb_can_hash_batched_rinfo`, `yb_can_batch_rinfo`).
+        - Kept PG's inline function, then appending YB's batching functions.
+
+- src/include/partitioning/partdesc.h:
+    - Function declarations:
+        - PG commit e033696596566d422a0eae47adca371a210ed730 fixed the `#endif` guard comment from `PARTCACHE_H` to `PARTDESC_H`.
+        - YB commit 55782d561e55ef972f2470a4ae887dd791bb4a97 added `RelationBuildPartitionDesc` extern declaration before `#endif`.
+        - Kept YB's extern declaration before `#endif` with PG's corrected `PARTDESC_H` guard name.
+
+- src/include/partitioning/partprune.h:
+    - Function declarations:
+        - PG commit d4d1fc527bdb333d818038081c17ed7d9b1697c1 changed `make_partition_pruneinfo` return type to `int` and removed `struct` keyword from parameter types.
+        - YB commit c969dec8280233ce8fb43a6ac68117fd49451c27 added `yb_oids` parameter to `prune_append_rel_partitions`.
+        - Took PG's `int` return type and adding YB's `yb_oids` parameter.
+
+- src/include/postmaster/postmaster.h:
+    - Function declarations:
+        - PG commit f1baed18bc3db50c72bfb00b6247b47689158445 added `#ifdef WIN32` block.
+        - YB commit 44a0bfb01cc0678246350160782898b80cc3ded5 added `YbProcessStartupPacket` and related declarations.
+        - Kept both: YB's declarations, then PG's `#ifdef WIN32` block.
+
+- src/include/regex/regguts.h:
+    - `STACK_TOO_DEEP` / `CANCEL_REQUESTED` area:
+        - adjacent line conflict. PG commit db4f21e4a34b1d5a3f7123e28e77f575d1a971ea removed the `CANCEL_REQUESTED` macro.
+        - YB commit 8033dd42d675e62a16f7322f20b146c3cdf63e06 modified PG's `STACK_TOO_DEEP` macro (with `IsMultiThreadedMode()` check).
+        - Kept YB's modified `STACK_TOO_DEEP`. Removed the `CANCEL_REQUESTED` macro.
+
+- src/include/replication/logicalproto.h:
+    - `logicalrep_write_update` signature:
+        - PG commit e65dbc9927fb86aa3c8a914ede6a6ae934384f5a added `PublishGencolsType include_gencols_type` parameter.
+        - YB commit fddfec620d291de3423277812bbe6097dfcbce3d added `bool *yb_old_is_omitted` and `bool *yb_new_is_omitted` parameters (last touched by merge commit c177183b65d47090b59af81d15e09329ae065571).
+        - Kept PG's `include_gencols_type` parameter first, then appending YB's `yb_old_is_omitted` and `yb_new_is_omitted` parameters.
+
+- src/include/replication/output_plugin.h:
+    - OutputPluginOptions fields:
+        - PG commit 0d3dba38c777384a9dd7dffe924355c9683a6b71 added `bool need_shared_catalogs`.
+        - YB commit df0fad20e88390adfa7b871081f074bda89c3d73 added `List *yb_publication_names`.
+        - Kept both fields, PG's first then YB's.
+
+- src/include/parser/kwlist.h:
+    - new keywords (3 conflicts):
+        - PG added `"node"`, `"source"`, `"split" -> SPLIT`, `"target"`
+        - YB added its own `"split" -> _YB_SPLIT_P`,`"nonconcurrently" -> `, "tablets" -> _YB_TABLETS_P`.
+        - Interleaved the non-conflicting entries alphabetically. For the `"split"` collision, dropped YB's `_YB_SPLIT_P` and renamed the YB grammar to use PG's `SPLIT` token in gram.y. Safe because PG's `SPLIT` appears only in `ALTER TABLE ... SPLIT PARTITION` (alter_table_cmd) while YB's `SPLIT` appears only in `YbOptSplit` under CREATE TABLE/INDEX, with disjoint lookaheads (`PARTITION` vs `'('`/`INTO`/`AT`).
+
+- src/include/storage/lwlock.h:
+    - BuiltinTrancheIds enum:
+        - PG commit 2047ad068139f0b8c6da73d0b845ca9ba30fb33d refactored enum with `LWTRANCHE_INVALID` and `#include`-based structure.
+        - YB added `LWTRANCHE_YB_ASH_CIRCULAR_BUFFER`, `LWTRANCHE_YB_ASH_METADATA`, `LWTRANCHE_YB_QUERY_DIAGNOSTICS`, `LWTRANCHE_YB_QUERY_DIAGNOSTICS_CIRCULAR_BUFFER`, `LWTRANCHE_YB_TERMINATED_QUERIES`.
+        - Kept PG's enum structure and appending YB's 5 tranches before `LWTRANCHE_FIRST_USER_DEFINED` with a YB_TODO_PG19MERGE.
+
+- src/include/storage/proc.h:
+    - PGPROC struct layout:
+        - PG commit 2e0853176f8f28a7684aa8b5af73446332960725 rearranged fields and added "Status reporting" header.
+        - YB added YB fields.
+        - Kept PG's layout with "Status reporting" section, then appending all YB-specific fields after `wait_event_info`.
+
+- src/include/tcop/tcopprot.h:
+    - Signal handler declarations:
+        - PG commit 3691edfab97187789b8a1cbb9dce4acf0ecd8f5a changed `FloatExceptionHandler` to use `pg_noreturn`. PG commit 0da096d78e1e49645ff9baf6e425d3c47c5a5dc0 changed `RecoveryConflictInterrupt` to `HandleRecoveryConflictInterrupt`.
+        - YB commit ca25fb9eb52b8bdbdc66987edcf5596ad61b7da9 added `YbCriticalSignalHandler`.
+        - Took PG's `pg_noreturn` and `HandleRecoveryConflictInterrupt` + adding YB's `YbCriticalSignalHandler`.
+
+- src/include/utils/catcache.h:
+    - Cache statistics types:
+        - PG commit 9c047da51f270b25fe03ee114e1de0c64aa9cc18 changed `long` to `uint64` for `cc_invals`, `cc_lsearches`, `cc_lhits`.
+        - YB commit 7ce2151eadac46faa5ea2deff65efb1f26ff2bbc added `yb_cc_size_bytes` field (as `long`) (last touched by lint fix 06cd4073e15e99b983787faaa1fb5f9f717a5e04).
+        - Took PG's `uint64` types and keeping YB's `yb_cc_size_bytes` (with `uint64`).
+
+- src/include/utils/guc_tables.h:
+    - GUC struct definition:
+        - PG commit a13833c35f9e07fe978bf6fad984d6f5f25f59cd reorganized GUC structs, moving type-specific structs above `config_generic`, effectively moving `config_generic` down within the file.
+        - YB commit 450c0dd0d5b8e3e0d0bbb0314c01f3a0b78cf746 added `ysql_conn_mgr_saved_default` field and `YB_GUC_VALUE_RESET`/`YB_GUC_DEFAULT_RESET` defines.
+        - Kept PG's struct definition and adding YB's field and defines in the new location.
+
+- contrib/file_fdw/file_fdw.c:
+    - PG_MODULE_MAGIC_EXT:
+        - PG commit 55527368bd07248e91e3d37a782bf66b76f06865 replaced `PG_MODULE_MAGIC` with `PG_MODULE_MAGIC_EXT`.
+        - YB added YB includes.
+        - Kept YB includes then PG's `PG_MODULE_MAGIC_EXT`.
+    - NextCopyFrom on_error handling:
+        - PG (commit a1c4c8a9e1e3a53996dafa1f4ee6d4f7de2c58b2 and others) wrapped `NextCopyFrom` in an outer `if`, added `on_error`/`reject_limit` retry loop with `goto retry`, and switched 2nd arg from `NULL` to `econtext`.
+        - YB commit d3a6eb327e90ae0f5b819a56edd75126ba0ccc42 added a trailing `skip_row` bool parameter to `NextCopyFrom`
+        - Kept PG's changes, and passing `false /* skip_row */` for the YB parameter.
+
+- contrib/postgres_fdw/option.c:
+    - postgres_fdw_validator:
+        - PG commit 8ad51b5f446b5c19ba2c0033a0f7b3180b3b6d95 added `analyze_sampling` `else if` validation branch.
+        - YB commit 67eb85a7d65146ffeca9730c0e5a99c20419fa68 added `server_type` `else if` validation branch.
+        - Kept both: PG's `analyze_sampling` branch first, then YB's `server_type` branch.
+    - InitPgFdwOptions:
+        - PG commit a2eb99a01e015a76682911ae3980762f6ee6ac8c changed `gssdeleg` to `gssdelegation`.
+        - YB commit 67eb85a7d65146ffeca9730c0e5a99c20419fa68 added `server_type` entry.
+        - Kept both: PG's `gssdelegation` entry first, then YB's `server_type` entry.
+
+- contrib/postgres_fdw/deparse.c:
+    - semi-join deparsing:
+        - PG commit 824dbea3e41efa3b35094163c834988dea7eb139 added a `JOIN_SEMI` branch and moved the existing JOIN ON deparse into the `else` arm; inside that arm.
+        - YB added `context.yb_min_attr = fpinfo->yb_min_attr;` to the context init.
+        - Took PG's restructuring and adding YB's `yb_min_attr` assignment in each new `context` init site.
+    - deparseUpdateSql/deparseDeleteSql variables (2 conflicts):
+        - PG added `additional_conds` variable.
+        - YB added `yb_min_attr` variable.
+        - Kept both variables.
+
+- doc/src/sgml/ref/allfiles.sgml:
+    - SGML entity declarations:
+        - PG commit 2f094e7ac691abc9d2fe0f4dcf0feac4a6ce1d9c added `createPropertyGraph` and `dropPropertyGraph` entities.
+        - YB commit 7ad368777cdc4a1037c0ab277ef978bf73140bda added `createProfile` and `dropProfile` entities.
+        - Kept both: PG's entities first, then YB's.
+
+- src/backend/access/brin/brin.c:
+    - Below header file includes:
+        - PG commit b437571714707bc6466abde1a0af5e69aaade09c added parallel index build code below the header file includes.
+        - YB commit 6234353ccd1f5d9f07bd7057bc34ede39e016d34 added YB include `#include "utils/guc.h"`.
+        - Kept PG's changes and dropping YB's include since PG commit 0a20ff54f5e66158930d5328f89f087d4e9ab400 already added `#include "utils/guc.h"` above.
+    - table_index_build_range_scan call:
+        - PG commit 7f798aca1d5df290aafad41180baea0ae311b4ee removed `(void *)` cast from `state` argument.
+        - YB commit 3ccf55af8c24e0f4bb112d8aee08d4434cebd979 introduced `bfinfo`/`bfresult`. The `NULL` trailing parameters were added during the PG15 initial merge(55782d561e55ef972f2470a4ae887dd791bb4a97).
+        - Took PG's cast removal and keeping YB's trailing `bfinfo`/`bfresult` parameters.
+
+- src/backend/access/transam/varsup.c:
+    - shmem variables:
+        - PG commit b31ba5310b5176402b60abc0454a033b1210ab75 renamed `ShmemVariableCache` to `TransamVariables`, and other commits c6d55714ba4c282dcf5fb5fe5ef2a5cad0b06e81 added more code below.
+        - YB has `YB_OID_PREFETCH` and `ysql_upgrade_next_oid`.
+        - Kept YB's original ordering: `YB_OID_PREFETCH` define right after `VAR_OID_PREFETCH`, then PG's `TransamVariables` and shmem API, then `ysql_upgrade_next_oid`.
+    - OID prefetch logic:
+        - PG commit b31ba5310b5176402b60abc0454a033b1210ab75 changed `ShmemVariableCache` references to  `TransamVariables`.
+        - YB commit ca30a3ab5252858103cf6f3f92697821e9b718df added `YBCReserveOids` path. YB commit 8a3278d913d0d0cb4dcf7cc9df98c630e2bd456f added `ysql_enable_pg_per_database_oid_allocator` guard.
+        - Changed YB's `YBCReserveOids` block to use `TransamVariables` (renamed from `ShmemVariableCache`); preserved PG's changes in the else block.
+
+- src/backend/bootstrap/bootstrap.c:
+    - includes and globals:
+        - PG commit 935e675f3c9efd0e39bf33db15ab85049cc4ee7c removed `bootstrap_data_checksum_version` global.
+        - YB has YB includes.
+        - Kept YB includes, dropping `bootstrap_data_checksum_version`.
+    - scanner init / YBCCreateDatabase:
+        - PG commit 3e4bacb171001644583ac14e29ae1b09ce818c92 added an if block.
+        - YB commit ca30a3ab5252858103cf6f3f92697821e9b718df added `YBCCreateDatabase` call.
+        - Kept both: PG's `boot_yylex_init` block then YB's `YBCCreateDatabase` block.
+
+- src/backend/catalog/Makefile:
+    - build system (2 conflicts):
+        - PG commit 6ab2e8385d55e0b73bb8bbc41d9c286f5f7f357f moved all bki-generation machinery out of src/backend/catalog/Makefile and into src/include/catalog/Makefile, and slimmed install-data/uninstall-data here to just the static *.sql files.
+        - YB content inside the conflict markers: YB pg_yb_*.h in `CATALOG_HEADERS`; YB *.dat in `POSTGRES_BKI_DATA`; `yb_bki-stamp` rule (yb_genbki.pl -> yb_postgres.bki) wired into distprep + header-stamp; `yb_postgres.bki` install line; uninstall additions ( `yb_system_functions.sql`, `yb_system_views.sql`); `clean`/`maintainer-clean` covering yb_bki-stamp + yb_postgres.bki.
+        - Took PG's install-data, PG's slim uninstall-data list extended with YB's three additions (`yb_system_functions.sql`, `yb_system_views.sql`). Ported YB pg_yb_*.h, YB *.dat, `yb_bki-stamp` rule (wired into `generated-headers`), and `yb_postgres.bki` install/uninstall/clean into `src/include/catalog/Makefile`. Dropped `header-stamp` dep + `distprep` wiring since PG removed those.
+
+- src/backend/catalog/pg_publication.c:
+    - published_rel struct and YB includes:
+        - PG commit 062a8444242404242f7c2b814fed37b329639408 added `published_rel` struct.
+        - YB has YB includes and `yb_pg_relation_is_publishable` declaration.
+        - Kept both: YB includes, PG's struct, YB's forward declarations.
+    - is_table_publication / yb_pg_relation_is_publishable:
+        - PG commit 493f8c6439cf64d75883c650b5dd573d8fe0664b added `is_table_publication()`. PG commit 7054186c4ebe24e63254651e2ae9b36efae90d4e added `check_and_fetch_column_list()`.
+        - YB commit ef3577d3cd65a3fbc8de9cff0c36c5fafc026dc3 added `yb_pg_relation_is_publishable` call in `pg_relation_is_publishable`.
+        - Kept PG's new functions and YB's modification to `pg_relation_is_publishable`.
+
+- src/backend/catalog/pg_shdepend.c:
+    - dependency type cases:
+        - PG commit 534287403914cc9760db98f7320ac4e92f5d416e added `SHARED_DEPENDENCY_INITACL` case.
+        - YB commit 7a13a29b22f656473b9d5cb951e7dccb0b006beb added `SHARED_DEPENDENCY_PROFILE` case.
+        - Kept both cases.
+    - end-of-file functions:
+        - PG commit 35dd40d34cbdf5aa3e0f5b3493c33d00abb26456 added `shdepReassignOwned_Owner()` and `shdepReassignOwned_InitAcl()`.
+        - YB commit 7a13a29b22f656473b9d5cb951e7dccb0b006beb added YB functions.
+        - Kept both: PG's functions first, then YB's functions.
+
+- src/backend/catalog/pg_type.c:
+    - includes and declarations:
+        - PG commit 70988b7b0a0bd03c59a2314d0b5bcf2135692349 removed `makeUniqueTypeName` forward declaration.
+        - YB commit 82e1d567eac9b6c1b3e7b4ecd138a8ba7653a81c added YB includes. The `makeUniqueTypeName` forward declaration was originally a PG function (not YB), carried over from the PG15 initial merge.
+        - Kept YB's includes, removing `makeUniqueTypeName` forward declaration.
+    - IsYsqlUpgrade guard:
+        - PG changed the comment below the YB block.
+        - YB added `IsYsqlUpgrade` early-return guard.
+        - Kept YB's guard block with PG's comment wording.
+
+- src/backend/commands/alter.c:
+    - ExecRenameStmt:
+        - PG commit 2f094e7ac691abc9d2fe0f4dcf0feac4a6ce1d9c added `case OBJECT_PROPGRAPH`.
+        - YB commit c47b2d9abb62b98f49df11194902aa113aa03779 added `yb_is_internal_clone_rename` parameter to the `RenameRelation` call.
+        - Kept PG's case and YB's parameter.
+    - AlterObjectNamespace_oid:
+        - PG commit 89e5ef7e21812916c9cf9fcf56e45f0f74034656 switched from `OCLASS_*` enum values (via `getObjectClass()`) to direct `*RelationId` constants, and replaced the explicit "ignore" case list with `default:` + Assert.
+        - YB had added `OCLASS_YBTBLGROUP`, `OCLASS_YBPROFILE`, `OCLASS_YBROLE_PROFILE` to the explicit "ignore" case list.
+        - Took PG's `default:` + Assert, which implicitly covers YB's object classes.
+
+- src/backend/commands/copy.c:
+    - attribute number computation:
+        - PG commit a61b1f74823c9c4f79c95226a461f1e7a367764b moved `attno` declaration and added `Bitmapset **bms` variable.
+        - YB replaced `FirstLowInvalidHeapAttributeNumber` with `YBGetFirstLowInvalidAttributeNumber`.
+        - Kept PG's declaration placement and `bms` variable, using YB's attribute number function.
+    - COPY options:
+        - PG added `force_array`, `on_error`, `log_verbosity`, `reject_limit` options.
+        - YB has YB options `rows_per_transaction`, `skip`, `disable_fk_check`, `replace`.
+        - Kept PG's options first, then YB options.
+
+- src/backend/commands/copyfromparse.c:
+    - CopyGetData:
+        - PG added `WAIT_EVENT_COPY_FROM_READ`.
+        - YB added conditional `WAIT_EVENT_YB_COPY_COMMAND_STREAM_READ`.
+        - Took PG's wait event. Added a YB_TODO_PG19MERGE.
+    - NextCopyFrom:
+        - PG commit 7717f63006935de00fafd000bff450280508adf1 refactored inline text/binary parsing into `CopyFromOneRow` callback.
+        - YB added `skip_row` parameter for skipping format checking on invalid rows.
+        - Took PG's callback approach. Added YB_TODO_PG19MERGE to port `skip_row` logic into the new callbacks.
+
+- src/backend/commands/foreigncmds.c:
+    - CreateForeignServer pointer check:
+        - PG commit a5b35fcedb542587e7d8b8fcd21a2e0995b82d2f removed `PointerIsValid()`.
+        - YB commit 67eb85a7d65146ffeca9730c0e5a99c20419fa68 added `yb_validate_server_options()`.
+        - Kept YB's validation call with PG's `DatumGetPointer != NULL` style.
+    - AlterForeignServer:
+        - Same pattern. Resolved same way.
+
+- src/Makefile.global.in:
+    - CPPFLAGS:
+        - PG commits 65c298f61fc70f2f960437c05649f71b862e2c48, 8eadd5c73c44708ecd45b9fd3ac54a550511d16f added `LIBNUMA_CFLAGS`, `LIBURING_CFLAGS`. PG commit 4300d8b6a79d61abb5ca9f901df7bde7a49322b6 changed from `:= ... $(CPPFLAGS)` to `+=`.
+        - YB added `YB_SRC_ROOT` check and `-I$(YB_SRC_ROOT)/src`.
+        - Used PG's `+=` style with all flags plus YB's `YB_SRC_ROOT` guard and `-I` path.
+    - prove_installcheck:
+        - PG commit aeb8ea361a0a321a0e1cbc79a4cd3ec0b1191bf2 added `share_contrib_dir`.
+        - YB commit 745bd761e6926c5816a0716716d8548eacbb3d96 imported PG commit c098509927f9a49ebceb301a2cb6a477ecd4ac3c which added `REGRESS_SHLIB`. PG later removed it in commit a0fc813266467d666b8f09ccccaccb700326a296 (moved to `src/test/recovery/Makefile` only, the only test that needs it); however, the YB PG15 merge did not drop it.
+        - Kept PG's `share_contrib_dir` and dropping `REGRESS_SHLIB`.
+    - pg_config_ext.h / stamp-ext-h rule:
+        - PG commit 962da900ac8f0927f1af2fd811ca67fa163c873a removed `pg_config_ext.h` and `stamp-ext-h`.
+        - YB commit c5ddc7bad7137d51a5c4ec6416bbea7492aeb133 had added `YB_PG_SKIP_CONFIG_STATUS` guard to `stamp-ext-h`.
+        - Dropped both entries (accepting PG's removal).
+
+- src/backend/access/common/reloptions.c:
+    - untransformRelOptions pstrdup:
+        - PG commit 6710e83a675eda798544fea4cdcb89eef7f39403 removed `pstrdup` calls on both `s` and `p` (passing them directly to `makeDefElem`/`makeString`).
+        - YB commit 0d9ced1053242ed270d75c5d2b5a02bc4190a900 added `pfree(s)`.
+        - Took PG's change, discarding YB side.
+    - StdRdOptions:
+        - PG commits 4d6a66f675815a5d40a650d4dcfb5ddb89c6ad2f, 052026c9b903380b428a4c9ba2ec90726db81288 changed to TERNARY type and added `vacuum_max_eager_freeze_failure_rate`.
+        - YB added YB options.
+        - Kept PG's changes first, then YB options.
+    - partitioned_table_reloptions:
+        - PG commit 4f981df8e0b7bc00d22ab0db65579589c9d4bb8c changed to error out instead of running validation when reloptions are set for a partitioned table.
+        - YB commit b5f581483f31dddacdb0ccff2d8d51a116ab0662 added support for specifying colocation reloption for parent partitioned tables.
+        - Kept YB's `IsYugaByteEnabled()` block first, then PG's error.
+
+- src/backend/access/nbtree/nbtutils.c: (also touches src/include/access/nbtree.h and src/backend/access/yb_access/yb_scan.c)
+    - btree preprocessing split:
+        - PG commit 597b1ffbf12352a3863a894f16741864aaf2242f moved most of this file (`_bt_preprocess_array_keys`, `_bt_sort_array_elements`, `_bt_compare_array_elements`, `_bt_find_extreme_element`, `_bt_preprocess_keys`, `_bt_compare_scankey_args`, `_bt_fix_scankey_strategy`, `_bt_mark_scankey_required`, `_bt_check_rowcompare`, `BTSortArrayContext`) into a new file `nbtpreprocesskeys.c`. The new `_bt_sort_array_elements` is `static` and has a different signature (`ScanKey, FmgrInfo *sortproc, bool, Datum*, int` instead of `IndexScanDesc, ScanKey, bool, Datum*, int`).
+        - YB un-static-ified `_bt_sort_array_elements` (and dropped its forward decl), added an `IsYugaByteEnabled() && !RegProcedureIsValid(cmp_proc)` fallback inside it that uses `lookup_type_cache(elemtype, TYPECACHE_CMP_PROC)`, added `utils/builtins.h` and `utils/typcache.h` includes, and exposed `extern int _bt_sort_array_elements(...)` in nbtree.h. yb_scan.c calls it with the old signature.
+        - Took PG's slim nbtutils.c (dropped the YB `utils/builtins.h` / `utils/typcache.h` includes since the YB-modified function moved out); removed the YB-added extern from nbtree.h; wrapped the yb_scan.c call site with YB_TODO_PG19MERGE (commented out via `//`, set `*culled_num_elems = num_valid;` as placeholder) since the new function is `static` AND has an incompatible signature - YB caller needs to be rewritten to resolve the FmgrInfo (with the YB fallback) up front and call the new function (after exposing it or adding a wrapper in nbtpreprocesskeys.c).
+
+- src/backend/catalog/namespace.c:
+    - MatchNamedCall signature:
+        - PG commit 83a56419457ec0eff2eddfed8eb3aba86bede9cc added `fgc_flags` parameter.
+        - YB commit bde7acd5bd33240037fd389849c28015705a959d added `YbBuildTempNameSuffix` declaration.
+        - Kept both.
+    - temp namespace naming:
+        - PG commit 024c521117579a6d356050ad3d78fdc95e44eefa renamed `MyBackendId` to `MyProcNumber`.
+        - YB commit bde7acd5bd33240037fd389849c28015705a959d added temp namespace suffix.
+        - Ported YB's suffix logic to use PG's `MyProcNumber`.
+
+- src/backend/commands/event_trigger.c:
+    - EventTriggerSupportsObjectType:
+        - PG replaced the explicit ObjectType case enumeration (and the "intentionally no default" comment) with `default: return true;`.
+        - YB added `OBJECT_YBPROFILE` / `OBJECT_YBTABLEGROUP` cases (return false).
+        - Inserted YB's two cases before PG's `default: return true;`; dropped YB's "intentionally no default" comment block since PG added a default.
+    - EventTriggerSupportsObject:
+        - PG renamed `EventTriggerSupportsObjectClass(ObjectClass objclass)` to `EventTriggerSupportsObject(const ObjectAddress *object)` and switched the switch from `OCLASS_*` enum cases to `<TableName>RelationId` cases on `object->classId`; also added `default: return true;`.
+        - YB added `OCLASS_YBTBLGROUP`, `OCLASS_YBPROFILE`, `OCLASS_YBROLE_PROFILE` cases (return false).
+        - Ported YB's cases to PG's RelationId style: `YbTablegroupRelationId`, `YbProfileRelationId`, `YbRoleProfileRelationId`, placed before `default: return true;`. Added `catalog/pg_yb_tablegroup.h`, `pg_yb_profile.h`, `pg_yb_role_profile.h` includes for the RelationId macros.
+    - palloc_array:
+        - PG commit e0a9c6463509babfa4dc65aab8aef560e73d85ed used `palloc_array`.
+        - YB added `else command->d.atscfg.dictIds = NULL;` guard.
+        - Kept PG's `palloc_array` and YB's `else` NULL guard.
+
+- contrib/pg_trgm/trgm_gin.c:
+    - All 6 conflicts (pg_fallthrough vs yb_switch_fallthrough): fallthrough pattern
+
+- contrib/pg_trgm/trgm_gist.c:
+    - pg_fallthrough vs yb_switch_fallthrough (4 conflicts): fallthrough pattern
+
+- contrib/postgres_fdw/postgres_fdw.c:
+    - PG_MODULE_MAGIC and YB includes:
+        - PG commit 55527368bd07248e91e3d37a782bf66b76f06865 replaced `PG_MODULE_MAGIC` with `PG_MODULE_MAGIC_EXT`.
+        - YB added YB-specific includes.
+        - Kept YB includes then PG's `PG_MODULE_MAGIC_EXT`.
+    - postgresGetForeignPaths:
+        - PG commit 9e9931d2bf40e2fea447d779c2e133c2c1256ef3 adds 4th parameter (NIL) to `add_paths_with_pathkeys_for_rel` call.
+        - YB wraps call in `yb_server_type` check.
+        - Kept YB's conditional guard; updated to PG's 4-arg signature.
+    - postgresBeginForeignScan:
+        - PG commit 599b33b9492dfefd1219c1d31801f40b3ba90b0d changed and moved `user_id` assignment.
+        - YB commit 54ec9a1a2e2c94dfb0e59516fcfcb4e66149cf19 adds federated YugabyteDB server type checking.
+        - Kept YB's federated server checks and discarding the old `user_id` assignment.
+    - fetch_more_data function restructure:
+        - PG commit 80aa9848befc13c188d2775a859deaf172fdd3a2 removed the `PG_TRY()` block, simplified `pgfdw_get_result` (2 args to 1) and `pgfdw_report_error` (5 args to 3).
+        - YB commit 65ec75f603937d63636c1668aeeca64970b9a226 added `else if (fsstate->yb_gvr)` branch, moved error check from `else` branch to a common location after the if/else if/else, and added conditional `eof_reached` for `yb_gvr`. However, the error check inside the `if (async_capable)` branch was not removed (likely an oversight). YB commit ec3a95daf09e888a177cce8d2de00bcb7627c3ef changed the YB block to use `YbGlobalViewReadExecScan`.
+        - Took PG's changes (no `PG_TRY()`, new API signatures, per-branch error checks); applied YB's additions: `else if (fsstate->yb_gvr)` branch (with its own per-branch error check, matching PG's style) and conditional `eof_reached`. Kept per-branch error checks instead of YB's common check to match PG's style.
+
+- contrib/test_decoding/test_decoding.c:
+    - PG_MODULE_MAGIC + extern decls:
+        - PG commit 55527368bd07248e91e3d37a782bf66b76f06865 replaced PG_MODULE_MAGIC with PG_MODULE_MAGIC_EXT; commit fd4bad1655391582f639527c325fc4a99680cc64 dropped `_PG_init`/`_PG_output_plugin_init` extern decls.
+        - YB added pg_yb_utils.h include.
+        - Kept YB include + PG_MODULE_MAGIC_EXT; dropped externs.
+    - tuple_to_stringinfo unchanged-toast branch:
+        - PG commit 0f5ade7a367c16d823c75a81abb10e2ec98b4206 wrapped `origval` with `DatumGetPointer()`.
+        - YB added `yb_send_unchanged_toasted ||` short-circuit.
+        - Combined.
+    - pg_decode_change tuple_to_stringinfo calls (4 conflicts):
+        - PG commit 08e6344fd6423210b339e92c069bb979ba4e7cd6 removed ReorderBufferTupleBuf; `change->data.tp.{new,old}tuple` is now `HeapTuple` (no `->tuple`/`->yb_is_omitted`).
+        - YB added a `yb_is_omitted` arg.
+        - Used `change->data.tp.{new,old}tuple` directly and passing `NULL /* YB_TODO_PG19MERGE: yb_is_omitted */`. yb_is_omitted storage needs rework (there's a more detailed TODO in `reorderbuffer.h`).
+
+- src/backend/Makefile:
+    - SUBDIRS list:
+        - PG commit 9adf32da6b48e423e632ac24d6c634021e1ab154 reformatted SUBDIRS and added some subdirs.
+        - YB added `ybgate` subdirectory.
+        - Kept PG's multi-line format; appended YB's `ybgate` at the end.
+    - LDFLAGS override vs YB build system block:
+        - PG commit 9db49fc5bfdc0126be03f4b8986013e59d93b91d added `override LDFLAGS := $(LDFLAGS) $(LDFLAGS_EX) $(LDFLAGS_EX_BE)`.
+        - YB commit 56b36bdb38c7fea8a13a5e489e08046b289623f5 (and others) added YB build block (`YB_BUILD_ROOT`, `LIBS`, `SHLIB_LINK`, etc.).
+        - Kept YB's build block; placed PG's `override LDFLAGS` line after `SHLIB_EXPORTS`.
+    - Link commands (4 conflict):
+        - PG commit 9db49fc5bfdc0126be03f4b8986013e59d93b91d removed explicit `$(LDFLAGS_EX)` and `$(export_dynamic)` from link commands.
+        - YB commit 1564c6d5f552b68553921e66375e0fa1cecaf229 replaced `$(CC)` with `$(YB_CCLD)`.
+        - Used `$(YB_CCLD)` with PG's simplified flags.
+
+- src/backend/access/transam/parallel.c:
+    - FixedParallelState struct:
+        - PG commit 024c521117579a6d356050ad3d78fdc95e44eefa renamed `BackendId parallel_leader_backend_id` to `ProcNumber parallel_leader_proc_number`.
+        - YB commit 2f91e3ef37754c96d5074cd33fa2e4c401c52513 added YB session fields.
+        - Kept PG's `ProcNumber`; appended YB's session fields.
+    - InitializeParallelDSM fps assignment:
+        - PG commit 024c521117579a6d356050ad3d78fdc95e44eefa assigns `MyProcNumber`.
+        - YB commit 2f91e3ef37754c96d5074cd33fa2e4c401c52513 dumps YB session state.
+        - Kept PG's `MyProcNumber` assignment; appended YB's session state dump.
+    - ReinitializeParallelDSM:
+        - PG commit f1a6e622bd94735c36d72c663813b55c442739b4 added MemoryContext save/restore.
+        - YB commit 22d739d099a8a5f45bedd56c10d75b2c777fa303 added YB TODO comment.
+        - Kept both YB's TODO comment and PG's MemoryContext restore.
+    - ParallelWorkerMain:
+        - PG commit 15b4c46c328b25be9463db6d2960eeb16a784aad added `BGWORKER_BYPASS_ROLELOGINCHECK` flag to the `BackgroundWorkerInitializeConnectionByOid` call.
+        - YB commit caa636fcd02f59d0dfab103b52fd59703745ff64 added YB session init branch (`YbBackgroundWorkerInitializeConnectionByOid`).
+        - Kept YB's if/else branching; added PG's flag to both branches.
+
+- src/backend/catalog/catalog.c:
+    - GetNewOidWithIndex do-while loop:
+        - PG commit 7fbcee1b2d5f1012c67942126881bd492e95077e adds completion logging.
+        - YB commit 8d0ef3f7f8c49a8d9bec302cdcc0c40f5d9e785b changed while loop condition to use a new DoesOidExistInRelation helper.
+        - Kept YB's helper as loop condition and PG's completion logging after loop. Also, rename DoesOidExistInRelation to YbDoesOidExistInRelation and mark it static.
+    - GetNewRelFileNumber variable declarations:
+        - PG commits b0a55e43299c4ea2a9a8c757f9c26352407d0ccc and others changed `RelFileNodeBackend to RelFileLocatorBackend`, and `BackendId backendid` to `ProcNumber procNumber`
+        - YB commit dae4d523d97acdf7436f12824a967d333db09a7a added YbGetAllRelfilenodes() htab and 8d0ef3f7f8c49a8d9bec302cdcc0c40f5d9e785b removed the unused PG declarations (rpath, collides, backend) in the altered function body.
+        - Kept PG's rlocator, along with YB's HTAB initialization.
+    - GetNewRelFileNumber Assert and relpersistence switch:
+        - PG commit 024c521117579a6d356050ad3d78fdc95e44eefa replaced backend-id usages in the switch with proc number.
+        - YB commit 8d0ef3f7f8c49a8d9bec302cdcc0c40f5d9e785b extracted the switch into `GetBackendOidFromRelPersistence()` helper. YB also relaxed Assert with YB exceptions (`yb_binary_restore`, `yb_extension_upgrade`).
+        - Kept YB's `GetBackendOidFromRelPersistence()` helper; updated it to use PG's `ProcNumber` API. Kept YB's relaxed Assert. Renamed `GetBackendOidFromRelPersistence` to `YbGetBackendOidFromRelPersistence` and marked it static.
+    - GetNewRelFileNumber backend assignment:
+        - PG commit 024c521117579a6d356050ad3d78fdc95e44eefa introduced `procNumber` temp variable and assigns `rlocator.backend = procNumber`.
+        - YB assigned `rnode.backend` using the helper `GetBackendOidFromRelPersistence` and added a block for YbDatabaseIdForNewObjectId assignment below (adjacent line conflict).
+        - Used PG's `rlocator.backend` with YB's assignment and block.
+    - GetNewRelFileNumber collision check loop:
+        - PG changed `rpath` and `rnode`.
+        - YB commit 8d0ef3f7f8c49a8d9bec302cdcc0c40f5d9e785b removed the PG code for rpath check and changed the logic of the loop.
+        - Discarded PG's changes; kept YB's. Removed the inapplicable PG comment above the conflict region.
+
+- src/backend/catalog/dependency.c:
+    - object_classes[] array:
+        - PG commit ef5e2e90859a39efdd3a78e528c544b585295a78 removed the array.
+        - YB has OCLASS_YBTBLGROUP/YBPROFILE/YBROLE_PROFILE entries.
+        - Dropped the array.
+    - pg_fallthrough in findDependentObjects:
+        - PG commit 8354b9d6b602ea549bc8d85cb404771505662a7b changed FALLTHROUGH comment to pg_fallthrough.
+        - YB commit b0388c39ec9510a878ea81ad57137d73f1138b1a added `switch_fallthrough()` macro (later renamed to `yb_switch_fallthrough()` by 5a07df479dcc4589d502379fe8e6599a4c642459).
+        - Took PG's pg_fallthrough.
+    - doDeletion global object types and YbTablegroupRelationId:
+        - PG commit 89e5ef7e21812916c9cf9fcf56e45f0f74034656 switched from OCLASS_* enums to *RelationId constants.
+        - YB commit 7a13a29b22f656473b9d5cb951e7dccb0b006beb added OCLASS_YBPROFILE/YBROLE_PROFILE.
+        - Converted all YB cases to *RelationId style: `YbTablegroupRelationId` (added by commit 48dc70a0775eed9d598a4c2a6ccd9ef3b965695d), `YbProfileRelationId`, `YbRoleProfileRelationId`.
+    - getObjectClass() function:
+        - PG commit 89e5ef7e21812916c9cf9fcf56e45f0f74034656 removed getObjectClass().
+        - YB has YB-specific cases.
+        - Dropped getObjectClass() — no callers remain in the codebase.
+
+- src/backend/catalog/indexing.c:
+    - CatalogIndexInsert signature:
+        - PG commit 19d8e2308bc51ec4ab993ce90077342c915dd116 added TU_UpdateIndexes parameter.
+        - YB commit 5c28dc4a654cc246d0da0807e18d07b81cfe45eb added bool yb_shared_insert parameter.
+        - Kept both parameters.
+    - CatalogTupleInsert and YBCatalogTupleInsert:
+        - PG commit 19d8e2308bc51ec4ab993ce90077342c915dd116 passes TU_All.
+        - YB commit 5c28dc4a654cc246d0da0807e18d07b81cfe45eb added YBCatalogTupleInsert with shared insert logic.
+        - Passed both TU_All and yb_shared_insert, keeping YB's function.
+    - CatalogTupleInsertWithInfo, CatalogTuplesMultiInsertWithInfo (2 conflicts):
+        - Same pattern: PG adds TU_UpdateIndexes parameter, YB adds yb_shared_insert parameter.
+        - Combined both parameters in each function.
+    - CatalogTupleUpdate, CatalogTupleUpdateWithInfo (2 conflicts):
+        - PG adds TU_UpdateIndexes out-parameter to `simple_heap_update` and passes it to `CatalogIndexInsert`.
+        - YB has `YBCatalogTupleUpdate`.
+        - Kept YB's `YBCatalogTupleUpdate` in the `IsYugaByteEnabled()` branch and PG's changes in the else branch. Also, in CatalogTupleUpdateWithInfo, remove the redundant `CatalogTupleCheckConstraints` inside the else block, since it is already called once before the if/else block.
+    - CatalogTupleDelete signature:
+        - PG commit e1ac846f3d2836dcfa0ad15310e28d0a0b495500 changed `ItemPointer tid` to `const ItemPointerData *tid`.
+        - YB changed to `HeapTuple yb_tup`.
+        - Took YB's HeapTuple signature for YB's delete path.
+
+- src/backend/commands/async.c:
+    - globals:
+        - PG added `int max_notify_queue_pages` GUC.
+        - YB added FormData_pg_attribute defs for pg_yb_notifications, the YbNotificationsAtts table, pg_yb_notifications_relation/reloid/relfilenode, ybNotifsPollerPendingEntries, YbListenerQueueScanCurrentXactState, YbNotifsPollerShmemData.
+        - Kept both: PG's GUC line first, then the YB block.
+    - function declarations:
+        - PG removed an `asyncQueuePageDiff` doc comment.
+        - YB added a block of yb* static helper declarations (NOTIFY/LISTEN/poller helpers).
+        - Kept YB's declarations and dropping the orphaned PG15-base `asyncQueuePageDiff` comment (the function below is now `asyncQueueErrdetailForIoError`, which has its own context).
+    - BecomeRegisteredListener loop + setup (2 conflicts):
+        - PG commit 024c521117579a6d356050ad3d78fdc95e44eefa and others renamed `BackendId` to `ProcNumber` / `InvalidBackendId` to `INVALID_PROC_NUMBER` / `MyBackendId` to `MyProcNumber` (and changed indexing); added `QUEUE_BACKEND_WAKEUP_PENDING` / `QUEUE_BACKEND_IS_ADVANCING` assignments.
+        - YB added `bool ybIsFirstListenerOnNode = QUEUE_FIRST_LISTENER == InvalidBackendId;` and an `if (IsYugaByteEnabled()) max = head;` block before the QUEUE_BACKEND_* assignments.
+        - Took PG's renames + new assignments and porting YB's two additions to use `INVALID_PROC_NUMBER` / `MyProcNumber`.
+    - PrepareTableEntriesForListen (formerly Exec_ListenCommit body):
+        - PG commit 282b1cde9dedf456ecf02eb27caf086023a7bb71 removed `Exec_ListenCommit` and added `PrepareTableEntriesForListen`
+        - YB commit 81186956ca98516f9634ae9541b7e707d07405ca added a `YbIsClientYsqlConnMgr()` block at the end of the original Exec_ListenCommit.
+        - Took PG's changes. Added a YB_TODO_PG19MERGE.
+    - asyncQueueUnregister:
+        - PG changed to INVALID_PROC_NUMBER
+        - YB added ybCleanupListenState().
+        - Kept PG's changes; appended YB's cleanup call.
+    - SignalBackends second loop:
+        - PG commit 282b1cde9dedf456ecf02eb27caf086023a7bb71 rewrote SignalBackends
+        - YB had appended `|| IsYugaByteEnabled()` to a condition that no longer exists.
+        - Took PG's check. Added a YB_TODO_PG19MERGE.
+    - asyncQueueProcessPageEntries commit check:
+        - PG added a `LocalChannelTableIsEmpty()` quick-check + comment before `TransactionIdDidCommit(qe->xid)`.
+        - YB commit feeb96b138f60708a1bde077384ef85c049657a8 added `IsYugaByteEnabled() ||` short-circuit to the commit check.
+        - Kept PG's quick-check + comment, then combining: `if (IsYugaByteEnabled() || TransactionIdDidCommit(qe->xid))`.
+
+- src/backend/commands/copyto.c:
+    - CopySendEndOfRow WAIT_EVENT_COPY_TO_WRITE:
+        - PG commit e05a24c2d4eab3dd76741dc6e6c18bb0584771c5 and others added WAIT_EVENT_COPY_TO_WRITE, removed the line termination block.
+        - YB added YB-specific wait event.
+        - Kept both wait events. Added a YB_TODO_PG19MERGE.
+    - CopySendEndOfRow pgstat_report_wait_end:
+        - PG commit e05a24c2d4eab3dd76741dc6e6c18bb0584771c5 added pgstat_report_wait_end
+        - YB also added pgstat_report_wait_end guarded by IsYugabyteEnabled()
+        - Kept PG's pgstat_report_wait_end.
+    - BeginCopyTo data_dest_cb:
+        - PG commit 9fcdf2c787ac6da330165ea3cd50ec5155943a2b added a `if (data_dest_cb)` branch.
+        - YB commit 5e1a3dc5de25fb42f3291a3633c597f90cacef59 adds CP_IN_PROG tracking above the if/else block.
+        - Combined both.
+    - DoCopyTo (2 conflicts):
+        - PG commit 4bea91f21f61d01bd40a4191a4a8c82d0959fffe extracted the per-relation scan loop into a new CopyRelationTo helper.
+        - YB commit 0542f163aaf0b2b21347601cb61f634e7ccbce70 adds YB memory context management.
+        - Kept PG's changes and ported YB's memory context management into PG's CopyRelationTo (after root_slot and map setup).
+
+- src/backend/commands/dbcommands.c:
+    - createdb variable declarations and checks:
+        - PG commit b380a56a3f9556588a89013b765d67947d54f7d0 adds newline check.
+        - YB commits 6d332c9635edb474b66c5c3de6dba1afb76ef3c8, ec6e419c693ce116778c6a70f4675cda90817305, 82e1d567eac9b6c1b3e7b4ecd138a8ba7653a81c add YB variables and IsYsqlUpgrade check.
+        - Kept both.
+    - createdb option processing:
+        - PG commit fce7cb6da09b56462fc734e789348376848caf4c renames dcollversion to collversionEl.
+        - YB commits add dcolocated/dclonetime processing.
+        - Kept YB's options and using PG's collversionEl name.
+    - createdb locale validation:
+        - PG commit 5b40feab594c3019fd6b09e46f97f5b367050cf9 adds provider-specific error hints.
+        - YB commit 292786f5e2ede375f1261739aa9a5f8d01e6250e adds YbCheckUnsupportedLibcLocale() calls.
+        - Kept PG's hints; appended YB's locale checks.
+    - RenameDatabase variable declarations:
+        - PG commit b380a56a3f9556588a89013b765d67947d54f7d0 adds newline check.
+        - YB commit 5e0cc5a2b4e1962a86261d971bce7f4ac82d6bab adds connection manager variables.
+        - Kept both.
+    - AlterDatabase array initialization:
+        - PG commit 9fd45870c1436b477264c0c82eb195df52bc0919 adds zero-initialization.
+        - YB commit 25c7f934df8b4f6c138cc9ac88b9e3ecc5ce01be adds unsupported_options array.
+        - Kept both.
+
+- src/backend/commands/functioncmds.c:
+    - CreateFunction namespace ACL check:
+        - adjacent line conflict.
+        - PG commit c727f511bd7bf3c58063737bcf7a8f331346f253 refactors to `object_aclcheck`.
+        - YB commit 453b4d8337fb7b14981b47c3a108037d6035dee4 adds `IsYbDbAdminUser` bypass.
+        - Used PG's API with YB's bypass.
+    - CreateFunction language ACL check:
+        - PG commit c727f511bd7bf3c58063737bcf7a8f331346f253 refactors to `object_aclcheck`. PG commit 3e0fff2e6888e39b0ad5cdfdb78bc1c2bb2b22c9 removed block-local `AclResult aclresult` declaration (shadow warning fix, reuses function-scope declaration).
+        - YB commit 453b4d8337fb7b14981b47c3a108037d6035dee4 adds `IsYbDbAdminUser` bypass.
+        - Used PG's API and function-scope declaration with YB's bypass. Dropped YB's block-local `AclResult aclresult` declaration.
+    - AlterFunction owner check:
+        - PG commit afbfc02983f86c4d71825efa6befd547fe81a926 refactors to `object_ownercheck`.
+        - YB commit 453b4d8337fb7b14981b47c3a108037d6035dee4 adds `IsYbDbAdminUser` bypass.
+        - Used PG's API with YB's bypass.
+
+- src/backend/commands/matview.c:
+    - SetMatViewPopulatedState call:
+        - PG refactored to accept `skipData` parameter.
+        - YB commit 2e5e7208e62f39eb390bfc44865909708f8f0da5 adds `yb_in_place_refresh` argument.
+        - Used PG's `!skipData` with YB's third argument.
+    - make_new_heap / data generation block:
+        - PG replaces LockRelationOid with Assert and restructures data generation.
+        - YB adds `yb_copy_split_options` and xCluster guard.
+        - Combined PG's restructured block with YB's arguments and guard.
+    - opcmethod Assert:
+        - PG removed the `Assert` entirely.
+        - YB extended the `Assert` to include LSM_AM_OID.
+        - Accepted PG's removal.
+    - finish_heap_swap call:
+        - PG commit 28d534e2ae0ac888b5460f977a10cd9bb017ef98 adds `true /* reindex */` parameter.
+        - YB commit adds YB-specific arguments.
+        - Kept PG's reindex param; appended YB's arguments.
+    - is_usable_unique_index relam check: generalized AM check pattern
+
+- src/backend/commands/opclasscmds.c:
+    - amcanorder check in assignProcTypes: generalized AM check pattern
+    - Error messages in assignProcTypes (3 conflicts):
+        - PG commit ce62f2f2a0a48d021f250ba84dfcab5d45ddc914 changed "btree" to "ordering" in error messages.
+        - YB commit 586c51901f49075310f9b7405d585aea287b4ad2 changed "btree" to `%s, yb_amname` variable.
+        - Took YB's `yb_amname`-parameterized error messages.
+
+- src/backend/commands/publicationcmds.c:
+    - REPLICA IDENTITY FULL validation and idattrs loop:
+        - PG commit 87ce27de6963091f4a365f80bcdb06b9da098f00 restructured the function: moved `idattrs` loop, added `REPLICA_IDENTITY_FULL` early-return block with generated columns checks
+        - YB commit cff97c04736af739b40f777f97015fa56f7aa696 replaced `FirstLowInvalidHeapAttributeNumber` with `YBGetFirstLowInvalidAttributeNumber(relation)` for yb_minattr offset in the idattrs loop.
+        - Kept PG's restructured code; applied YB's comment and yb_minattr offset to the attnum calculation in the idattrs loop.
+    - CreatePublication superuser check:
+        - PG commit 96b37849734673e7c82fb86c4f0a46a28f500ac8 extends check for `for_all_sequences`.
+        - YB commit 2465f743a5e64ff8671cd59edb73a034ddbb9d29 adds `IsYbDbAdminUser` bypass for `for_all_tables`.
+        - Combined PG's extended check with YB's bypass. Scoped the `IsYbDbAdminUser` bypass to `stmt->for_all_tables` only, preserving YB's original behavior of only allowing yb_db_admin for FOR ALL TABLES (not FOR ALL SEQUENCES).
+    - AlterPublicationOwner_internal owner check:
+        - PG commit 96b37849734673e7c82fb86c4f0a46a28f500ac8 consolidates check and adds `puballsequences`.
+        - YB commit 2465f743a5e64ff8671cd59edb73a034ddbb9d29 adds `IsYbDbAdminUser` bypass for `puballtables`.
+        - Kept PG's consolidated check structure and scoping `IsYbDbAdminUser` bypass to `puballtables` only.
+    - AlterPublicationOwner variable and YB guard:
+        - PG commit 01e27aab05f5f83ab4b79688795848d787dab738 renamed `subid` to `pubid`.
+        - YB adds `yb_enable_replication_commands` guard.
+        - Kept PG's `pubid` rename; added YB's guard.
+
+- src/backend/commands/schemacmds.c:
+    - owner/ACL checks (5 conflicts: CreateSchemaCommand ACL, RenameSchema owner + ACL, AlterSchemaOwner_internal owner + ACL):
+        - PG commit c727f511bd7bf3c58063737bcf7a8f331346f253 refactors `pg_database_aclcheck` to `object_aclcheck`. PG commit afbfc02983f86c4d71825efa6befd547fe81a926 refactors `pg_namespace_ownercheck` to `object_ownercheck`.
+        - YB commit f930e4b7b176ca956fabf35b255ef60e68c9be12 adds `IsYbDbAdminUser` bypasses.
+        - Used PG's APIs with YB's bypasses.
+    - AlterSchemaOwner_internal role membership check:
+        - PG commit 3d14e171e9e2236139e8976f3309a588bcc8683b renamed `check_is_member_of_role` to `check_can_set_role`.
+        - YB commit f930e4b7b176ca956fabf35b255ef60e68c9be12 replaced PG's `check_is_member_of_role` with inline `is_member_of_role()` + `IsYbDbAdminUser` guard + manual `ereport`.
+        - Resolved with `IsYugaByteEnabled()` guard: YB path keeps inline `is_member_of_role` + `IsYbDbAdminUser` bypass, PG path uses `check_can_set_role`.
+
+- src/backend/commands/sequence.c:
+    - ResetSequence storage file creation:
+        - PG commit b0a55e43299c4ea2a9a8c757f9c26352407d0ccc renames `RelationSetNewRelfilenode` to `RelationSetNewRelfilenumber`.
+        - YB (commit f2bb921dfb035561c8b566bacc5c16d133d3425c and others) wraps PG code in `else` block of `IsYugaByteEnabled()`, adds `yb_copy_split_options` and `preserved_index_split_options` parameters.
+        - Kept YB's branching; used PG's renamed `RelationSetNewRelfilenumber` with YB's split options parameters.
+    - AlterSequence read sequence data:
+        - PG commit ba3d93b2e806a877f26922e0f9e1845d0ef1511b replaces `Form_pg_sequence_data` parameter with separate `last_value`, `reset_state`, `is_called` out-parameters, PG commit 414e75540f0a2b2faba5a1db7d8809b6c5e5a5f0 fixed comment.
+        - YB commit a036e5f5dc3fc9c500c82fbabf6762a150eef327 reads from the sequence via `YBCReadSequenceTuple` into `last_val`/`is_called`.
+        - Merged YB's `last_val`/`is_called` into PG's `last_value`/`is_called` variable (removing duplicate declarations), moved new PG code into the PG branch, and initialized `last_value = 0` / `is_called = false` at the top of the YB branch (matching original YB defaults).
+    - AlterSequence/SequenceChangePersistence RelationSetNewRelfilenumber (2 conflicts):
+        - PG commit b0a55e43299c4ea2a9a8c757f9c26352407d0ccc renames function.
+        - YB added YB parameters.
+        - Used PG's renamed `RelationSetNewRelfilenumber` with YB's parameters.
+    - nextval_internal YB sequence logic:
+        - PG commit 414e75540f0a2b2faba5a1db7d8809b6c5e5a5f0 fixed comment.
+        - YB commit 9765a42806c616c975262c9b9b38ba22b0becfa8 adds YB sequence pushdown.
+        - Kept YB's `IsYugaByteEnabled()` block before PG path, applying PG's comment typo fix.
+    - setval conditional read_seq_tuple:
+        - similar to above.
+    - init_params RESTART crosscheck:
+        - PG commit ba3d93b2e806a877f26922e0f9e1845d0ef1511b uses `*last_value` with `PRId64`.
+        - YB commit 94583031243b7a9cd6c6824b776161b911d28557 adds `YbUsingSequenceOidAssignment()` guard.
+        - Used PG's formatting with YB's guard.
+    - pg_sequence_last_value YB early return:
+        - PG commit 7967d10c5b49ccb82f67a0b80678a1a932bccdee (and 3cb2f13ac500983c9c6b1eef3b3c2091c26f3040) refactors the aclcheck to return NULL instead of erroring.
+        - YB added `IsYugaByteEnabled()` early return below the error in the old PG code.
+        - Kept YB's early return.
+
+- src/backend/commands/tablespace.c:
+    - CreateTableSpace location validation:
+        - PG commit b380a56a3f9556588a89013b765d67947d54f7d0 adds newline check.
+        - YB commit 38fc89021d77f249c2bcf39f28b2dbdacf66d327 moves validation inside `!IsYugaByteEnabled()` guard.
+        - Placed PG's newline check inside `!IsYugaByteEnabled()` guard alongside the other location validation checks.
+    - CreateTableSpace xlog registration:
+        - PG commit ed5e5f071033c8bdaabc8d9cd015f89aa3ccfeef removes `(char *)` casts from `XLogRegisterData` calls.
+        - YB commit 38fc89021d77f249c2bcf39f28b2dbdacf66d327 wraps in `!IsYugaByteEnabled()` guard.
+        - Kept YB's guard; applied PG's cast removal.
+    - DropTableSpace checkpoint and barrier:
+        - PG commit bb938e2c3c7a955090f8b68b5bf75d064f6a36a0 renames `CHECKPOINT_IMMEDIATE` to `CHECKPOINT_FAST`.
+        - YB commit f701d7e554c1e9a2e12b048f445e4182ae280a17 wraps in `!IsYugaByteEnabled()` guard.
+        - Applied PG's rename within YB's guard block.
+    - DropTableSpace xlog registration:
+        - PG commit ed5e5f071033c8bdaabc8d9cd015f89aa3ccfeef removes `(char *)` cast from `XLogRegisterData` call.
+        - YB commit f701d7e554c1e9a2e12b048f445e4182ae280a17 wraps in `!IsYugaByteEnabled()` guard.
+        - Kept YB's guard; applied PG's cast removal.
+
+- src/backend/catalog/index.c:
+    - AppendAttributeTuples forward declaration and definition (2 conflicts):
+        - PG (commit 6a004f1be87d34cfe51acf2fe2552d2b08a79273 and others) adds `const NullableDatum *stattargets` parameter and makes `attopts` const.
+        - YB commit 5c28dc4a654cc246d0da0807e18d07b81cfe45eb adds `bool yb_relisshared` parameter.
+        - Combined both changes.
+    - InsertPgAttributeTuples call in AppendAttributeTuples:
+        - PG changes fourth arg from `attopts` to `attrs_extra` (FormExtraData_pg_attribute).
+        - YB commit 5c28dc4a654cc246d0da0807e18d07b81cfe45eb adds `yb_relisshared` parameter.
+        - Combined both changes.
+    - Binary upgrade OID allocation in index_create:
+        - PG commit b0a55e43299c4ea2a9a8c757f9c26352407d0ccc renames relfilenode to relfilenumber.
+        - YB commits 63ffdae951eacb0da9aee08cf8247052446623a8 and db96bd1cdb8948e587875f3ca7e1be66894a825b add yb_binary_restore and yb_ignore_pg_class_oids conditional logic, yb_ignore_relfilenode_ids conditional logic.
+        - Kept YB's yb_binary_restore conditional logic using PG's relfilenumber naming. Added a YB_TODO_PG19MERGE.
+    - Relfilenumber override in index_create binary upgrade:
+        - similar to above.
+    - AppendAttributeTuples call in index_create:
+        - PG changes args to `opclassOptions, stattargets`.
+        - YB commit 5c28dc4a654cc246d0da0807e18d07b81cfe45eb passes `shared_relation` for yb_relisshared.
+        - Combined both.
+    - Partition and normal dependencies in index_create (2 conflicts):
+        - PG commit 23382b0f8b21e3f5330d765d1abfcef58d086111 renames collationObjectId to collationIds, classObjectId to opclassIds.
+        - YB commit 2bae4c5a0bac79cdd03f6df24992e3f7ec3a0299 wraps partition and normal dependencies inside `if (!yb_is_catalog_rel)` block.
+        - Kept YB's yb_is_catalog_rel guard with PG's variable names.
+    - index_build call in index_create:
+        - PG commit caec9d9fadf1b04741ac554470c46bc1f8e89d19 adds `progress` parameter to index_build.
+        - YB adds yb_test_block_index_phase test hook before index_build.
+        - Kept YB's test hook; added PG's progress parameter to the index_build call.
+    - BuildSpeculativeIndexInfo LSM_AM_OID check: generalized AM check pattern
+    - systable_inplace_update_finish in index_update_stats:
+        - PG commit 8114224719401da8e30131310f1a227781cac6eb changed comment.
+        - YB commit 5c28dc4a654cc246d0da0807e18d07b81cfe45eb added `yb_shared_update` arg.
+        - Kept YB's call and taking PG's updated comment.
+    - index_build progress reporting:
+        - PG commit caec9d9fadf1b04741ac554470c46bc1f8e89d19 adds `if (progress)` guard around progress reporting block.
+        - YB adds YB-specific progress phase.
+        - Kept YB's code, then using PG's `else if (progress)` for the standard PG block.
+    - reindex_index signature:
+        - PG commit f21848de20130146bc8039504af40bd24add54cd adds `const ReindexStmt *stmt` first parameter.
+        - YB adds YB parameters.
+        - Combined both.
+    - reindex_index body (RelationSetNewRelfilenumber + index_build):
+        - PG renames RelationSetNewRelfilenode to RelationSetNewRelfilenumber, adds progress parameter to index_build.
+        - YB adds YbUseUnsafeTruncate guard, adds partitioned index skip for index_build, adds parameter to RelationSetNewRelfilenode.
+        - Kept YB's YbUnsafeTruncate guard, using PG's renamed `RelationSetNewRelfilenumber` with YB's split options parameters, keeping partitioned index skip, adding PG's progress parameter to index_build.
+    - reindex_index pg_index update comment:
+        - PG commit f691f5b80a85c66d715b4340ffabb503eb19393e removes comment related to early pruning.
+        - YB commit 9c8ae9628fa5ab401d5958074729d1fab173b55f adds YB partitioned index comment.
+        - Dropped the early pruning comment (removed in PG); kept YB's partitioned index comment.
+    - reindex_relation signature, call to reindex_index:
+        - similar to reindex_index signature.
+    - reindex_relation result and toast handling:
+        - PG commit f2bf8fb04886e3ea82e7f7f86696ac78e06b7e60 moved toast reindexing before the index loop; end of function is now just `result |= (indexIds != NIL);`.
+        - YB commit 2fb7ea649683574f7d6a62edaf0318166d5eb5a1 added YB parameters to reindex_relation call for toast.
+        - Took PG's `result |= (indexIds != NIL)` (toast already handled earlier); updated the PG toast call site to pass YB parameters (is_yb_table_rewrite=false, yb_copy_split_options, NIL changedIndexNames/changedIndexSplitOpts).
+
+- src/backend/executor/execIndexing.c:
+    - check_exclusion_or_unique_constraint forward declaration:
+        - PG commit bfcf1b34805f70df48eedeec237230d0cc1154a6 renames `errorOK` to `violationOK`.
+        - YB added `bool ybUseIndexOnlyScan` and `TupleTableSlot **ybConflictSlot` parameters.
+        - Used PG's `violationOK`; kept YB's parameters.
+    - YbExecUpdateIndexTuples indisvalid check:
+        - PG commit b7271aa1d71acda712a372213633fdb55c1465c1 replaced `bool noDupErr`/`bool update` with `uint32 flags` bitmask in `ExecInsertIndexTuples`.
+        - YB commit 68f7de82addd7eaed4b30db0b1c5d8c1dc590dc0 has the `indisvalid` check as part of the YB-specific update logic. YB had refactored the PG code from `ExecInsertIndexTuples` into `YbExecDoInsertIndexTuple` helper.
+        - Took YB side only (the misplaced PG code is already present in `YbExecDoInsertIndexTuple`). Also fixed `ExecInsertIndexTuples` call to `YbExecDoInsertIndexTuple` to translate `flags` to booleans: `(flags & EIIT_NO_DUPE_ERROR)` and `(flags & EIIT_IS_UPDATE)` to match PG code.
+    - ExecCheckIndexConstraints signature:
+        - PG commit 9758174e2e5cd278cf37e0980da76b51890e0011 adds `const ItemPointerData *tupleid` parameter.
+        - YB adds `TupleTableSlot **ybConflictSlot` parameter.
+        - Combined both changes.
+    - check_exclusion_or_unique_constraint existing_slot cleanup:
+        - PG commit bc32a12e0db2df203a9cb2315461578e08568b9c adds USE_INJECTION_POINTS block after slot drop.
+        - YB commit efd4cb7fea876ed9c13d9ce94ea989ed52aeaf69 conditionally drops existing_slot based on ybConflictSlot (needed for DO UPDATE).
+        - Kept YB's conditional slot drop; appended PG's injection point block after it.
+
+- src/include/catalog/index.h:
+    - reindex_index declaration:
+        - PG commit f21848de20130146bc8039504af40bd24add54cd adds `const ReindexStmt *stmt` parameter.
+        - YB adds YB paramaters;
+        - Combined both.
+    - reindex_relation declaration:
+        - similar to above.
+
+- src/backend/catalog/objectaddress.c:
+    - ObjectTypeMap[] tablegroup entry:
+        - PG commit 89e5ef7e21812916c9cf9fcf56e45f0f74034656 removed OCLASS_* comments from ObjectTypeMap.
+        - YB adds OBJECT_YBTABLEGROUP entry.
+        - Kept YB's tablegroup entry without the comment.
+    - get_object_address_defacl DEFACLOBJ cases (2 conflicts):
+        - PG commit 0d6c4776647feeee26f3e29fff6a5edb222fa260 adds DEFACLOBJ_LARGEOBJECT case.
+        - YB commit adds DEFACLOBJ_TABLEGROUP.
+        - Kept both cases.
+    - pg_fallthrough vs yb_switch_fallthrough (2 conflicts): fallthrough pattern
+    - check_object_ownership OBJECT_TRIGGER + OBJECT_DATABASE:
+        - PG commit afbfc02983f86c4d71825efa6befd547fe81a926 replaces `pg_class_ownercheck` with generic `object_ownercheck(RelationRelationId, ...)`. Same commit replaces `pg_database_ownercheck` with generic `object_ownercheck` and groups OBJECT_DATABASE with other strVal types.
+        - YB commit 311e253ae8da89a39fb21fde8d7e66d7aac0a1d6 moves OBJECT_TRIGGER into a separate case and adds `IsYbDbAdminUser` check. YB also had OBJECT_DATABASE as a separate case using old `pg_database_ownercheck`.
+        - Kept OBJECT_TRIGGER as a separate case with PG's `object_ownercheck(RelationRelationId, ...)` plus YB's `IsYbDbAdminUser` check. Dropped OBJECT_DATABASE.
+    - check_object_ownership OBJECT_SCHEMA:
+        - PG commit afbfc02983f86c4d71825efa6befd547fe81a926 groups OBJECT_SCHEMA into the generic object_ownercheck() group, moves OBJECT_COLLATION, OBJECT_CONVERSION, OBJECT_DATABASE, OBJECT_EVENT_TRIGGER.
+        - YB commit f930e4b7b176ca956fabf35b255ef60e68c9be12 adds IsYbDbAdminUser check for OBJECT_SCHEMA ownership.
+        - Accepted PG's generic grouping for all cases, but pulling OBJECT_SCHEMA out as a separate case with `object_ownercheck()` plus YB's `IsYbDbAdminUser` check.
+    - check_object_ownership OBJECT_YBTABLEGROUP:
+        - PG commit afbfc02983f86c4d71825efa6befd547fe81a926 moves OBJECT_TABLESPACE, OBJECT_TSDICTIONARY, OBJECT_TSCONFIGURATION.
+        - YB commit 48dc70a0775eed9d598a4c2a6ccd9ef3b965695d adds OBJECT_YBTABLEGROUP ownership check.
+        - Kept only OBJECT_YBTABLEGROUP case (YB-specific).
+    - check_object_ownership OBJECT_YBPROFILE:
+        - PG commit aca992040951c7665f1701cd25d48808eda7a809 removes default case.
+        - YB commit 7a13a29b22f656473b9d5cb951e7dccb0b006beb adds OBJECT_YBPROFILE ownership check.
+        - Placed YB's OBJECT_YBPROFILE case above PG's unsupported object type group.
+    - getObjectDescription/getObjectTypeDescription/getObjectIdentityParts tablegroup cases (3 conflicts):
+        - PG commit 89e5ef7e21812916c9cf9fcf56e45f0f74034656 changes switch from getObjectClass() (OCLASS_* enum) to object->classId (catalog relation OIDs like TableSpaceRelationId).
+        - YB commit 48dc70a0775eed9d598a4c2a6ccd9ef3b965695d adds OCLASS_YBTBLGROUP case for tablegroup descriptions.
+        - Added `case YbTablegroupRelationId:` before `case TableSpaceRelationId:` in all three functions, adapting YB's tablegroup descriptions to PG's classId-based switch.
+    - getObjectDescription/getObjectTypeDescription profile/role_profile cases + default (2 conflicts):
+        - PG commit 89e5ef7e21812916c9cf9fcf56e45f0f74034656 uses `default: elog(ERROR, ...)` for classId-based.
+        - YB commit 7a13a29b22f656473b9d5cb951e7dccb0b006beb adds OCLASS_YBPROFILE and OCLASS_YBROLE_PROFILE cases.
+        - Used `case YbProfileRelationId:` and `case YbRoleProfileRelationId:` plus PG's `default:` error case.
+    - getObjectDescription DEFACLOBJ_LARGEOBJECT vs DEFACLOBJ_TABLEGROUP:
+        - PG adds DEFACLOBJ_LARGEOBJECT case.
+        - YB adds DEFACLOBJ_TABLEGROUP case.
+        - Kept both cases.
+    - getObjectIdentityParts DEFACLOBJ_LARGEOBJECT vs DEFACLOBJ_TABLEGROUP:
+        - same as above.
+    - Auto-merged OCLASS_* case labels (outside conflict markers):
+        - PG commit 89e5ef7e21812916c9cf9fcf56e45f0f74034656 switches from OCLASS_* enum to catalog relation OIDs.
+        - Replaced all auto-merged OCLASS_YBPROFILE with YbProfileRelationId, OCLASS_YBROLE_PROFILE with YbRoleProfileRelationId, and OCLASS_YBTBLGROUP with YbTablegroupRelationId.
+
+- src/backend/executor/execProcnode.c:
+    - Forward declarations:
+        - PG commit 544000288ec8f7dc6a1e0285821adc47324ecd33 moved ExecProcNodeInstr to instrument.c.
+        - YB commit cba0949d09f2905c4c10f9114f238b453137c7e8 added ExecProcNodeYbDistTrace and YbGetExecNodeSpanName.
+        - Removed ExecProcNodeInstr forward declaration, keeping YB's ExecProcNodeYbDistTrace. Made YbGetExecNodeSpanName non-static (now declared extern in executor.h) so instrument.c can call it.
+    - YbGetExecNodeSpanName, ExecProcNodeInstr, ExecProcNodeYbDistTrace function bodies:
+        - PG commit 544000288ec8f7dc6a1e0285821adc47324ecd33 moved ExecProcNodeInstr to instrument.c.
+        - YB commit cba0949d09f2905c4c10f9114f238b453137c7e8 added distributed tracing (YBCIsDistTraceActive/YB_DIST_TRACE spans) and session stats (YbUpdateSessionStats) to ExecProcNodeInstr, plus YbGetExecNodeSpanName and ExecProcNodeYbDistTrace.
+        - Accepted PG's relocation: moved ExecProcNodeInstr to instrument.c with YB's tracing and stats additions. Kept YbGetExecNodeSpanName and ExecProcNodeYbDistTrace in execProcnode.c. Added `#include "pg_yb_utils.h"` to instrument.c and extern declaration for YbGetExecNodeSpanName in executor.h.
+
+- src/backend/executor/execUtils.c:
+    - ExecGetInsertedCols ri_RootToPartitionMap:
+        - PG (commit fb958b5da86da69651f6fb9f540c2cfb1346cdc5 and others) refactored some code.
+        - YB added a 3rd arg `relinfo->ri_RelationDesc` to execute_attr_map_cols calls (PG15 base had 2-arg calls).
+        - Took PG's refactoring and preserving YB's 3rd arg to execute_attr_map_cols.
+    - ExecGetUpdatedCols ri_RootToPartitionMap:
+        - same as above.
+
+- src/backend/access/transam/xact.c:
+    - StartTransaction - TransactionTimeout and YB init:
+        - PG commit 51efe38cb92f4b15b68811bcce9ab878fbc71ea5 adds TransactionTimeout scheduling.
+        - YB addes YB specific code.
+        - Kept PG TransactionTimeout first, then YB additions.
+    - CommitTransaction/AbortTransaction TRACE macros:
+        - PG commit ab355e3a88de745607f6dd4c21f0119b5c68f2ad changes MyProc->lxid to MyProc->vxid.lxid.
+        - YB commit a8daf734d07ed8b722b1392235d0e169598d85a5 adds YB_DIST_TRACE spans.
+        - Kept YB trace spans with PG's vxid.lxid API.
+    - PrepareTransaction PostPrepare_Locks/PredicateLocks (2 conflicts):
+        - PG commit 62a17a92833d1eaa60d8ea372663290942a1e8eb changes xid to fxid.
+        - YB wraps calls with YBGetObjectLockMode guard.
+        - Kept YB's guard with PG's fxid parameter.
+    - YB transaction functions (YbSetTxnUsesTempRel, etc.):
+        - PG commit fefd9a3fed275cecd9ed4091b00698deed39b92e refactored CommitTransactionCommand into wrapper + CommitTransactionCommandInternal, changing the context just below where YB inserts functions.
+        - YB adds YbSetTxnUsesTempRel, YBMarkTxnUsesTempRelAndSetTxnId, YbCurrentTxnUsesTempRel between RestoreTransactionCharacteristics and CommitTransactionCommand.
+        - Inserted YB functions before CommitTransactionCommand.
+    - CommitTransactionCommand refactoring (2 conflicts):
+        - PG (commit fefd9a3fed275cecd9ed4091b00698deed39b92e and others) refactors into wrapper+internal structure.
+        - YB commit 60ac2325a90d4a5ce7f964da435accc2f8d4825c adds elog debug logging. YB commit 527768dd2e0ed200e462ab7eaf5f46f87110bf79 adds connection manager logic.
+        - Used PG's wrapper+internal structure with YB's additions inside.
+    - BeginInternalSubTransaction:
+        - PG commit 40126ac68f2ff96351cd6071350eb2d5cbd50145 adds ExitOnAnyError restoration after StartTransactionCommand().
+        - YB (commit 7dfc2e7c05aa988dfa368a3bdcd5cff4e8462227 and others) replaces StartTransactionCommand() with YBStartTransactionCommandInternal and adds YbBeginInternalSubTransactionForReadCommittedStatement and YBTransactionContainsNonReadCommittedSavepoint functions.
+        - Kept YB's YBStartTransactionCommandInternal replacement and appended functions, plus PG's ExitOnAnyError restoration.
+    - ShowTransactionStateRec format string:
+        - PG commit 2268f2b91b5513cbf430d1cca488203d66103b3a removes `(unsigned int)` casts from format arguments.
+        - YB adds ybDataSent/ybDataSentForCurrQuery fields to the format string.
+        - Took PG's cast removal and extending the format string with YB's fields.
+
+- src/backend/commands/vacuum.c:
+    - Includes:
+        - PG adds macro.
+        - YB adds YB includes.
+        - Placed YB includes first, then PG's macro.
+    - vacuum() VACUUM no-op for YugabyteDB:
+        - PG commit 2252fcd4276cfeabae8786ab7c5a421dd674743e removed `Assert(params != NULL)`.
+        - YB adds VACUUM no-op notice block before the Assert.
+        - Kept YB's block with a `IsYugabyteEnabled()` guard and dropping the Assert to match PG.
+
+- src/backend/commands/variable.c:
+    - check_transaction_isolation:
+        - PG adds !InitializingParallelWorker guard.
+        - YB commit adds read committed warning.
+        - Kept YB's warning and PG's guard.
+    - check_session_authorization:
+        - PG changes to superuser_arg(GetAuthenticatedUserId()).
+        - YB adds IsYbDbAdminUserNosuper check.
+        - Used PG's API with YB's check.
+
+- src/backend/executor/nodeAgg.c:
+    - ExecAgg fallthrough: fallthrough pattern
+    - ExecInitAgg aclcheck and YB pushdown:
+        - PG commit c727f511bd7bf3c58063737bcf7a8f331346f253 refactors to object_aclcheck.
+        - YB commit e554bda510cefbe612a00883c0285fe77447039e adds pushdown logic.
+        - Kept YB's pushdown logic with PG's object_aclcheck.
+
+- src/backend/executor/instrument.c:
+    - YB RPC stats helpers and InstrAggNode:
+        - PG commit 5a79e78501f46bd3ac7fbd0ff84cf1e20dbafd19 updates the comment for InstrAggNode.
+        - YB (commit 88e82ed9d10ec32bc6421e85c44470006171902c and others) adds InstrAggYbPgRpcStats and YbInstrAggRpcMetrics right above InstrAggNode.
+        - Kept YB's helpers and PG's updated comment.
+    - Trigger instrumentation functions:
+        - PG commit 7d9b74df53e9268bd638274f1415ebfeecf0de51 adds InstrAllocTrigger/InstrStartTrigger/InstrStopTrigger (right below InstrAggNode).
+        - YB commit 88e82ed9d10ec32bc6421e85c44470006171902c added YB-specific instrumentation logic to InstrAggNode.
+        - Kept PG's trigger functions with YB's logic inside InstrAggNode.
+
+- src/backend/catalog/aclchk.c:
+    - objectNamesToOids switch cases:
+        - PG commit d31bbfb6590e586f731345960311861d5eb4c23f consolidated most object lookups into a `default` case using `get_object_address()`.
+        - YB adds OBJECT_YBTABLEGROUP case with `get_tablegroup_oid`.
+        - Took PG's consolidation; kept YB's OBJECT_YBTABLEGROUP case (uses YB-specific lookup).
+    - SetDefaultACLsInSchemas, RemoveRoleFromObjectACL, get_user_default_acl LARGEOBJECT/TABLEGROUP:
+        - PG commit adds OBJECT_LARGEOBJECT / DEFACLOBJ_LARGEOBJECT cases.
+        - YB adds OBJECT_YBTABLEGROUP / DEFACLOBJ_TABLEGROUP cases.
+        - Kept both PG's LARGEOBJECT and YB's TABLEGROUP cases.
+    - ExecGrant_Relation ACL insert:
+        - PG commit 9fd45870c1436b477264c0c82eb195df52bc0919 removed Memset calls.
+        - YB indented PG code inside the `!IsYugaByteEnabled()` guard.
+        - Took PG's changes, indented as per YB.
+    - ExecGrant consolidation (2 conflicts):
+        - PG commit 369f09e420efe27359b06b69c0265f4aec5c2134 consolidated individual ExecGrant_* functions into ExecGrant_common.
+        - YB had individual functions with `YbCheckAclCopiesEqual` optimization.
+        - Took PG's consolidated code. `YbCheckAclCopiesEqual` is already in ExecGrant_common (from non-conflict code). Added `ExecGrant_Tablegroup` as a standalone function since it uses YB-specific catalog.
+    - pg_tablegroup_aclmask:
+        - PG commit 403ac226ddd6071245b7b283861c26960ea7293f adds pg_type_aclmask_ext with is_missing parameter.
+        - YB adds pg_tablegroup_aclmask function.
+        - Kept both.
+    - pg_tablespace/fdw/server/type_aclmask consolidation:
+        - PG commit c727f511bd7bf3c58063737bcf7a8f331346f253 consolidated individual `pg_*_aclmask` functions into `object_aclmask`/`object_aclmask_ext`.
+        - YB had `IsYbDbAdminUser` bypass in `pg_tablespace_aclmask`.
+        - Took PG's consolidation. Ported `IsYbDbAdminUser` for tablespace into `object_aclmask_ext`.
+    - Individual aclcheck/ownercheck consolidation (2 conflicts):
+        - PG commit afbfc02983f86c4d71825efa6befd547fe81a926 consolidated ownercheck functions into `object_ownercheck`. PG commit c727f511bd7bf3c58063737bcf7a8f331346f253 consolidated aclcheck functions into `object_aclcheck`.
+        - YB had `IsYbDbAdminUser` bypasses and `pg_tablegroup_ownercheck`/`pg_tablegroup_aclcheck`.
+        - Took PG's consolidation. Ported `IsYbDbAdminUser` for tablespace and event trigger into `object_ownercheck`. Kept YB's `pg_tablegroup_aclcheck` and `pg_tablegroup_ownercheck` as standalone functions.
+    - CatalogTupleDelete API in `recordExtensionInitPrivWorker`:
+        - PG commit e1ac846f3d2836dcfa0ad15310e28d0a0b495500 changes CatalogTupleDelete to take &oldtuple->t_self (ItemPointer).
+        - YB uses oldtuple (HeapTuple).
+        - Kept YB's change.
+    - ReplaceRoleInInitPriv/RemoveRoleFromInitPriv + YbCheckAclCopiesEqual:
+        - PG adds ReplaceRoleInInitPriv and RemoveRoleFromInitPriv.
+        - YB adds YbCheckAclCopiesEqual helper.
+        - Kept both.
+
+- src/backend/commands/user.c:
+    - CreateRole privilege checks:
+        - PG commit f1358ca52dd7b8cedd29c6f2f8c163914f03ea2e changes privilege model: instead of requiring SUPERUSER for REPLICATION/BYPASSRLS, each attribute now requires the creating role to have that same attribute ("you can't give permissions you don't have").
+        - YB added `IsYbDbAdminUser` bypass allowing yb_db_admin to create bypassrls users without SUPERUSER.
+        - Took PG's flat check structure. Ported `IsYbDbAdminUser` bypass into the bypassrls check. Added YB_TODO_PG19MERGE to verify the bypass is still appropriate under the new privilege model.
+    - AlterRole privilege checks:
+        - PG commit f1358ca52dd7b8cedd29c6f2f8c163914f03ea2e restructures into CREATEROLE+ADMIN flow with attribute-based checks (same "you can't give permissions you don't have" model as CreateRole).
+        - YB added `IsYbDbAdminUser` bypasses for bypassrls and profile management.
+        - Took PG's structure as-is. Added YB_TODO_PG19MERGE to port YB's bypasses into the new model.
+    - DropRole two-pass process (3 conflicts):
+        - PG commit 6566133c5f52771198aca07ed18f84519fac1be7 restructures into two-pass. PG &tuple->t_self for CatalogTupleDelete.
+        - YB adds YBDetailSorted and YbRemoveRoleProfileForRoleIfExists, and changes CatalogTupleDelete call.
+        - Kept PG's changes, porting YB code to second pass with PG's API.
+    - ReassignOwnedObjects:
+        - PG adds `errdetail` to reassign permission error.
+        - YB adds superuser reassign check.
+        - Kept both.
+    - DelRoleMems `RRG_DELETE_GRANT`:
+        - PG adds `deleteSharedDependencyRecordsFor`, uses `&tuple->t_self` for CatalogTupleDelete.
+        - YB uses `CatalogTupleDelete(rel, tuple)`.
+        - Kept PG's `deleteSharedDependencyRecordsFor` with YB's CatalogTupleDelete.
+
+- src/backend/catalog/heap.c:
+    - YB system attribute definitions:
+        - PG added `const` qualifier on `SysAtt[]`.
+        - YB adds `ybctid`, `ybuniqueidxkeysuffix`, `ybidxbasectid` system attributes and `YbSystemAttributeDefinition`.
+        - Kept all YB attributes and PG's `const` qualifier on `SysAtt[]` (and also `YbSysAtt[]`).
+    - InsertPgAttributeTuples signature:
+        - PG commit d939cb2fd612acde0304913213cfbdb01994e682 replaces Datum *attoptions with FormExtraData_pg_attribute tupdesc_extra[].
+        - YB adds bool yb_relisshared.
+        - Used PG's tupdesc_extra with YB's yb_relisshared appended.
+    - AddNewAttributeTuples InsertPgAttributeTuples call:
+        - PG commit 4f622503d6de975ac87448aea5cea7de4bc140d5 removed the `attstattarget = -1` default loop.
+        - YB changed the InsertPgAttributeTuples call (adjacent line conflict).
+        - Accepted PG's removal and YB's change.
+    - AddNewAttributeTuples for loop:
+        - PG commit 65b71dec2d577e9ef7423773a88fdd075f3eb97f changed `tupdesc->attrs[i]` to `TupleDescAttr(tupdesc, i)`.
+        - YB wrapped PG code in an if block (and indented it).
+        - Kept YB's structure with PG's changes inside the block.
+    - heap_create_with_catalog comment:
+        - Kept both: PG's `relrewrite` doc and YB's `yb_use_initdb_acl` doc.
+    - heap_create_with_catalog OID allocation:
+        - PG renames to relfilenumber
+        - YB adds yb_binary_restore/yb_extension_upgrade logic, IsYsqlUpgrade guards.
+        - Combined PG's naming with YB's conditional logic.
+    - heap_create_with_catalog access method dependency:
+        - PG adds `RELKIND_PARTITIONED_TABLE` check to access method dependency link.
+        - YB indented PG code inside `IsYsqlUpgrade` guard.
+        - Kept YB's changes; applied PG's partitioned table check (and comment) into the access method block at 3-tab indentation matching the YB guard nesting.
+    - RemoveAttributeById `atttypid` / branch flattening:
+        - PG commit `7ef2912519fdea0dd0f6747c4dc008c99dc51e90` removed `if (attnum < 0)` / `else` branching (system OID column drop no longer supported), flattening the function.
+        - YB changed `CatalogTupleDelete(attr_rel, &tuple->t_self)` to `CatalogTupleDelete(attr_rel, tuple)` in the if branch.
+        - Took PG's flat code.
+    - RemoveAttributeById tuple update:
+        - PG (commit 7ef2912519fdea0dd0f6747c4dc008c99dc51e90 and others) removed `if (attnum < 0)` / `else` branching and refactored the function.
+        - YB uses `CatalogTupleDelete` + `CatalogTupleInsert` instead of `CatalogTupleUpdate` (can't update primary key). Existing YB code has a bug: it inserts the tuple before the missing value update, so the `atthasmissing` clearing is lost.
+        - Kept PG's restructured code and YB's logic to update the catalog tuple.
+    - heap_drop_with_catalog:
+        - PG changed CatalogTupleDelete arguments.
+        - Kept YB's HeapTuple API with PG's correct variable names (`ftrel, fttuple`).
+    - AddRelationNewConstraints (2 conflicts):
+        - PG (commit `95f650674d2ceea1ba6440a9b0ae89ed3867fd7e` and others) did some refactoring.
+        - YB adds `relisshared` checks before default storage and constraint processing.
+        - Kept YB's checks with PG's structure.
+
+- src/backend/commands/trigger.c:
+    - Forward declarations (2 conflicts):
+        - PG adds check_modified_virtual_generated, FireAfterTriggerBatchCallbacks.
+        - YB adds YbTriggerNameCmp, afterTriggerCheckState.
+        - Kept all declarations.
+    - renametrig ownership check:
+        - PG commit afbfc02983f86c4d71825efa6befd547fe81a926 refactors to object_ownercheck.
+        - YB adds IsYbDbAdminUser check.
+        - Used PG's API with YB's bypass.
+    - AfterTriggersData struct and static declarations:
+        - PG adds batch_callbacks, FireAfterTriggerBatchCallbacks.
+        - YB adds ybc_txn_fdw_tuplestores, afterTriggerCheckState.
+        - Kept all fields and declarations.
+    - pg_fallthrough in AfterTriggerExecute: fallthrough pattern
+    - AfterTriggerBeginXact/EndXact:
+        - PG adds afterTriggerFiringDepth assert/reset.
+        - YB adds ybc_txn_fdw_tuplestores assert/cleanup.
+        - Kept both.
+    - End-of-file function definitions:
+        - Kept PG functions then YB functions.
+
+- src/include/utils/numeric.h:
+    - includes:
+        - PG added `#include "common/pg_prng.h"`.
+        - YB has `#include "c.h"`.
+        - Kept both: PG includes first (`pg_prng.h`, `fmgr.h`), then YB include (`c.h`) below.
+
+- src/include/utils/jsonfuncs.h:
+    - PG commit 3c152a27b06313fe27bd47079658f928e291986b added some declarations to jsonfuncs.h.
+    - YB has YB JSON text manipulation functions (`json_get_int_value`, `get_json_array_element`, etc.).
+    - Kept both.
+
+- src/include/utils/plancache.h:
+    - PG changed forward declarations.
+    - YB has GUC variables `yb_test_planner_custom_plan_threshold` and `enable_choose_custom_plan_for_partition_pruning`.
+    - Placed YB's GUC variable declarations first, then PG's forward declarations.
+
+- src/include/utils/relcache.h:
+    - PG commit b0a55e43299c4ea2a9a8c757f9c26352407d0ccc renamed `RelationSetNewRelfilenode` to `RelationSetNewRelfilenumber` and `RelationAssumeNewRelfilenode` to `RelationAssumeNewRelfilelocator`.
+    - YB has `yb_copy_split_options` and `preserved_index_split_options` parameters to `RelationSetNewRelfilenode`.
+    - Used PG's renamed function names with YB's additional parameters.
+
+- src/pl/plpgsql/src/plpgsql.h:
+    - PG commit 0dca5d68d7bebf2c1036fd84875533afef6df992 removed `use_count` field from `PLpgSQL_function` struct.
+    - YB has `yb_catalog_version` and `yb_invalid` fields.
+    - Dropped PG's removed `use_count`; kept YB's two fields.
+
+- src/test/regress/GNUmakefile:
+    - PG commit b1720fe63f344adeb8a75b22e8f31b127c814f35 removed the contrib/spi module copying block (moved testing to contrib/spi).
+    - YB commit 79c1e31fd89c803e1907b9ea9fe6799c0a59a9ee had wrapped the block with `YB_BUILD_TYPE` guard.
+    - Dropped the block entirely, matching PG's removal.
+
+- src/interfaces/ecpg/preproc/ecpg.c:
+    - PG commit df8b8968d4095f44acd6de03b4add65f9709b79d reordered switch cases alphabetically and changed `case 'h'` to directly set `auto_create_c = true` instead of falling through to `case 'c'`.
+    - YB commit 5a07df479dcc4589d502379fe8e6599a4c642459 added `yb_switch_fallthrough()` before the old `case 'c'` fallthrough.
+    - Took PG's reordered code.
+
+- src/interfaces/libpq/Makefile:
+    - PG commits b0635bfda0535a7fc36cd11d10eecec4e2a96330 (added shlib/stlib-specific object rules), 4a8e6f43a6b56289cd3806b239c20ae31aa4cf2e (refactored exit() check into `libpq_check.pl` Perl script, which already handles `__tsan_func_exit`).
+    - YB commit cfeda577fdbdd62eebfa24d207000ca23b5c76f5 added `__tsan_func_exit` exclusion to the old inline check.
+    - Took PG's refactored approach entirely. YB's TSAN exclusion is already handled by PG's `libpq_check.pl`.
+
+- src/interfaces/libpq/exports.txt:
+    - PG added exports 187-211 (PQconnectionUsedGSSAPI through PQgetThreadLock).
+    - YB commit ec3a95daf09e888a177cce8d2de00bcb7627c3ef added `YbPQsaveMessageField` at ordinal 10001.
+    - Kept both (PG first, then YB).
+
+- src/pl/plpgsql/src/pl_gram.y:
+    - PG added `#include "pl_gram.h"`.
+    - YB added `#include "pg_yb_utils.h"`.
+    - Kept both includes (PG's first, then YB's).
+
+- src/backend/executor/nodeIndexonlyscan.c:
+    - Scan direction:
+        - PG commit e9aaf06328c7f962f8586618981e9763d31402a3 replaced `ScanDirectionIsBackward` and surrounding code with `ScanDirectionCombine()`.
+        - YB added `NoMovementScanDirection` and surrounding if guard.
+        - Used PG's `ScanDirectionCombine`, then YB's if block.
+    - New functions at end-of-file:
+        - PG added functions.
+        - YB added `yb_agg_pushdown_init_scan_slot` and `yb_store_index_tuple_decoded_pk`.
+        - Kept both (PG's functions first, then YB's).
+
+- src/backend/executor/nodeLimit.c:
+    - Two pg_fallthrough vs yb_switch_fallthrough conflicts:
+        - PG change `FALLTHROUGH` comment to `pg_fallthrough`.
+        - YB added LIMIT pushdown logic (`yb_exec_params.limit_count`/`limit_offset`) (commit 4405799654486b844cfc2251793d9d550c097d1f), and `yb_switch_fallthrough()`.
+        - Kept YB's LIMIT pushdown logic and used PG's `pg_fallthrough`.
+
+- src/backend/executor/nodeTidrangescan.c:
+    - pg_fallthrough vs yb_switch_fallthrough (2 conflicts): fallthrough pattern Removed unused YB include.
+
+- src/backend/libpq/auth-scram.c:
+    - Two conflicts for SCRAM channel binding SSL guard:
+        - PG commit 8e278b65766446f29085fe686723961c4b216e6f changed `#ifdef HAVE_BE_TLS_GET_CERTIFICATE_HASH` to `#ifdef USE_SSL`.
+        - YB commit b9588a4d58937a614968bc9ba733b5efb7ca5aa1 added `ysql_enable_scram_channel_binding` gflag check to the `if` condition.
+        - Used PG's `#ifdef USE_SSL` with YB's gflag guard in the `if` condition.
+
+- src/backend/optimizer/util/clauses.c:
+    - pg_fallthrough vs yb_switch_fallthrough (2 conflicts, AND_EXPR/OR_EXPR in `find_nonnullable_rels_walker` and `find_nonnullable_vars_walker`): fallthrough pattern
+
+- src/backend/optimizer/util/relnode.c:
+    - Two conflicts in ParamPathInfo initialization:
+        - PG commit 2489d76c4906f4461a364ca8ad7e0751ead8aa0d added `ppi->ppi_serials` field.
+        - YB commit 49ed1065dabd2a9456b830c69b4bb8d584491ff8 added `ppi->yb_ppi_req_outer_batched` field.
+        - Kept both field assignments (PG's first, then YB's).
+
+- src/backend/parser/analyze.c:
+    - Two conflicts for column permission bitmaps:
+        - PG commit a61b1f74823c9c4f79c95226a461f1e7a367764b moved `insertedCols`/`updatedCols` from `RangeTblEntry` to `RTEPermissionInfo` (`perminfo`).
+        - YB commit e89d75bc16af0e819a56edd75126ba0ccc42174d replaced `FirstLowInvalidHeapAttributeNumber` with `YBGetFirstLowInvalidAttributeNumber(pstate->p_target_relation)`.
+        - Used PG's `perminfo` API with YB's attribute number offset function.
+
+- src/backend/postmaster/bgworker.c:
+    - Background worker list:
+        - PG commit 1eb09ed63a8d8063dc6bb75c8f31ec564bf35250 changed entries to use C99 designated initializers (`.fn_name`, `.fn_addr`). PG commit 28d534e2ae0ac888b5460f977a10cd9bb017ef98 added `RepackWorkerMain`.
+        - YB commits added `YbAshMain`, `YbQueryDiagnosticsMain`, `YbQueryDiagnosticsDatabaseConnectionWorkerMain`, `YbNotifsPollerMain` (feeb96b138f60708a1bde077384ef85c049657a8 and others).
+        - Kept PG's entries in designated-initializer format; appended YB entries in the same format.
+    - New functions at end-of-file:
+        - PG added `TerminateBackgroundWorkersForDatabase`.
+        - YB commit feeb96b138f60708a1bde077384ef85c049657a8 added `YbBackgroundWorkerHandleSize`.
+        - Kept both functions.
+
+- src/backend/replication/syncrep.c:
+    - Two conflicts in `SyncRepCleanupAtProcExit`:
+        - PG commit 12605414a7d63ccbe36de2b530847bdfc9cf7447 replaced `SHMQueueIsDetached`/`SHMQueueDelete` with `dlist_node_is_detached`/`dlist_delete_thoroughly`.
+        - YB commit 70fbb382e1a913c651a6dbc85a75bcf2e25d32a8 changed `MyProc` to `yb_proc` parameter for cleanup after terminated connections.
+        - Used PG's dlist API with YB's `yb_proc` parameter.
+
+- src/backend/rewrite/rewriteHandler.c:
+    - Forward declarations:
+        - PG commit 5f2e179bd31e5f5803005101eb12a8d7bf8db8f3 removed  `view_has_instead_trigger` forward declaration. PG commit `83ea6c54025bea67bcd4949a6d58d3fc11c3e21b` added `expand_generated_columns_internal` declaration.
+        - YB commit 7e222b42902b5d73067e96ce58a26e679f11a618 added `view_rel` and `base_relid` params to `adjust_view_column_set` to use `YBGetFirstLowInvalidAttributeNumber` instead of `FirstLowInvalidHeapAttributeNumber`.
+        - Dropped `view_has_instead_trigger` forward declaration, keeping YB's 4-arg `adjust_view_column_set`, and PG's `expand_generated_columns_internal`.
+    - `adjust_view_column_set` call site:
+        - PG commit a61b1f74823c9c4f79c95226a461f1e7a367764b moved columns from `RangeTblEntry` to `RTEPermissionInfo` (`perminfo`).
+        - YB commit 7e222b42902b5d73067e96ce58a26e679f11a618 added `view` and `relid` params to the call for `YBGetFirstLowInvalidAttributeNumber` support.
+        - Used PG's `perminfo` API with YB's additional `view` and `relid` arguments.
+
+- src/backend/storage/ipc/procsignal.c:
+    - CleanupProcSignalState:
+        - PG commits 9d9b9d46f3c509c722ebbf2a1e7dc6296a6c711d, a460251f0a1ac987f0225203ff9593704da0b1a9, and others added spinlock-based cleanup, `pss_cancel_key_len` reset, and `pss_barrierGeneration` write to `CleanupProcSignalState`.
+        - YB commit 70fbb382e1a913c651a6dbc85a75bcf2e25d32a8 extracted code from `CleanupProcSignalState` into helper `CleanupProcSignalStateInternal` and added wrapper `CleanupProcSignalStateForProc`. YB also changed `MyProc` to `proc` and `ConditionVariableBroadcast(&slot->pss_barrierCV)` to `YbConditionVariableBroadcastForProc(&slot->pss_barrierCV, proc)`.
+        - Renamed all YB-added functions to have a `Yb` prefix (changes in procsignal.h and postmaster.c); ported PG's `CleanupProcSignalState` changes into `YbCleanupProcSignalStateInternal`; applied YB's `MyProc`-to-`proc` and `ConditionVariableBroadcast`-to-`YbConditionVariableBroadcastForProc` changes. `CleanupProcSignalState` now calls the YB helper. The previous `pss_idx` argument is computed as `(int)(slot - ProcSignal->psh_slot)`, matching PG's inline computation in the log message. Changed `YbCleanupProcSignalStateForProc` to use proc number (0-indexed). Added a YB_TODO_PG19MERGE.
+    - procsignal interrupt checks:
+        - PG (commit 17f51ea818753093f929b4c235f3b89ebcc7c5fb and others ) consolidated `PROCSIG_RECOVERY_CONFLICT_DATABASE` into `PROCSIG_RECOVERY_CONFLICT`, added `PROCSIG_PARALLEL_APPLY_MESSAGE` check.
+        - YB added `PROCSIG_LOG_HEAP_SNAPSHOT`, `PROCSIG_LOG_HEAP_SNAPSHOT_PEAK` and `YB_PROCSIG_LOG_CATCACHE_STATS` checkss.
+        - Kept PG's changes, then appended YB's checks.
+
+- src/backend/storage/lmgr/condition_variable.c:
+    - ConditionVariableCancelSleep + YbConditionVariableCancelSleepForProc:
+        - PG commit 5ffb7c775062ef18756e515ac96f06d012cbb950 changed the function `ConditionVariableCancelSleep`.
+        - YB commits f90da744e9c3cb24d4c4622664f9895433a451d2, 61730dec6c64f6b2c9f91f31c67559d7bed9acf9 added `YbConditionVariableCancelSleepForProc` (for process-specific cleanup).
+        - Took PG's `bool`-returning `ConditionVariableCancelSleep` (without signal-passing); appended YB's `YbConditionVariableCancelSleepForProc` after it. Added a YB_TODO_PG19MERGE.
+    - ConditionVariableBroadcast pgprocno:
+        - PG commit 28f3915b73f75bd1b50ba070f56b34241fe53fd1 changed `pgprocno = MyProcNumber` (from `MyProc->pgprocno`).
+        - YB commits 61730dec6c64f6b2c9f91f31c67559d7bed9acf9, 61730dec6c64f6b2c9f91f31c67559d7bed9acf9 refactored broadcast into `YbConditionVariableBroadcastForProc` taking `given_proc` parameter, using `given_proc->pgprocno`.
+        - Kept YB's `given_proc->pgprocno` since the function signature takes a `given_proc` parameter. Note: `pgprocno` field no longer exists; this will be dealt with during compilation fixes.
+
+- src/backend/storage/lmgr/lock.c:
+    - PostPrepare_Locks:
+        - PG commit 62a17a92833d1eaa60d8ea372663290942a1e8eb changed parameter to `FullTransactionId fxid`.
+        - YB commit f7d79516a7e158a1bb7b0f7e1dc9df56e930e389 has early return guard for `YBGetObjectLockMode() != PG_OBJECT_LOCK_MODE`.
+        - Kept YB's early return guard, then using PG's `fxid` in `TwoPhaseGetDummyProc(fxid, false)`.
+    - Conflict 2 (VirtualXactLockTableCleanup):
+        - PG commit 024c521117579a6d356050ad3d78fdc95e44eefa changed backend id to proc number.
+        - YB has early return guard for `YBGetObjectLockMode() != PG_OBJECT_LOCK_MODE`.
+        - Kept YB's early return guard, then using PG's `INVALID_PROC_NUMBER` assertion.
+
+- src/backend/executor/nodeTidscan.c:
+    - Conflict 1 (IsCTIDVar macro):
+        - PG commit 13d53aa7a83383c9d1343e7d725e615f8678aea8 simplified the macro to just `SelfItemPointerAttributeNumber` check.
+        - YB commit a421251665351582bf98247acfb51bddd86c7148 added `YBTupleIdAttributeNumber` check.
+        - Kept PG's simplified macro and added `YBTupleIdAttributeNumber` check.
+    - Conflict 2 (ExecEndTidScan):
+        - PG removed `ExecFreeExprContext` and `ExecClearTuple` cleanup, leaving only `table_endscan`.
+        - YB commit a421251665351582bf98247acfb51bddd86c7148 added `IsYBRelation` branch for `ybc_heap_endscan`.
+        - Kept YB's branching and dropped the cleanup code PG removed.
+    - Conflict 3 (ExecInitScanTupleSlot):
+        - PG commit c456e39113809376f6604e720910ccd24e18e034 added `TTS_FLAG_OBEYS_NOT_NULL_CONSTRAINTS` parameter.
+        - YB commit a421251665351582bf98247acfb51bddd86c7148 added `IsYBRelation` ternary for `TTSOpsVirtual` vs `table_slot_callbacks`.
+        - Kept YB's `IsYBRelation` ternary and added PG's `TTS_FLAG_OBEYS_NOT_NULL_CONSTRAINTS` as the additional argument.
+
+- src/backend/storage/ipc/procarray.c:
+    - Conflict 1 (xactCompletionCount):
+        - PG commit b31ba5310b5176402b60abc0454a033b1210ab75 renamed `ShmemVariableCache` to `TransamVariables`.
+        - YB indented `ShmemVariableCache` inside if block.
+        - Used PG's `TransamVariables->xactCompletionCount++` inside YB's block.
+    - Conflict 2 (TransactionIdIsActive):
+        - PG removed `TransactionIdIsActive` function.
+        - YB added a `IsYugaByteEnabled()` early return.
+        - Discarded the function.
+    - Conflict 3 (GetSnapshotData YB snapshot logic):
+        - PG commit f691f5b80a85c66d715b4340ffabb503eb19393e removed `GetSnapshotDataInitOldSnapshot`.
+        - YB added catalog snapshot read point logic, and `YbLogSnapshotData`.
+        - Kept YB's catalog snapshot management code.
+
+- src/backend/utils/adt/selfuncs.c: 
+    - includes:
+        - PG commit added some macros and structs.
+        - YB added YB includes.
+        - Took PG's additions entirely; placed YB includes before PG's changes.
+    - get_actual_variable_range early returns:
+        - PG added `rte->relkind == RELKIND_PARTITIONED_TABLE` early return.
+        - YB added `IsYBRelationById(rte->relid)` early return.
+        - Kept both early returns: PG's partitioned table check first, then YB's relation check.
+    - get_actual_variable_range index AM check: generalized AM check pattern
+
+- src/backend/optimizer/path/joinpath.c:
+    - Conflict 1 (includes and hook comment):
+        - PG changed comment to plural "Hooks for plugins...".
+        - YB added includes.
+        - Kept YB includes first, then PG's comment. Removed duplicate `restrictinfo.h` (already included by PG).
+    - Conflict 2 (save_jointype):
+        - PG commit 24225ad9aafc576295e210026d8ffa9f50d61145c576295e210026d8ffa9f50d61145 introduced `save_jointype` variable for join type restoration.
+        - YB added planner trace debug logging (adjacent line conflict).
+        - Used PG's `save_jointype` and kept YB's debug trace block.
+    - Conflict 3 (PATH_PARAM_BY_PARENT reparameterization):
+        - PG commit b7e2121ab7d6166b835a46ceaab1b6a6dc589703 removed the `PATH_PARAM_BY_PARENT`/`reparameterize_path_by_child` block.
+        - YB had adjacent `yb_batched_clause_final_check` block.
+        - Dropped the reparameterization block, keeping YB's `yb_batched_clause_final_check`.
+    - Conflict 4 (create_material_path):
+        - PG commit 4020b370f214315b8c10430301898ac21658143f added `true` parameter to `create_material_path`.
+        - YB added `yb_assign_unique_path_node_id` call (adjacent line conflict).
+        - Used PG's `create_material_path(innerrel, inner_cheapest_total, true)` and kept YB's block.
+
+- src/backend/utils/adt/pgstatfuncs.c:
+    - PG_STAT_GET_RELENTRY_INT64 macro:
+        - PG commit 83a1a1b56645b7a55ec00e44f8018116ee87c720 removed `pg_stat_get_numscans`, added `PG_STAT_GET_RELENTRY_INT64`.
+        - YB added `extern bool yb_retrieved_concurrent_index_progress` and `yb_pg_stat_retrieve_concurrent_index_progress` declarations.
+        - Placed YB's declarations right after the includes, then all PG macros together.
+    - progress command check:
+        - PG commit d7e39d72ca1c6f188b400d7d58813ff5b5b79064 removed the `!beentry ||` null check (null check moved earlier in the loop).
+        - YB commit 5e1a3dc5de25fb42f3291a3633c597f90cacef59 added `PROGRESS_COMMAND_COPY` exception to report even after command finishes.
+        - Took PG's removal of the null check; kept YB's `PROGRESS_COMMAND_COPY` exception.
+    - PG_STAT_GET_ACTIVITY_COLS:
+        - PG commit 697f8d266cfb33409f7ccf3319f4448477066329 changed column count to 31.
+        - YB commit d2a700a3a35edc3a0e74a5ee72d36e9cac7319c1 added `YB_PG_STAT_GET_ACTIVITY_COLS` and `YB_BACKEND_XID_COL`. YB did not change PG_STAT_GET_ACTIVITY_COLS (this is an adjacent line conflict).
+        - Used PG's 31 column count and kept YB's additional field definitions.
+    - Conflict 4 (values/nulls arrays):
+        - PG commit 9fd45870c1436b477264c0c82eb195df52bc0919 added `= {0}` initializers.
+        - YB used `PG_STAT_GET_ACTIVITY_COLS + YB_PG_STAT_GET_ACTIVITY_COLS` size.
+        - Used YB's combined size with PG's `= {0}` initializer style.
+
+- src/backend/executor/nodeHashjoin.c:
+    - pg_fallthrough vs yb_switch_fallthrough (5 conflicts): fallthrough pattern
+
+- src/backend/executor/nodeIndexscan.c:
+    - IndexNext:
+        - PG commit e9aaf06328c7f962f8586618981e9763d31402a3 changed scan direction logic.
+        - YB commit 1215c3a71a0a6283d402f08645f8f096ab3bb0ce added `NoMovementScanDirection` optimization for YB relations.
+        - Kept PG's `ScanDirectionCombine`; appended YB's `NoMovementScanDirection` check.
+    - ExecIndexBuildScanKeys amcanorder check:
+        - PG commit ce62f2f2a0a48d021f250ba84dfcab5d45ddc914 replaced `amoid == BTREE_AM_OID` with generic `amcanorder` check.
+        - YB commit 9b1b7a9a0c08cf1b5211a60fa7f1779f138789f8 wrapped the PG block in an `else`, indenting the original code one level. YB added `LSM_AM_OID` alongside `BTREE_AM_OID`.
+        - Took PG's `!index->rd_indam->amcanorder` check (generic, covers LSM) within YB's indented `else` block.
+    - ExecIndexScanInitializeDSM, ExecIndexScanInitializeWorker:
+        - PG added more parameters to index_beginscan_parallel.
+        - YB commit 2f91e3ef37754c96d5074cd33fa2e4c401c52513 added `yb_init_index_scandesc`. YB commit b4e4a16eeec57b3ed2978bfee9a732b89dbbced6 added `yb_agg_pushdown_init_scan_slot`.
+        - Kept PG's new parameter and YB's init functions.
+    - New functions at end-of-file: PG added instrumentation functions, YB commit b4e4a16eeec57b3ed2978bfee9a732b89dbbced6 added `yb_agg_pushdown_init_scan_slot`; keep both (PG first).
+
+- src/bin/pg_upgrade/check.c:
+    - `pg_fatal`/`fprintf` global migration: PG added many new call sites; YB_TODO_PG19MERGE added to handle migration to `yb_fatal`/`yb_fprintf_and_log`.
+    - Forward declarations / `DataTypesUsageChecks`:
+        - PG added code below the forward declarations.
+        - YB added forward declarations for YB check functions + `#define YB_SUPERUSER`.
+        - Placed YB declarations and `#define YB_SUPERUSER` below PG forward declarations and before `DataTypesUsageChecks`.
+    - `check_and_dump_old_cluster`, `start_postmaster` / early checks:
+        - PG commit 4b56bb4ab4856070d5ea4aeafdd663d8bf96b874 changed `live_check` to `user_opts.live_check`. PG also added some other checks.
+        - YB `is_yugabyte_enabled()` guard on `start_postmaster`, plus `yb_check_upgrade_compatibility_guc`, `yb_check_old_cluster_user`, `yb_check_yugabyte_user`, `yb_check_system_databases_exist` block.
+        - Took PG's changes, wrapping `start_postmaster` with `!is_yugabyte_enabled()`, keeping YB check block.
+    - `check_and_dump_old_cluster`, `check_is_install_user` / `check_for_prepared_transactions` / `check_for_isn_and_int8_passing_mismatch` guards:
+        - PG commits f638aafd1ea8505750ca9546e0e0b2e4cf31027d removed `check_proper_datallowconn`, and 347758b1206364e3bec5ad6cd649b4ba9fe1be7b removed `check_for_composite_data_type_usage` / `check_for_reg_data_type_usage`.
+        - YB added `!is_yugabyte_enabled()` guards on `check_is_install_user` `check_for_isn_and_int8_passing_mismatch`, and `check_for_prepared_transactions`.
+        - Kept the three calls with their YB `!is_yugabyte_enabled()` guards, dropping the other function calls.
+    - `check_and_dump_old_cluster`, old version checks (`check_for_jsonb_9_4_usage`, `old_9_3_check_for_line_data_type_usage`) + YB checks:
+        - PG commit 347758b1206364e3bec5ad6cd649b4ba9fe1be7b removed these calls (consolidated into `data_types_usage_checks[]` framework).
+        - YB added `!is_yugabyte_enabled()` on old version checks, and added additional yb checks.
+        - Dropped old PG version checks (if they're executed as part of data_types_usage_checks, that should be harmless), keeping all YB-specific checks.
+    - `check_and_dump_old_cluster`, `stop_postmaster` guard:
+        - PG commit 4b56bb4ab4856070d5ea4aeafdd663d8bf96b874 uses `user_opts.live_check`.
+        - YB added `is_yugabyte_enabled()` guard.
+        - Combined: `if (!is_yugabyte_enabled() && !user_opts.live_check)`.
+    - `check_for_connection_status` error reporting:
+        - PG commit f638aafd1ea8505750ca9546e0e0b2e4cf31027d added new error text mentioning `datconnlimit`, plus new `check_for_unsupported_encodings` function after it.
+        - YB used `yb_fatal` pattern instead of `pg_fatal`.
+        - Took PG's error text and new function, using YB `yb_fatal` pattern.
+    - `check_for_user_defined_postfix_ops` error reporting:
+        - PG commit c34eabfbbfd3d3799bc7bc61f22b1fe730c53fe8 replaced inline query with UpgradeTask framework.
+        - YB had old inline query with `yb_fprintf_and_log`, `yb_fatal`.
+        - Took PG's changes with YB `yb_fatal` error pattern.
+    - `check_for_incompatible_polymorphics` (2 conflicts):
+        - PG commit cf2f82a37cc35895b67c83dd2b33d2fcf4688a55 replaced inline query with UpgradeTask framework.
+        - YB had old inline query with `yb_fprintf_and_log`, `yb_fatal`.
+        - Took PG's changes with YB `yb_fatal` error pattern.
+    - `check_for_not_null_inheritance` / old `check_for_removed_data_type_usage` area:
+        - PG commit f295494d338c452617f966d4d1f13a726cd72661 added `check_for_not_null_inheritance`. PG commit 347758b1206364e3bec5ad6cd649b4ba9fe1be7b removed `check_for_removed_data_type_usage`.
+        - YB had `check_for_removed_data_type_usage` with `yb_fatal` error pattern.
+        - Took PG's `check_for_not_null_inheritance` as-is (new PG function, kept `pg_fatal`).
+    - `check_for_gist_inet_ops` / old `check_for_removed_data_type_usage` and `check_for_jsonb_9_4_usage` function definitions:
+        - PG commit b352d3d80b94269be6e627b5223902fe785d766f added `check_for_gist_inet_ops`. PG commit 347758b1206364e3bec5ad6cd649b4ba9fe1be7b removed `check_for_removed_data_type_usage` and `check_for_jsonb_9_4_usage` function definitions.
+        - YB had `check_for_removed_data_type_usage` and `check_for_jsonb_9_4_usage` with `yb_fatal` error pattern.
+        - Took PG's `check_for_gist_inet_ops` as-is (new PG function, kept `pg_fatal`).
+
+- src/bin/pg_dump/pg_dump.c:
+    - Forward declaration (`binary_upgrade_set_pg_class_oids`):
+        - PG commit 6e1c4a03a978ed3574124d8f2be22ba2e5a4b1e9 removed `is_index` parameter.
+        - YB added `yb_binary_upgrade_preserve_index_tablegroup_oid`.
+        - Combined both. Fixed YB call site in `dumpTableSchema` (`tbinfo->primaryKeyIndex` block) that passed `true` as `is_index` to drop the extra arg.
+    - Long options switch in `main()` (cases 12+):
+        - PG added new cases.
+        - YB commit 9fa32b4623e07d8d7c53bdecf6d02ed9c36ba4c4 assigned case 12 to `--read-time`.
+        - Renumbered YB's `--read-time` to case 26 (after PG's last case 25 `--restrict-key`); moved it to the bottom of the switch. All PG cases 12-25 kept; YB's case 26 added. Renumbered `read-time` to 26 in `long_options` in `main()`.
+    - check_mut_excl_opts / sequence_data (~line 914):
+        - PG commit 7c8280eeb5872f5c2663b562a9c6fcf8ec8a4b82 replaced individual `if` checks with `check_mut_excl_opts` helper. PG commit 9c49f0e8cd7d59e240f5da88decf2d62d8a4ad0d removed `if (dopt.binary_upgrade) dopt.sequence_data = 1;` and replaced with `--sequence-data` CLI option.
+        - YB commit ccd9a1106ade392e18cd46bd5d02c3889028e0d9 and others added YB validation checks and modified the `sequence_data` condition.
+        - Kept YB validation checks; then PG's `check_mut_excl_opts` calls. Commented out YB's `sequence_data` block with YB_TODO_PG19MERGE to verify whether `include_yb_metadata` callers should pass `--sequence-data` instead.
+    - Help text: PG commit 67a2fbb8f9e9f75df08208e75da412c43a814688 added `--restrict-key`, YB added `--read-time`; keep both.
+    - `selectDumpableExtension`, extension OID check:
+        - PG added `(Oid)` cast.
+        - YB commit 3063cadc3db09da8522552f96c7b50f0497448f6 added `strcmp("plpgsql", ...)` exception to the `if` condition.
+        - Combined both changes.
+    - Database query in `dump(Database`: TODO
+        - PG (commit f696c0cd5f299f1b51e214efc55a22a782cc175d and others) changed to `appendPQExpBufferStr`, added more version checks.
+        - YB commit b0184bd20b04e8f7de5fa9f7b90982b60817c124 (later touched by other commits) extracted the inline query into `ybQueryDatabaseData()` and called it from both `dumpDatabase` and `getDatabaseOid`. No YB-specific changes were made to the query logic.
+        - Kept YB's `ybQueryDatabaseData`, taking PG's changes into `ybQueryDatabaseData`.
+    - pg_largeobject_metadata comment: PG added to the comment, YB added YB note; keep both.
+    - binary_upgrade_set_pg_class_oids RelFileNumber check:
+        - PG commit b0a55e43299c4ea2a9a8c757f9c26352407d0ccc renamed to `RelFileNumberIsValid(entry->relfilenumber)` and uses `entry->relkind`.
+        - YB added `IsYugabyteEnabled` guard for partitioned tables.
+        - Combined both changes.
+    - getExtensions malloc:
+        - PG commit 6736dea14afbe239588dad1c947ceb6e50adbf72 changed to `pg_malloc_array`.
+        - YB commit 7c644fb0858e92f6514a76f9dbcc7eabade3551c added `yb_dumpable_extensions_with_config_relations` allocation.
+        - Kept both; used PG's `pg_malloc_array` style in YB code.
+    - getIndexes index query:
+        - PG commit 8b26769bc441fffa8aad31dddc484c2f4043d2c9 changed `appendPQExpBuffer` to `appendPQExpBufferStr`.
+        - YB commit 023480252c847a8153f1fa1e9af8021120a484a2 added `i.indoption` column.
+        - Added YB's `i.indoption` using PG's `appendPQExpBufferStr`.
+    - Table attribute mallocs:
+        - PG commit 6736dea14afbe239588dad1c947ceb6e50adbf72 uses `pg_malloc_array`. PG added some new fields, removed others.
+        - YB commit 023480252c847a8153f1fa1e9af8021120a484a2 added `primaryKeyIndex`.
+        - Kept PG's changes and YB's `primaryKeyIndex`.
+    - Stats query (pg_stats):
+        - PG added `>= 190000` branch with `tableid` join.
+        - YB commit 1d0241f523c27a57af0105d898f7327f5cd71adc added `yb_int_pg_stats_v11` view fallback for older YB versions.
+        - Kept PG's `190000` branch first, then YB's view fallback in the `>= 90400` branch.
+    - dumpACL:
+        - PG updated comment "large object ACLs".
+        - YB commit 406a974a6ba046918b9c05b7c8d498f61fd8cf45 added workaround for `pg_stat_statements_reset` signature change.
+        - Kept YB's workaround and PG's comment change.
+    - dumpTableSchema view drop/table drop (3 conflicts):
+        - PG commit 2f094e7ac691abc9d2fe0f4dcf0feac4a6ce1d9c removed drop commands.
+        - YB commit ccd9a1106ade392e18cd46bd5d02c3889028e0d9 added `|| dopt->include_yb_metadata` (adjacent line conflict).
+        - Kept YB's `|| dopt->include_yb_metadata`.
+    - dumpTableSchema YB colocation/table properties block:
+        - PG added a comment.
+        - YB commit c8a5dd6c8fe92fc43864f3c64d5e5fdb7663f0e7 extended the if block for binary upgrade mode to also dump the index oid and relfilenode for pkey indexes, and added logic for tablegroups and colocation.
+        - Kept YB's changes followed by PG's comment; updated `binary_upgrade_set_pg_class_oids` call to new signature.
+    - NOT NULL constraint printing:
+        - PG commit 47fb87563bf3cca2244840241dde2eb93830559b refactored to not null tracking and updated comment.
+        - YB added `|| dopt->include_yb_metadata`.
+        - Took PG's changes + `|| dopt->include_yb_metadata`.
+    - dumpTableSchema dropped columns recreation:
+        - PG commit 2fa989e6a3407b9da625e1524c8694bc028e25ba refactored drop column recreation.
+        - YB commit 2fa989e6a3407b9da625e1524c8694bc028e25ba added YB logic for inherited tables.
+        - Took PG's changes; added YB_TODO_PG19MERGE.
+    - dumpTableSchema free calls:
+        - PG calls `free()` unconditionally.
+        - YB added `freeYbcTablePropertiesIfRequired`.
+        - Took PG's unconditional frees + YB's cleanup.
+    - PRIMARY KEY / UNIQUE constraint (2 conflicts):
+        - PG commits 94aa7cc5f707712f592885995a28e018c7c80488 and fc0438b4e80535419a4e54dba87642cdf84defda added `NULLS NOT DISTINCT` handling, `conperiod` (WITHOUT OVERLAPS) + INCLUDE columns.
+        - YB commits 67443f08384b8a56f4e586de127cedd025a5a931 and 77f4fab592c0d0ff0f5b528e13c7b27501eea4ca added `dump_index_for_constraint` conditional and moved the default PG logic into the else block.
+        - Kept PG's NULLS NOT DISTINCT + conperiod + INCLUDE within YB's conditional structure.
+    - End-of-file functions: PG added functions, YB added others; keep both (PG first).
+
+- src/backend/utils/cache/syscache.c:
+    - cacheinfo[] table:
+        - PG commit 9b1a6f50b91dca6610932650c8c81a3c924259f9 moved cacheinfo[] into the generated catalog/syscache_info.h (genbki.pl).
+        - YB added `YBTABLEGROUPOID` and `YBCONSTRAINTRELIDTYPIDNAME` to `cacheinfo[]`.
+        - Kept PG's changes and adding MAKE_SYSCACHE declarations to the YB catalog headers: `MAKE_SYSCACHE(YBTABLEGROUPOID, pg_yb_tablegroup_oid_index, 4)` in pg_yb_tablegroup.h and `MAKE_SYSCACHE(YBCONSTRAINTRELIDTYPIDNAME, pg_constraint_conrelid_contypid_conname_index, 16)` in pg_constraint.h. The third arg is nbuckets, copied from the trailing field of the corresponding cacheinfo[] entry in syscache.c (4 for YBTABLEGROUPOID, 16 for YBCONSTRAINTRELIDTYPIDNAME).
+    - SearchSysCache* cacheId assertion (5 conflicts):
+        - PG changed the Assert.
+        - YB added a multi-thread-mode block.
+        - Kept PG's assertion; prepended YB's `IsMultiThreadedMode` error block at all 5 sites.
+
+- src/include/utils/syscache.h:
+    - `#include` area:
+        - PG commit 9b1a6f50b91dca6610932650c8c81a3c924259f9 moved `SysCacheIdentifier` enum to auto-generated `catalog/syscache_ids.h`.
+        - YB added YB-specific entries (`YBTABLEGROUPOID`, `YBCONSTRAINTRELIDTYPIDNAME`) to the enum, an include, and a comment about stable syscache ids.
+        - Kept PG's changes, adding a YB_TODO_PG19MERGE to reconsider the YB comment. The YB caches were already handled by the resolution for src/backend/utils/cache/syscache.c.
+
+- src/backend/utils/adt/pg_upgrade_support.c:
+    - End-of-file, new functions:
+        - PG added new functions.
+        - YB commits 60ffefcbadffb5909e133c491d7aee6e63416235 added `binary_upgrade_set_next_tablegroup_oid`, 0dbe7d6dc54f8b60f12bce2c67405c2279a81a1a added `binary_upgrade_set_next_tablegroup_default`.
+        - Kept all PG functions first, then the two YB tablegroup functions at the bottom of the file.
+
+- src/backend/utils/init/globals.c:
+    - `MyDatabaseHasLoginEventTriggers` / YB database globals:
+        - PG commit e83d1b0c40ccda8955f1245087f0697652c4df86 added `MyDatabaseHasLoginEventTriggers`.
+        - YB added `MyDatabaseColocated`, `MyColocatedDatabaseLegacy`, and other `Yb`-prefixed globals.
+        - Kept both sets of globals.
+    - End-of-file globals: PG added some globals, YB added others; keep both.
+
+- src/bin/pg_upgrade/version.c:
+    - `jsonb_9_4_check_applicable` function body:
+        - PG commit 347758b1206364e3bec5ad6cd649b4ba9fe1be7b removed `check_for_data_type_usage` and added `jsonb_9_4_check_applicable`.
+        - YB commit bad1b7aff39df2b70e9d490cd25b357dac79e95c retained old `check_for_data_type_usage` body with `yb_fprintf_and_log`.
+        - Took PG's changes. The TODO in check.c covers migration to `yb_fprintf_and_log`.
+    - `process_extension_updates` callback / old `sql_identifier` check:
+        - similar to above.
+
+- src/backend/libpq/auth.c:
+    - `auth_failed` forward declaration and definition:
+        - PG commit c4ff16339f07d1e253bdf18e5da5fa25f62a750d added `int elevel` parameter.
+        - YB added `bool yb_role_is_locked_out` parameter.
+        - Combined both changes.
+    - RADIUS forward declarations and implementation:
+        - PG commit a1643d40b308911cc725e62d3c5f7904b426aa09 removed RADIUS support entirely, commit e21d6f297158db1383a7c9a668ebe1048f2eac39 moved `PG_MAX_AUTH_TOKEN_LENGTH` to `auth.h`
+        - YB added `YbCheckJwtAuth`.
+        - Followed PG's removals; kept YB's JWT.
+    - `auth_failed` body, Assert / passthrough logic:
+        - PG commit c4ff16339f07d1e253bdf18e5da5fa25f62a750d added `Assert(elevel >= FATAL)`.
+        - YB commit 44a0bfb01cc0678246350160782898b80cc3ded5 added auth passthrough logic (`yb_is_auth_passthrough`, `port->yb_has_auth_passthrough_failed`).
+        - Kept PG's Assert first, then YB's additions.
+    - `auth_failed` body, `cdetail` format string:
+        - PG commit 1b73d0b1c3934f703d68031957d37c2a9765e798 added `sourcefile` in format string.
+        - YB commit 785b8e3045f2cbe6c38bbcb6f347c751f6700715 added `maskedline` fallback to `rawline`.
+        - Combined both changes.
+    - `auth_failed` body, ereport call:
+        - PG commit c4ff16339f07d1e253bdf18e5da5fa25f62a750d changed `FATAL` to `elevel` parameter.
+        - YB added `YbAuthFailedErrorLevel` + `YbSendFatalForLogicalConnectionPacket`.
+        - Kept YB's changes.
+    - `auth_failed` body, `pg_unreachable()`:
+        - PG commit c4ff16339f07d1e253bdf18e5da5fa25f62a750d added `pg_unreachable()` after ereport.
+        - YB commit 44a0bfb01cc0678246350160782898b80cc3ded5 added comment saying function can return in auth passthrough mode.
+        - Kept `pg_unreachable()` guarded with `if (!yb_is_auth_passthrough)`, keeping YB comment.
+    - `set_authn_id` body:
+        - PG added `MyClientConnectionInfo.auth_method` and moved `authn_id` from `Port` to `MyClientConnectionInfo`.
+        - YB commit cc95c8d045ea20dcf28403b4180206cf812636ea added auth passthrough logic.
+        - Combined both: YB's memory optimization on PG's `authn_id`, plus `auth_method` assignment.
+    - `ClientAuthentication`, OAuth vs JWT case:
+        - PG added `case uaOAuth:`.
+        - YB added `case uaYbJWT:`.
+        - Kept both.
+    - `ClientAuthentication`, `auth_failed` call:
+        - PG commit c4ff16339f07d1e253bdf18e5da5fa25f62a750d added `abandoned ? FATAL_CLIENT_ONLY : FATAL` elevel.
+        - YB added `yb_role_is_locked_out` parameter.
+        - Merged both parameters.
+    - `recv_password_packet` comment:
+        - PG commit a1643d40b308911cc725e62d3c5f7904b426aa09 removed RADIUS mention.
+        - YB added comment (adjacent line conflict).
+        - Kept PG's updated comment; added YB's passthrough comment.
+    - fallthrough: pg_fallthrough vs yb_switch_fallthrough: keep pg_fallthrough.
+    - LDAP bind password:
+        - PG commit 419a8dd8142afef790dafd91ba39afac2ca48aaf added `ldap_password_hook` inline.
+        - YB commit 8f4e959e40157d202987026e24da5ff81ec4aa09 used pre-computed `hba_password` from `get_ldap_password()`.
+        - Kept YB's `hba_password` approach with `pfree`.
+    - RADIUS code block:
+        - PG commit a1643d40b308911cc725e62d3c5f7904b426aa09 removed RADIUS entirely.
+        - YB added JWT.
+        - Dropped RADIUS; kept YB's JWT.
+
+- src/backend/libpq/pqcomm.c:
+    - Static variable declarations (`PqSendPointer`, `PqSendStart`):
+        - PG changed types from `int` to `size_t`.
+        - YB added `PqSendYbSavedBufPos` and `PqSendYbNonRestartableData`.
+        - Took PG's `size_t` types, and then YB's variables (with `size_t` / `bool`).
+    - Section comment + YB buffer position functions:
+        - PG commit 4945e4ed4a72c3ff41560ccef722c3d70ae07dbb renamed section header.
+        - YB added `YBSaveOutputBufferPosition()` and `YBRestoreOutputBufferPosition()`.
+        - Kept YB functions before PG's renamed section comment.
+    - `AcceptConnection` socket config:
+        - PG moved socket config from `StreamConnection` to `pq_init()`, renamed function to `AcceptConnection`.
+        - YB commit 96abb52a43b002a11043075c10926abf6ca3677d removed file-scope `#define PQ_SEND_BUFFER_SIZE 8192` (replaced with dynamic `YBGetYsqlOutputBufferSize()`), re-added it inside `#ifdef WIN32` in the socket config block.
+        - Took PG's restructuring; ported `#define PQ_SEND_BUFFER_SIZE 8192` into `pq_init()`'s `#ifdef WIN32` block (WIN32 SO_SNDBUF optimization still references it).
+    - `internal_flush` / `internal_flush_buffer` refactoring:
+        - PG commit c4ab7da60617f020e8d75b1584d0754005d71830 split `internal_flush` into wrapper calling generic `internal_flush_buffer`.
+        - YB commit 7799304e5f60b97e26764ab7496f3306485fb61a added `YBMarkDataSent()` call.
+        - Kept PG's wrapper (just calls `internal_flush_buffer`); kept YB logic (`YBMarkDataSent()`) in `internal_flush_buffer`.
+    - Error/success-path buffer resets in `internal_flush_buffer` (2 conflicts):
+        - PG commit c4ab7da60617f020e8d75b1584d0754005d71830 changed `PqSendStart = PqSendPointer = 0;` to `*start = *end = 0`.
+        - YB commit 4c2b84bb1ea2ef18b50de259d8d8a3a1e9caa4c2 added `PqSendYbSavedBufPos = 0` right below.
+        - Took PG's changes; appended YB's `PqSendYbSavedBufPos = 0` after each reset.
+
+- src/backend/libpq/hba.c:
+    - Ident mapping comment:
+        - PG commit a28269708844246fb1ec00a536b391cac0a64972 removed `NOTE: ... `.
+        - YB commit c893d7e6bb5117cd3c0c5ace71dac26021c6e7d0 added a comment.
+        - Dropped PG NOTE, keeping YB comment.
+    - `UserAuthName` array:
+        - PG commit a1643d40b308911cc725e62d3c5f7904b426aa09 removed `"radius"`, b3f0be788afc17d2206e1ae1c731d8aeda1f2f59 added `"oauth"`.
+        - YB commit 7ec9b8d328214108367b027e99ef7e5d149d1523 added `"jwt"`.
+        - Took PG's changes, appending YB's `"jwt"`.
+    - Function forward declarations (adjacent line conflict):
+        - PG commit efc981627a723d91e86865fb363d793282e473d1 renamed `tokenize_inc_file` to `tokenize_expand_file` with added `depth` parameter.
+        - YB commit cb5e9ef589b147c2684bed705717b3f27fd3a8d1 added `yb_tokenize_hardcoded` and `yb_tokenize_line`.
+        - Used PG's `tokenize_expand_file`; appended YB declarations below.
+    - `parse_hba_line`, auth method parsing:
+        - PG commit a1643d40b308911cc725e62d3c5f7904b426aa09 removed `uaRADIUS`, b3f0be788afc17d2206e1ae1c731d8aeda1f2f59 added `uaOAuth`.
+        - YB commit 7ec9b8d328214108367b027e99ef7e5d149d1523 added `uaYbJWT`.
+        - Kept PG's `uaOAuth` first, then YB's `uaYbJWT`.
+    - `parse_hba_line`, mandatory auth args validation:
+        - PG removed RADIUS validation block.
+        - YB commit 18bb9b843b6bd38cd75a61a390537dc67594a032 added RADIUS + JWT validation.
+        - Dropped RADIUS validation, keeping YB's JWT validation.
+    - `parse_hba_line`, end of function:
+        - PG commit b3f0be788afc17d2206e1ae1c731d8aeda1f2f59 added OAuth enforcement block.
+        - YB commit 785b8e3045f2cbe6c38bbcb6f347c751f6700715 added ldapbindpasswd logic.
+        - Kept both.
+    - `parse_hba_auth_opt`, "map" option:
+        - PG added `uaOAuth`, YB added `uaYbJWT`; keep both.
+    - `load_ident` error cleanup:
+        - PG commit a28269708844246fb1ec00a536b391cac0a64972 removed the foreach loop.
+        - YB added `yb_ident_context` guard.
+        - Dropped obsolete foreach loop; kept YB's guard.
+
+- src/backend/commands/indexcmds.c:
+    - `DefineIndex`, lock acquisition:
+        - PG commit 23382b0f8b21e3f5330d765d1abfcef58d086111 renamed `relationId` to `tableId`.
+        - YB added `IsYugaByteEnabled() ? AccessShareLock :` conditional to the line above (adjacent line conflict).
+        - Kept YB's conditional with PG's `tableId`.
+    - `DefineIndex`, eq_strategy + `LSM_AM_OID`: generalized AM check pattern
+    - `build_attrmap_by_name` call:
+        - PG commit ad86d159b6ab90b195b06fb5c7b593900a7f9cd8 added 3rd arg `bool missing_ok`.
+        - YB commit 50a962ea8ab22a187632f7ab2d0b75143a7597af added 3rd arg `bool yb_ignore_type_mismatch`.
+        - Passed both: `false, false /* yb_ignore_type_mismatch */`.
+    - `DefineIndex`, concurrent build + WaitForOlderSnapshots + YB else:
+        - PG commit bc32a12e0db2df203a9cb2315461578e08568b9c and others made changes to concurrent build logic -- renamed `relationId` to `tableId`, added `INJECTION_POINT("define-index-before-set-valid")` etc.
+        - YB wraps PG concurrent build logic in `if (!IsYugaByteEnabled())` and has an `else` branch YB logic.
+        - Kept YB's `if/else` structure. Ported all of PG's concurrent build changes to the if block, changed multiple references of `relationId` to `tableId`.
+    - Including column ASC/DESC error message:
+        - PG added `parser_errposition(pstate, attribute->location)`.
+        - YB changed message text to include "ASC/DESC/HASH options".
+        - Kept YB's "ASC/DESC/HASH options" message text with PG's `parser_errposition`.
+    - `ResolveOpClass` + YB collation check:
+        - PG commit 23382b0f8b21e3f5330d765d1abfcef58d086111 renamed `classOidP` to `opclassOids`.
+        - YB added `YbCheckCollationRestrictions` call after `ResolveOpClass`.
+        - Used PG's `opclassOids`, keeping YB's collation check (updated to use `opclassOids`).
+    - Index column options DESC/HASH:
+        - PG commit 23382b0f8b21e3f5330d765d1abfcef58d086111 renamed `colOptionP` to `colOptions`.
+        - YB commit b9a7f457f52c7f6655ffd3ddc256f93835370558 added `INDOPTION_HASH` support.
+        - Used PG's `colOptions`, keeping YB's HASH option block. Also fixed `colOptionP[attn]` references outside conflict markers to `colOptions[attn]`.
+    - Unordered AM ASC/DESC error message: same as "Including column ASC/DESC error message" above.
+    - `reindex_index` calls (2 conflicts):
+        - PG commit f21848de20130146bc8039504af40bd24add54cd added `stmt` as first parameter.
+        - YB added trailing params (`is_yb_table_rewrite`, `yb_copy_split_options`, `preserved_index_split_options`). YB commit ccd891e108d00e08657d882e4799388e8d20b274 added `if (!IsYugaByteEnabled()) PopActiveSnapshot()` guard at second call site.
+        - Kept PG's `stmt` first param, then YB's trailing params. At second call site, kept YB's conditional `PopActiveSnapshot`.
+
+- src/bin/pg_dump/pg_dumpall.c:
+    - `buildShSecLabels` forward declaration + connection function declarations:
+        - PG commit c1da7281060d646f863e920a1aac3b9dbc997672 removed `connectDatabase`, `constructConnStr`, `executeQuery` forward declarations, YB added `const char *yb_indent` parameter to `buildShSecLabels`.
+        - Kept YB's `yb_indent` parameter on `buildShSecLabels`, dropping the removed forward declarations.
+    - long_options: PG added options, YB added others; keep both.
+    - Option validation: PG added some validations, YB added others; keep both.
+    - pgdumpopts + file open:
+        - PG added `sequence_data` pgdumpopt, archive format directory creation (`create_or_open_dir`), and restrict key generation.
+        - YB added `include_yb_metadata`, `yb_dump_role_checks` pgdumpopts.
+        - Placed YB pgdumpopts right after PG's `sequence_data`, before PG's file open block.
+    - Cluster dump header:
+        - PG commit 763aaa06f03401584d07db71256fc0ab47235cce added `archDumpFormat != archNull` block. YB changed "PostgreSQL" to "YSQL".
+        - Took PG's archive creation block, using "YSQL" in the text format `else` path.
+    - Dump complete message:
+        - PG commit 763aaa06f03401584d07db71256fc0ab47235cce added `fclose(OPF)` inside `archDumpFormat == archNull` guard. YB changed "PostgreSQL" to "YSQL".
+        - Took PG's `fclose` structure with "YSQL".
+    - Help text:
+        - PG changed to "exports...as an SQL script or to other formats". YB changed "PostgreSQL" to "YSQL".
+        - Combined.
+    - `dumpRoles`, Roles header `if (PQntuples(res) > 0)` opening brace:
+        - PG added `&& archDumpFormat == archNull` condition. YB had a brace because `include_yb_metadata` block was added inside.
+        - Kept both: PG's `archDumpFormat == archNull` condition and YB's `include_yb_metadata` block, keeping the brace.
+    - `dumpRoles`, role comments:
+        - PG uses separate `comment_buf`. YB wrote comment into `buf` with `yb_indent` and `yb_frolename`.
+        - Used PG's `comment_buf` but with YB's `yb_indent` and `yb_frolename`.
+    - `dumpRoles`, `buildShSecLabels` call + output path:
+        - PG uses `seclabel_buf` (separate buffer) + `archDumpFormat` branching with `ArchiveEntry` for roles, comments, security labels. YB used `buf` with `yb_indent`, had `yb_need_endif`/`include_yb_metadata` appends, `free(yb_frolename)`.
+        - Used PG's `seclabel_buf` with YB's `yb_indent` parameter. Kept YB's `yb_need_endif` and `include_yb_metadata` appends before the output branching. Kept PG's `archDumpFormat` branching with `ArchiveEntry`. Kept `free(yb_frolename)`.
+    - `dumpRoleMembership`, GRANT generation (2 conflicts):
+        - PG commit ce6b672e4455820a0348214be0da1a024c3f619f replaced the simple per-row GRANT; YB added some code here. Took PG's code; added TODO to integrate YB's code.
+    - `dumpRoleMembership`, trailing newlines:
+        - PG added `archDumpFormat == archNull` guard. YB had conditional second newline for `yb_dump_role_checks`.
+        - Combined both: `archDumpFormat == archNull` guard with YB's conditional second newline inside.
+    - `dumpTablespaces`, header `if (PQntuples(res) > 0)` opening brace:
+        - PG added `&& archDumpFormat == archNull` condition (single-line, no brace). YB had a brace for `include_yb_metadata` block.
+        - Kept both: PG's condition and YB's brace for the multi-statement block.
+    - `dumpTablespaces`, LOCATION value and spcoptions:
+        - PG commit a72d613b4c91462d9405c4e1b05c42d33013c333 added `is_absolute_path` check (empty string for in-place tablespaces) before `appendPQExpBufferStr(buf, ";\n")`.
+        - YB commit 0ce7f408edcdbda8860b80f034f4397d79be8195 added `ybProcessTablespaceSpcOptions` to the `spcoptions` block, and moved PG's `appendPQExpBufferStr(buf, ";\n")` to below this block.
+        - Kept PG's `is_absolute_path` check; restored PG's `appendPQExpBufferStr(buf, ";\n")` guarded with `!IsYugabyteEnabled`; guarded YB's version with `IsYugabyteEnabled`.
+    - `dumpTablespaces`, `buildShSecLabels` call + output path: PG uses `seclabel_buf`, YB added `yb_indent` parameter `""` and `include_yb_metadata` newline block; combined.
+    - `dumpUserConfig`, `makeAlterConfigCommand`:
+        - PG added `archDumpFormat` branching with `ArchiveEntry`. YB added `yb_dump_role_checks` parameter to `makeAlterConfigCommand`.
+        - Kept YB's `yb_dump_role_checks` parameter + PG's `ArchiveEntry` output branching.
+    - end-of-file function definitions:
+        - keep both PG's and YB's functions.
+
+- src/backend/commands/explain.c:
+    - ExplainOnePlan declarations:
+        - PG added `serializeMetrics`.
+        - YB commit 2dd38ff21f550676d43c264d8831a0e80376a1db added `show_variable_fields`.
+        - Kept both.
+    - ExplainQuery:
+        - PG commit c65bc2e1d14a2d4daed7c1921ac518f2c5ac3d17 refactored inline option parsing into `ParseExplainOptionList()`.
+        - YB added options: dist, debug, commit, hints, uids, planid, queryid, plus validation logic (`yb_run_with_explain_analyze`, `YbToggleSessionStatsTimer`, etc.).
+        - Kept PG's `ParseExplainOptionList()` call; ported YB's custom options, validations, and `YbIsTimingNeeded` helper into explain_state.c.
+    - ExplainOnePlan show buffer usage:
+        - PG commit 5de890e3610d5a12cdaea36413d967cf5c544e20 added `EXPLAIN (MEMORY)` and changed the condition to `peek_buffer_usage(es, bufusage) || mem_counters`. PG commit 9d2d9728b8d546434aade4f9667a59666588edd6 moved the block for query id to `ExplainPrintPlan`
+        - YB added `show_variable_fields` to buffer usage condition, and `es->ybShowQueryId` to the query id condition.
+        - Kept PG's changes; added YB's conditions to the appropriate locations.
+    - ExplainNode show_indexsearches_info (2 conflicts): PG added `show_indexsearches_info`, YB added `show_yb_rpc_stats`/`show_yb_planning_stats`; keep both.
+    - ExplainNode fallthrough: pg_fallthrough vs yb_switch_fallthrough: keep pg_fallthrough.
+    - ExplainNode T_YbSeqScan: PG added `show_scan_io_usage`/`show_ctescan_info`, YB added `show_yb_rpc_stats`/`T_YbSeqScan`; keep both.
+    - show_hash_info:
+        - PG commit 0de37b51065bc5b5848d65a9bb6f932ef392374f changed to `ExplainPropertyUInteger`.
+        - YB commit ccb94810019b47e695a4e87d2508e0ad88830c13 added a `show_variable_fields` guard around it, and another `!show_variable_fields` block.
+        - Kept PG's `ExplainPropertyUInteger` inside YB's structure.
+    - show_memoize_info:
+        - PG added `if (es->costs)` block above `if (!es->analyze)`.
+        - YB added `|| yb_explain_hide_non_deterministic_field` to early return for `!es->analyze` (adjacent line conflict).
+        - Kept PG's new block and YB's condition.
+    - show_memory_counters / show_yb_rpc_stats: PG added `show_memory_counters`, YB added `show_yb_rpc_stats`; keep both.
+    - end-of-file functions:
+        - PG commit 9173e8b604636633a8e3aca54bb56a437bffa718 moved functions out of this file.
+        - YB added new functions below the PG functions; PG functions in the conflict had no YB changes.
+        - Took PG's removal; kept YB's functions.
+
+- src/backend/executor/execMain.c:
+    - `ExecBuildSlotValueDescription` signature:
+        - PG commit 9758174e2e5cd278cf37e0980da76b51890e0011 made function non-static and moved the declaration.
+        - YB commit e89d75bc16af0e819a56edd75126ba0ccc42174d changed function signature to pass `Relation rel`.
+        - Took PG's change (declaration moved; YB's `Relation rel` handled in the definition conflict below).
+    - `standard_ExecutorStart`: PG added an assert, YB added `YbSetMetricsCaptureTypeIfUnset`; keep both.
+    - `standard_ExecutorRun`: PG added an assert, YB added `YBBeginOperationsBuffering`; keep both.
+    - `standard_ExecutorFinish`:
+        - PG commit 2c16deee2f7d52d6567dcbad046f74a8e880ee52 changed `totaltime` to `query_instr`.
+        - YB added `YBEndOperationsBuffering` right above `InstrStopNode(queryDesc->totaltime, 0);`.
+        - Took PG's change; kept YB's `YBEndOperationsBuffering` block.
+    - `standard_ExecutorEnd`:
+        - PG changed `totaltime` to `query_instr`.
+        - YB added code below `queryDesc->totaltime = NULL;`.
+        - Took PG's change; kept YB's additions.
+    - `InitPlan`:
+        - PG commit a61b1f74823c9c4f79c95226a461f1e7a367764b changed `ExecCheckRTPerms` to `ExecCheckPermissions`.
+        - YB added a guard to `ExecCheckRTPerms`.
+        - Kept PG's change within YB's guard.
+    - `ExecConstraints` NOT NULL modified-columns check:
+        - PG commit cdc168ad4b22ea4183f966688b245cabb5935d1f added virtual generated column NOT NULL handling and extracted error reporting into `ReportNotNullViolationError`.
+        - YB added early `modifiedCols` computation to skip NOT NULL checks on unmodified columns during single-row updates without a target tuple.
+        - Kept YB's skip-check block before PG's `ATTRIBUTE_GENERATED_VIRTUAL` / `ReportNotNullViolationError` logic; added YB_TODO_PG19MERGE.
+    - `ExecBuildSlotValueDescription` definition:
+        - PG commit 9758174e2e5cd278cf37e0980da76b51890e0011 made the function non-static.
+        - YB commit e89d75bc16af0e819a56edd75126ba0ccc42174d changed function signature to pass `Relation rel`.
+        - Kept PG's signature; changed YB's `YBGetFirstLowInvalidAttributeNumber` call to `YBGetFirstLowInvalidAttributeNumberFromOid`; removed reloid definition; fixed `ExecBuildSlotValueDescription` call sites.
+
+- src/backend/executor/execPartition.c:
+    - `build_attrmap_by_name` calls (3 conflicts):
+        - PG commit ad86d159b6ab90b195b06fb5c7b593900a7f9cd8 added `missing_ok`.
+        - YB added `yb_ignore_type_mismatch`.
+        - Passed both parameters.
+    - ON CONFLICT restructuring:
+        - PG commit 88327092ff06c48676d2a603420089bf493770f3 wrapped DO UPDATE logic in `if (node->onConflictAction == ONCONFLICT_UPDATE)` guard.
+        - YB added `yb_ignore_type_mismatch` to `build_attrmap_by_name` calls.
+        - Took PG's structural changes; added YB's parameter.
+
+- src/backend/utils/activity/pgstat.c:
+    - globals: `upgstat_report_fixed` vs `yb_retrieved_concurrent_index_progress`: independent globals, keep both.
+    - PGSTAT_KIND_BACKEND entry in pgstat_kind_builtin_infos array:
+        - PG commit 9aea73fc61d4e77e000724ce0b2f896590a10e03 added `PGSTAT_KIND_BACKEND` entry for backend-level statistics.
+        - YB side is empty (matches PG15 base). Positional conflict.
+        - Kept PG's `PGSTAT_KIND_BACKEND` entry.
+
+
+- src/include/utils/wait_event.h:
+    - `#include` / enum area:
+        - PG commit fa88928470b538c0ec0289e4d69ee12356c5a8ce moved wait event enums and class defines to auto-generated `utils/wait_event_types.h`, replaced inline enums with `#include "utils/wait_event_types.h"`.
+        - YB added YB-specific wait events (`WAIT_EVENT_YB_*` entries in each category) and `#include "yb_ash.h"` to inline enums.
+        - Kept PG's `#include "utils/wait_event_types.h"`; added YB's `#include "yb_ash.h"` below PG includes; added YB's wait events to wait_event_names.txt; added YB_TODO_PG19MERGE for documenting them.
+
+- src/backend/utils/activity/wait_event.c:
+    - declarations: PG added wait event infrastructure, YB added `yb_my_wait_event_info` and `yb_not_applicable`; keep both.
+    - `#include "utils/pgstat_wait_event.c"`:
+        - PG commit fa88928470b538c0ec0289e4d69ee12356c5a8ce replaced manual wait event name functions with `#include "utils/pgstat_wait_event.c"` (generated from wait_event_names.txt).
+        - YB added wait event description functions and YB wait events to PG's `pgstat_get_wait_*` functions (now auto-generated).
+        - Kept PG's changes; kept YB's wait event description functions. YB wait events were already moved to wait_event_names.txt in the resolution above.
+
+- src/backend/utils/adt/numeric.c:
+    - INT128 signature change vs numeric_to_double_no_overflow declaration:
+        - PG commit d699687b329e031cd90e967b39c3fd8a53ef8208 changed `int128` to `INT128` in `int128_to_numericvar` and removed `#ifdef HAVE_INT128` guard + `numericvar_to_int128`.
+        - YB added `numeric_to_double_no_overflow` under `#ifdef YB_TODO`
+        - Took PG's `INT128` signature, kept YB's `#ifdef YB_TODO` block for `numeric_to_double_no_overflow`.
+    - pg_fallthrough vs yb_switch_fallthrough():
+        - keep pg_fallthrough.
+
+- src/backend/utils/adt/rangetypes.c:
+    - SendFunctionCall vs StringInfoSendFunctionCall in range_send (2 conflicts, lower + upper bound):
+        - PG (including PG15.12) uses `SendFunctionCall` + `pq_sendint32`/`pq_sendbytes`. YB commit 544122690311196d40059d9ea1311211df216247 changed to `StringInfoSendFunctionCall` wrapper. PG (commit 0f5ade7a367c16d823c75a81abb10e2ec98b4206) also refactored some code.
+        - Kept both: YB's `StringInfoSendFunctionCall` guarded by `IsYugaByteEnabled()`, PG's `SendFunctionCall` + `pq_sendint32`/`pq_sendbytes` in `else` block.
+
+- src/backend/utils/cache/lsyscache.c:
+    - btree-AM checks generalized (6 conflicts): generalized AM check pattern
+
+- src/backend/utils/cache/plancache.c:
+    - yb_plan_references_pg_rel vs USE_VALGRIND block:
+        - PG commit b102c8c4733cf76ff0635dc440ee8dd11487ed95 added `USE_VALGRIND` block.
+        - YB added `yb_plan_references_pg_rel` assignment.
+        - Kept both; YB's assignment before PG's `USE_VALGRIND` block.
+    - StmtPlanRequiresRevalidation/BuildingPlanRequiresSnapshot vs YbIsCachedQueryValid: PG added some functions, YB added others; keep both.
+
+- src/backend/utils/error/elog.c:
+    - yb_owns_file_and_func vs set_stack_entry_location():
+        - PG commit 8305629afe64c9065369d022e91be9f16f3972fa refactored error location setting into `set_stack_entry_location()` static function.
+        - YB added `if IsYugaByteEnabled()` block and moved PG code under `else`.
+        - Kept YB's changes with PG's in the `else` block.
+    - FreeErrorDataContents:
+        - PG commit 8305629afe64c9065369d022e91be9f16f3972fa split out `pfree(edata)` into wrapper `FreeErrorData`.
+        - YB added `yb_owns_file_and_func` cleanup.
+        - Kept YB's cleanup; dropped `pfree(edata)`.
+
+- src/backend/utils/init/postinit.c:
+    - includes:
+        - PG added variable declarations below the includes.
+        - YB added YB-specific includes.
+        - Placed YB includes below PG includes, followed by new PG declarations.
+    - CheckMyDatabase:
+        - PG commit 1c461a8d8d3c7a4655fdb944ffca94b1e49e5b3d replaced inline collation init with `init_database_collation()`. PG commit 844385d12e7515f3461e53728f0a9358bc35b6a5 removed `database_ctype_is_c`.
+        - YB added `YbPresetDatabaseCollation` block.
+        - Kept YB block before PG's `init_database_collation()`.
+
+- src/backend/utils/misc/ps_status.c:
+    - YB leak_annotations.h include: PG added `#if !defined(WIN32)` block, YB added `leak_annotations.h` include; kept YB's first, then PG's.
+    - PG Valgrind workaround vs YB `allocate_new_environ`:
+        - PG commit db01c90b2f024298b08dca8aed6b43a2347dee0e added Valgrind annotation.
+        - YB commit ad17a80e30f42e13d9b80950663a71fe133a5046 added `allocate_new_environ()` with `__lsan_ignore_object()`.
+        - Kept both.
+
+- src/bin/pg_dump/dumputils.h:
+    - sanitize_line() vs yb_conn param in buildACLCommands:
+        - PG commit 70693c645f6e490b9ed450e8611e94ab7af3aad2 added `sanitize_line()` declaration.
+        - YB added `PGconn *yb_conn` parameter to `buildACLCommands` signature (adjacent line conflict).
+        - Kept PG's declaration; retained YB's modified `buildACLCommands` signature.
+    - create_or_open_dir/generate_restrict_key/valid_restrict_key vs yb_dump_role_checks:
+        - PG added declarations below `makeAlterConfigCommand`.
+        - YB added `yb_dump_role_checks` parameter to `makeAlterConfigCommand` and declaration `YBWwrapInRoleChecks`.
+        - Kept all new PG function declarations; retained YB's `yb_dump_role_checks` parameter + `YBWwrapInRoleChecks`.
+
+- src/bin/pg_upgrade/pg_upgrade.h:
+    - nsubs/sub_retain_dead_tuples vs yb_hostaddr/yb_user in ClusterInfo:
+        - PG added fields `nsubs` and `sub_retain_dead_tuples`.
+        - YB added `yb_hostaddr` and `yb_user`.
+        - Kept both sets of fields.
+    - char_signedness vs yb_working_dir in UserOpts:
+        - PG added `default_char_signedness`.
+        - YB added `yb_working_dir`.
+        - Kept both fields.
+
+- src/bin/psql/help.c:
+    - HELPN with "yugabyte" default for --dbname:
+        - PG commit b4336515b0803b83a4d8f102006986e5863d2c49 removes environment-variable-based defaults from psql --help, changing `HELPN` with default to `HELP0` without default for --dbname
+        - YB changes the --dbname default to "yugabyte" using `HELPN`
+        - Kept YB's `HELPN` with "yugabyte" default for --dbname, since YB intentionally shows a different default database name.
+    - Environment-aware defaults for --host/--port/--username:
+        - PG commit b4336515b0803b83a4d8f102006986e5863d2c49 removes environment-variable defaults and uses `HELP0` for --host, --port, --username
+        - YB uses `HELPN` with YB-specific defaults: "localhost" for --host, `DEF_YBPORT_STR` for --port, "yugabyte" for --username
+        - Kept YB's `HELPN` with environment-aware YB defaults.
+
+- src/include/access/genam.h:
+    - includes:
+        - PG commit 81fc3e28e383d9a21843a5ab845a1bd1a1042e12 adds `typedef struct` declarations and remove `struct IndexInfo;`
+        - YB adds YB-specific includes.
+        - keep YB includes first, then PG's forward declarations below.
+    - index_insert_cleanup vs yb_shared_insert param and yb_index_delete/yb_index_update:
+        - PG commit adds `index_insert_cleanup()` declaration.
+        - YB adds `yb_shared_insert` parameter to `index_insert` and adds `yb_index_delete()` and `yb_index_update()` declarations
+        - Kept PG's `index_insert_cleanup()` and retaining YB's `yb_shared_insert` parameter and function declarations.
+
+- src/include/access/relscan.h:
+    - struct field additions in TableScanDescData / IndexScanDescData / SysScanDescData (3 conflicts):
+        - PG added new fields
+        - YB added new fields
+        - Kept both: PG's new field plus all YB fields, in each struct.
+
+- src/include/catalog/dependency.h:
+    - SHARED_DEPENDENCY_PROFILE enum value: PG added `SHARED_DEPENDENCY_INITACL = 'i'`, YB added `SHARED_DEPENDENCY_PROFILE = 'f'`; kept both.
+    - ObjectClass enum:
+        - PG commit 89e5ef7e21812916c9cf9fcf56e45f0f74034656 removed `ObjectClass` enum from dependency.h.
+        - YB added `OCLASS_YBTBLGROUP`, `OCLASS_YBPROFILE`, `OCLASS_YBROLE_PROFILE`.
+        - Took PG's removal.
+
+- src/include/catalog/indexing.h:
+    - CatalogTupleInsertWithInfo:
+        - PG commit e1ac846f3d2836dcfa0ad15310e28d0a0b495500 changed `CatalogTupleUpdate` to take `const ItemPointerData *otid`.
+        - YB added `bool yb_shared_insert` parameter to `CatalogTupleInsertWithInfo`.
+        - Kept both changes; PG's `const ItemPointerData *` and YB's `yb_shared_insert`.
+    - YB CatalogTupleDelete signature and YBCatalogTupleInsert:
+        - PG commit e1ac846f3d2836dcfa0ad15310e28d0a0b495500 changed `CatalogTupleDelete` to take `const ItemPointerData *tid`.
+        - YB commit 954a64b513f7a5713709c664093cb56848bb6369 changed `CatalogTupleDelete` to take `HeapTuple tup` instead of `ItemPointer tid`, and added `YBCatalogTupleInsert` declaration.
+        - Kept YB's `CatalogTupleDelete(Relation, HeapTuple)` and retained `YBCatalogTupleInsert`.
+
+- src/include/commands/async.h:
+    - YB include and NUM_NOTIFY_BUFFERS:
+        - PG commit 53c2a97a92665be6bd7d70bd62ae6158fe4db96e removed `NUM_NOTIFY_BUFFERS`.
+        - YB added `#include "storage/proc.h"`.
+        - Kept YB include, dropped `NUM_NOTIFY_BUFFERS`.
+    - functions end-of-file: PG added `AsyncNotifyFreezeXids()`, YB added `YbNotifsPollerMain()` and `YbCleanupListenStateForProc()`; kept both.
+
+- src/include/commands/progress.h:
+    - PROGRESS_COPY slot:
+        - PG commit 729439607ad210dbb446e31754e8627d7e3f7dda added `PROGRESS_COPY_TUPLES_SKIPPED`.
+        - YB added `PROGRESS_COPY_STATUS`.
+        - Kept both: renumbered YB's `PROGRESS_COPY_STATUS` to slot 7 so PG's `PROGRESS_COPY_TUPLES_SKIPPED` keeps slot 6.
+    - DATACHECKSUMS vs CREATE INDEX progress params: PG commit f19c0eccae9680f5785b11cdc58ef571998caec9 added `PROGRESS_DATACHECKSUMS_*` parameters, YB added `YB_PROGRESS_CREATEIDX_*` parameters; kept both blocks (PG's first).
+
+- src/include/commands/trigger.h:
+    - ExecARUpdateTriggers parameter naming and yb_skip_entities:
+        - PG commit a601366a460f68472bf70c4d94c57baa0a3ed1b2 renamed trigger function parameters to `oldslot`/`newslot` for consistency.
+        - YB added `const YbSkippableEntities *yb_skip_entities` parameter to trigger function.
+        - Adopted PG's `oldslot`/`newslot` parameter naming; appended YB's `yb_skip_entities` parameter.
+    - functions end-of-file: PG commit b7b27eb41a5cc0b45a1a9ce5c1cde5883d7bc358 added `AfterTriggerBatchCallback` and `RegisterAfterTriggerBatchCallback`, YB added `YbAddTriggerFKReferenceIntent` and `YbGetTriggerDepth`; kept both.
+
+- src/include/executor/instrument.h:
+    - YbInstrumentation struct vs comment/struct split:
+        - PG commit 5a79e78501f46bd3ac7fbd0ff84cf1e20dbafd19 split `Instrumentation` into base + `NodeInstrumentation` and changed comment.
+        - YB added `YbPgRpcStats` and `YbInstrumentation` struct.
+        - Kept YB struct before PG's changes.
+    - NodeInstrumentation closing vs YB `yb_instr` field:
+        - PG commit 5a79e78501f46bd3ac7fbd0ff84cf1e20dbafd19 moved `bufusage`/`walusage` into `NodeInstrumentation`.
+        - YB added `yb_instr` field to the (old) `Instrumentation` struct.
+        - Kept `yb_instr` in `NodeInstrumentation`; dropped `bufusage`/`walusage`.
+
+- src/include/libpq/hba.h:
+    - UserAuth enum — uaRADIUS removal, uaOAuth addition, uaYbJWT:
+        - PG commit a1643d40b308911cc725e62d3c5f7904b426aa09 removed `uaRADIUS` (RADIUS support dropped); PG commit b3f0be788afc17d2206e1ae1c731d8aeda1f2f59 added `uaOAuth` for OAuth/OAUTHBEARER SASL support.
+        - YB added `uaYbJWT`.
+        - Dropped `uaRADIUS`; kept `uaOAuth`; added `uaYbJWT` after it with `USER_AUTH_LAST` set to `uaYbJWT`.
+    - HbaLine fields — RADIUS removal, OAuth addition, JWT/maskedline:
+        - PG removed RADIUS `HbaLine` fields and added OAuth fields.
+        - YB added `maskedline` and `yb_jwt_*` fields for JWT authentication.
+        - Dropped RADIUS fields; kept PG's OAuth fields; appended YB's `maskedline` and `yb_jwt_*` fields.
+
+- src/include/nodes/tidbitmap.h:
+    - includes and TBM_MAX_TUPLES_PER_PAGE: PG added `TBM_MAX_TUPLES_PER_PAGE` macro, YB added YB includes; kept both (YB include first, then PG's macro).
+    - YbTupleBitmap and TBMPrivateIterator:
+        - PG commit 7f9d4187e7bab10329cc00aff34cfba08248d4be renamed `TBMIterator` to `TBMPrivateIterator`.
+        - YB added `YbTupleBitmap` union.
+        - Kept YB's `YbTupleBitmap` union; took PG's `TBMPrivateIterator` rename.
+
+- src/include/postgres.h:
+    - varlena/TOAST definitions vs YB cmdtag.h include:
+        - PG commit d952373a987bad331c0e499463159dd142ced1ef moved varlena/TOAST definitions to `varatt.h` and added a comment.
+        - YB added `#include "tcop/cmdtag.h"`. No YB changes to varlena definitions (verified identical to PG15 base).
+        - Dropped varlena definitions; kept YB include and PG's new comment.
+    - YB password redaction functions vs Float8GetDatum removal:
+        - PG commit 14cca1bf8e31ed39dbc26dd6c610f1113e759972 moved `Float8GetDatum` from `#ifdef`/`extern` to `static inline`, removing the `#else extern` block
+        - YB added `YbRedactPasswordIfExists` and `YbParseCommandTag` declarations with comment
+        - Dropped stale `#else extern Float8GetDatum`, kept YB declarations.
+
+- src/include/replication/logical.h:
+    - LogicalDecodingContext fields:
+        - PG commit 29d0a77fa6606f9c01ba17311fc452dabd3f793d added `processing_required`; PG15 backport commit aee8c2b95492e1b0a228184cd9147b1c0749d673 added `in_create` to `LogicalDecodingContext` (on master commit bb19b70081e2248f242cd00227abff5b1e105eb6 the fix uses `in_slot_creation` in `SnapBuild` instead, so PG doesn't have `in_create` here).
+        - YB added `yb_start_decoding_at` and `yb_needs_relcache_invalidation`.
+        - Kept PG's `processing_required`; dropped `in_create` (not needed on PG19); kept YB fields.
+    - YB function declarations: PG added new functions, YB added others; kept both.
+
+- src/include/replication/snapbuild.h:
+    - `SnapBuildExportSnapshot` parameter rename:
+        - PG renamed parameter from `snapstate` to `builder`.
+        - YB had an extra newline after the function declaration.
+        - Took PG's changes.
+    - `SnapBuildSnapshotExists` vs YB snapshot function:
+        - PG added `SnapBuildSnapshotExists`; PG15 backport commit 272248a0c1b18a82c4266e0dc3b526d4d2637de3 added `SnapBuildXidSetCatalogChanges` (backport-only, never on PG master — master commit 7f13ac812313666a2fbb8dacfbee67e78d2ba0bc used a different approach).
+        - YB added `YbSnapBuildExportSnapshotWithReadTime`.
+        - Kept PG's `SnapBuildSnapshotExists`; dropped `SnapBuildXidSetCatalogChanges`; kept YB's function.
+
+- src/include/storage/procsignal.h:
+    - Recovery conflict signal consolidation vs YB-specific signals:
+        - PG commit 17f51ea818753093f929b4c235f3b89ebcc7c5fb and others consolidated individual `PROCSIG_RECOVERY_CONFLICT_*` into single `PROCSIG_RECOVERY_CONFLICT` and changed `NUM_PROCSIGNALS` from enum sentinel to `#define`.
+        - YB commit d10c20c94c70035d3928aa89a1fd3ece6c881326 added `YB_PROCSIG_LOG_CATCACHE_STATS`; YB commit 73ae4051d7ec41383aa7b4ae7621b87628aeef9d added `PROCSIG_LOG_HEAP_SNAPSHOT` and `PROCSIG_LOG_HEAP_SNAPSHOT_PEAK`.
+        - Kept PG's consolidated `PROCSIG_RECOVERY_CONFLICT` and `#define NUM_PROCSIGNALS`; kept YB's additional signals.
+    - ProcSignalHeader and CleanupProcSignalStateForProc: PG commit 9d9b9d46f3c509c722ebbf2a1e7dc6296a6c711d added some declarations, YB added `CleanupProcSignalStateForProc`; kept both (YB first, then PG).
+
+- src/include/storage/sinval.h:
+    - Include: `relfilelocator.h` vs `relfilenode.h`:
+        - PG renamed `relfilenode.h` to `relfilelocator.h`.
+        - YB added `#include <sys/types.h>` for `pid_t`.
+        - Kept PG's `relfilelocator.h`; kept YB's `sys/types.h`.
+    - `SharedInvalSmgrMsg` struct:
+        - PG renamed `RelFileNode rnode` to `RelFileLocator rlocator` and `backend ID` to `backend procno`.
+        - YB added `yb_version` and `yb_sender_pid` fields (adjacent line conflict).
+        - Kept PG's renames; kept YB's fields.
+
+- src/include/storage/spin.h:
+    - Inline spinlock functions vs YB spinlock tracking (2 conflicts):
+        - PG commit bfc321b4723e8ca5fd3adb22a2727ec5c55d3808 converted `SpinLockInit`/`SpinLockAcquire`/`SpinLockRelease` macros to `static inline` functions.
+        - YB commit ea4513abfdc26aebfc73da32bfa79a8a8f6e12ee added `ybSpinLocksAcquired` tracking to `SpinLockAcquire`/`SpinLockRelease` macros; YB added `miscadmin.h` and `proc.h` includes.
+        - Ported YB's spinlock counting logic directly into PG's `static inline` functions instead of macro overrides; kept YB's includes.
+
+- src/include/tcop/cmdtaglist.h:
+    - CREATE/DROP PROPERTY GRAPH vs CREATE/DROP PROFILE command tags:
+        - PG commit 2f094e7ac691abc9d2fe0f4dcf0feac4a6ce1d9c added `CMDTAG_CREATE_PROPERTY_GRAPH`, `CMDTAG_DROP_PROPERTY_GRAPH`.
+        - YB added `CMDTAG_CREATE_PROFILE` and `CMDTAG_DROP_PROFILE`.
+        - Kept all entries in alphabetical order: `CREATE_PROFILE` before `CREATE_PROPERTY_GRAPH`, `DROP_PROFILE` before `DROP_PROPERTY_GRAPH`.
+
+- src/include/utils/backend_status.h:
+    - st_query_id type change, st_plan_id addition, and YB fields:
+        - PG commit c3eda50b0648005281c2a3cf95375708f8ef97fc and others changed `st_query_id` from `uint64` to `int64`; added `int64 st_plan_id` field.
+        - YB added YB-specific fields.
+        - Kept PG's changes; added YB's fields.
+    - LocalPgBackendStatus subxact fields: same as above.
+
+- src/backend/catalog/pg_enum.c:
+    - `oids` allocation:
+        - PG commit 1b105f9472bdb9a68f709778afafb494997267bd changed `(Oid *) palloc(...)` to `palloc_array(Oid, num_elems)` and moved the allocation below a new comment block about OID allocation strategy. YB side of this conflict has the old PG allocation style.
+        - Took PG's changes.
+
+- src/backend/commands/repack.c / src/backend/commands/cluster.c:
+    - PG commit c0b53ec06309f955455c7d71da277991d0da4ec0 renamed `cluster.c` to `repack.c`
+    - YB added includes; added extra params to `make_new_heap`,`finish_heap_swap`, `heap_create_with_catalog` calls/definitions; added `YbRelationSetNewRelfileNode` call after `heap_create_with_catalog`; added YB temp-toast else-branch; added MATVIEW transient-relkind swap in `swap_relation_files`; gated `performDeletion` with `yb_test_table_rewrite_keep_old_table`.
+    - Ported YB additions into `repack.c`; removed src/backend/commands/cluster.c.
+
+- src/backend/nodes/queryjumblefuncs.c / src/backend/utils/misc/queryjumble.c:
+    - PG commits 8eba3e3f020843a7641121e778e161b58ec2e490, 2ecbb0a49359759b46dd82df4ac3a083c36b1db4 and others moved `queryjumble.c` to `src/backend/nodes/queryjumblefuncs.c` and restructured `JumbleQuery` (now takes only `Query *`; uses `DoJumble`; queryId is `int64`).
+    - YB added `yb_compute_backfill_query_id` and a `YbBackfillIndexStmt` short-circuit in `JumbleQuery`.
+    - Ported YB additions into `src/backend/nodes/queryjumblefuncs.c`: added `YbBackfillIndexStmt` short-circuit to `JumbleQuery` with a `YB_TODO_PG19MERGE`; switched the helper return type from `uint64` to `int64`; removed src/backend/utils/misc/queryjumble.c.
+
+- contrib/adminpack/Makefile, contrib/adminpack/adminpack.c:
+    - PG commit cc09e6549f2bd2142b154d7d9802fb7a0abc643e removed the adminpack contrib extension.
+    - YB added `YBCheckServerAccessIsAllowed` calls to adminpack.c and a `SHLIB_LINK` to the Makefile
+    - Dropped adminpack
+
+- contrib/passwordcheck/passwordcheck.c:
+    - PG modified `passwordcheck.c`.
+    - YB commit e05a448cfbdff6b88a2d767113a8e885a8f3b591 rewrote `passwordcheck.c`. YB commit 485c4e5732c9a755aa9bc2cc1e83184eb9c89aab later moved that YB content into `passwordcheck_extra.c` and made `passwordcheck.c` a symlink to it.
+    - Kept YB's symlink; added a `YB_TODO_PG19MERGE` to port PG's changes; removed PG's passwordcheck.c.
+
+- src/backend/commands/tablecmds.c:
+    - ATExecAddIndex forward declaration:
+        - PG added `ATPrepAddPrimaryKey` and `verifyNotNullPKCompatible` declarations
+        - YB added `List **yb_wqueue` first parameter and changed `Relation rel` to `Relation *rel` (adjacent line conflict).
+        - Kept PG's new declarations, using YB's extended `ATExecAddIndex` signature.
+    - ATAddCheckNNConstraint forward declaration:
+        - PG commit b0e96f311985bceba79825214f8e43f65afa653a changed `ATAddCheckConstraint` to `ATAddCheckNNConstraint`
+        - YB added `List **yb_wqueue` to `ATExecAddIndexConstraint` (adjacent line conflict).
+        - Kept PG's changed declaration and YB's additional parameter.
+    - ATExecDropConstraint forward declaration:
+        - PG commit 14e87ffa5c543b5f30ead7413084c25f7735039f removed `bool recursing` parameter.
+        - YB added `List **yb_wqueue`, `AlteredTableInfo *tab`, and changed `Relation rel` to `Relation *yb_mutable_rel`.
+        - Combined both changes.
+    - RebuildConstraintComment forward declaration:
+        - PG changed the signature for `RebuildConstraintComment`.
+        - YB added YB params to `ATPostAlterTypeParse` (adjacent line conflict).
+        - Took PG's new declaration; preserved YB params.
+    - AttachPartitionEnsureIndexes forward declaration: PG added `List **wqueue`, YB added `List **wqueue`; kept PG's parameter.
+    - end of forward declarations: PG added new declarations, YB added others; kept both.
+    - DefineRelation partitioned table/temp tablespace check: kept both PG's unlogged partitioned table check and YB's temporary tablespace check.
+    - DefineRelation, CloneFkReferencing, addFkRecurseReferencing, CloneFkReferenced, ATPrepAlterColumnType, AttachPartitionEnsureIndexes, ATExecAttachPartitionIdx build_attrmap_by_name calls (7 conflicts): kept both PG and YB parameters.
+    - ATExecChangeOwner fallthrough: pg_fallthrough vs yb_switch_fallthrough: keep pg_fallthrough.
+    - RangeVarCallbackForDropRelation, RangeVarCallbackOwnsRelation, RangeVarCallbackForAlterRelation, ATSimplePermissions (4 conflicts):
+        - PG changed `pg_class_ownercheck` to `object_ownercheck`.
+        - YB added `IsYbDbAdminUser` check.
+        - Used PG's `object_ownercheck` with YB's `IsYbDbAdminUser` guard.
+    - ExecuteTruncateGuts signature and call site: kept both PG's `run_as_table_owner` and YB's `yb_is_top_level` parameters and other YB changes at the call site.
+    - ExecuteTruncateGuts body (3 conflicts):
+        - PG renamed `relfilenode` to `relfilenumber`.
+        - YB added unsafe truncate guard, `IsYBRelation` check, and extra `yb_copy_split_options`/`preserved_index_split_options` params.
+        - Kept both; used PG's renames with YB additions.
+    - ExecuteTruncateGuts reindex_relation call: PG added a parameter at the start, YB added others; kept both.
+    - ATPrepChangePersistence:
+        - PG commit 9f87da1cffda0e07ff3babcfa84abe9e849ccd95 refactored inline persistence-change logic into `ATPrepChangePersistence(tab, rel, toLogged)`.
+        - YB had inline `IsYugaByteEnabled()` guard making UNLOGGED a no-op with NOTICE.
+        - Kept PG's refactored call; moved YB's early-return guard into `ATPrepChangePersistence` body.
+    - ATPostAlterTypeCleanup:
+        - PG commit 5d06e99a3cfc23bbc217b4d78b8c070ad52f720e added `pass == AT_PASS_SET_EXPRESSION` to the guard.
+        - YB's old table rewrite added a bypass for this cleanup for YB relations (commit 025f52d50843411b060fa22a6f778dffdbe7da27 added `!IsYBRelation(tab->rel)` and commit 833fc83d8e699544e139b872e8e0be0c9978b8a7 added `yb_enable_alter_table_rewrite` override)
+        - Kept PG's new comment and guard; appended YB's comment and guard.
+    - ATExecCmd ATExecDropColumn call:
+        - PG commit 840ff5f451cd9a391d237fc60894fea7ad82a189 consolidated `AT_DropColumn`/`AT_DropColumnRecurse` into single case using `cmd->recurse`.
+        - YB added `tab /* yb_tab */` parameter.
+        - Used PG's consolidated call with YB's extra param.
+    - ATExecCmd ATExecDropConstraint call: same as above but YB also added `wqueue` and `yb_mutable_rel`.
+    - ATExecCmd AT_MergePartitions: PG added `AT_MergePartitions`, `AT_SplitPartition`, YB added `AT_YbAlterIndexAttributeType`; kept both cases.
+    - ATRewriteTable:
+        - PG added `SO_NONE` param to `scan` assignment.
+        - YB added a block right below.
+        - Kept YB's block with PG's new call.
+    - ATPrepAddPrimaryKey:
+        - PG added `ATPrepAddPrimaryKey` and `verifyNotNullPKCompatible`.
+        - YB added `YBGetNotNullConstraintAttr` macro.
+        - Kept both; moved YB's macro further down the file above the function it is used.
+    - ATExecAddIndex:
+        - PG added a new parameter at the start of `DefineIndex`.
+        - YB added a comment above the call and changed `rel` to `yb_mutable_rel`.
+        - Combined both changes.
+    - ATAddForeignKeyConstraint: generalized AM check pattern
+    - validateForeignKeyConstraint left join check:
+        - PG added `!hasperiod`; updated comment.
+        - YB added `IsYBRelation()` guard; updated comment.
+        - Combined both.
+    - validateForeignKeyConstraint AllocSetContextCreate:
+        - PG added parameter to `table_beginscan` call.
+        - YB added some `IsYBRelation` checks.
+        - Kept YB's structure and PG's extra parameter.
+    - ATExecDropConstraint definition:
+        - PG removed the parameter `recursing`.
+        - YB added some parameters.
+        - Combined both changes.
+    - ATExecDropConstraint after variable declarations:
+        - PG commit 14e87ffa5c543b5f30ead7413084c25f7735039f removed `recursing` check.
+        - YB changed parameter in `ATSimplePermissions` call.
+        - Took PG's removal; dropped YB's changes.
+    - ATExecDropConstraint dropconstraint_internal:
+        - PG moved code into `dropconstraint_internal`.
+        - YB changed `rel` to `*yb_mutable_rel` in the moved code.
+        - Kept PG's `dropconstraint_internal`; changed `rel` to `*yb_mutable_rel` in the call.
+    - ATExecDropConstraint errors (2 conflicts): kept PG's changes; used `*yb_mutable_rel` in both errors.
+    - dropconstraint_internal early return for partitioned/inherited constraints:
+        - PG added `con->contype != CONSTRAINT_NOTNULL` and some other code above.
+        - YB changed to `*yb_mutable_rel` (this code was previously in `ATExecDropConstraint`).
+        - Took PG's changes.
+    - dropconstraint_internal partitioned table ONLY check:
+        - PG commit 4dea33ce765d65d8807d343ca6535a3d067a63da removed the error for drop of constraints only on partitioned tables; PG also changed `foreach` to `foreach_oid`.
+        - YB changed `rel` to `yb_mutable_rel`.
+        - Took PG's changes; dropped YB's changes. Note: dropconstraint_internal currently doesn't have YB added parameters. This will be fixed as part of compilation/test fixes.
+    - dropconstraint_internal recurse to children:
+        - PG refactored to `dropconstraint_internal`.
+        - YB added YB parameters to `ATExecDropConstraint` call.
+        - Took PG's changes; dropped YB's changes.
+    - ATExecAlterColumnType RememberAllDependentForRebuilding:
+        - PG refactored dependency tracking to `RememberAllDependentForRebuilding`; removed `OCLASS_*` enum values.
+        - YB added `OCLASS_YBTBLGROUP`, `OCLASS_YBPROFILE`, `OCLASS_YBROLE_PROFILE`.
+        - Took PG's changes; dropped YB's changes (`default` case in `RememberAllDependentForRebuilding` handles the YB cases).
+    - ATExecAlterColumnType attTup updates:
+        - PG added more field updates.
+        - YB added `!yb_clone_table` guard (used for legacy rewrite).
+        - Kept PG's changes; wrapped the entire block with `!yb_clone_table` guard.
+    - ATExecAlterColumnType StoreAttrDefault call:
+        - PG added `(void)` and changed the parameters.
+        - YB changed `rel` to `*yb_mutable_rel`.
+        - Kept PG's call with `*yb_mutable_rel`.
+    - ATExecAttachPartition:
+        - PG moved some function calls into `attachPartitionTable` helper.
+        - YB added YB parameter (`wqueue`) to `AttachPartitionEnsureIndexes`.
+        - Took PG's changes; dropped YB's changes (the YB parameter is no longer required as PG also adds a `wqueue` parameter to `AttachPartitionEnsureIndexes`).
+    - AttachPartitionEnsureIndexes definition - signature: PG added `List **wqueue`, YB added `List **yb_wqueue`; took PG's changes; dropped YB's.
+    - AttachPartitionEnsureIndexes DefineIndex:
+        - PG changed parameters for `generateClonedIndexStmt` and `DefineIndex`.
+        - YB added a block between the two calls.
+        - Kept PG's new calls and YB's block with `yb_wqueue` changed to `wqueue`.
+    - End-of-file definitions (3 conflicts): PG added new functions, YB added others; kept all PG functions first, then YB's.
+
+- src/include/nodes/nodes.h:
+    - NodeTag enum replaced with nodetags.h include:
+        - PG commit 964d01ae90c314eb31132c2e7712d5d9fc237331 replaced the manual `NodeTag` enum with `#include "nodes/nodetags.h"` for auto-generated node tags.
+        - YB had YB-specific node tags in the manual enum.
+        - Adopted PG's `nodetags.h` approach; YB node tags will be added to the generated `nodetags.h`.
+    - OnConflictAction: PG added `ONCONFLICT_SELECT`, YB added `ONCONFLICT_YB_REPLACE`; kept both.
+
+- src/backend/nodes/copyfuncs.c:
+    - PG commit 964d01ae90c314eb31132c2e7712d5d9fc237331 auto-generates node copy functions from struct definitions, replacing all manually-written copy functions.
+    - YB had added copy functions for YB-specific node types and extra fields on PG nodes.
+    - Adopted PG's auto-generation framework; removed all YB copy functions since the generator reads YB struct definitions from headers. Exceptions: `_copyYbUpdateAffectedEntities` (`YbCopyBitMatrix`, anonymous embedded structs) and `_copyYbBatchedNestLoop` (pointer arrays needing per-element deep copy) kept as custom implementations. `pg_node_attr(custom_copy_equal, custom_read_write)` added to both structs in `plannodes.h`. `YB_TODO_PG19MERGE` added for a more thorough audit.
+
+- src/backend/nodes/readfuncs.c:
+    - same as above. exceptions: _readYbUpdateAffectedEntities (palloc/loop logic), _readYbBatchedNestLoop (palloc/loop logic), _readScalarArrayOpExpr.
+
+- src/backend/nodes/outfuncs.c:
+    - same as above. exceptions: _outYbUpdateAffectedEntities (loop logic), _outYbBatchedNestLoop (loop logic), _outScalarArrayOpExpr.
+
+- src/backend/nodes/equalfuncs.c:
+    - same as above. exceptions: _equalYbUpdateAffectedEntities
+
+- src/tools/pg_bsd_indent/indent.c:
+    - 3 break/pg_fallthrough vs yb_switch_fallthrough; accept break/pg_fallthrough
+
+- src/include/nodes/primnodes.h:
+    - RowCompareExpr comment:
+        - PG commit 6339f6468e8217f556e38482626250dc72d7cd00 updated the comment.
+        - YB commit ada31e719db783e6c26b1b0b8c9447174ad7cbc5 added YB note to comment.
+        - Took PG's trimmed comment; appended YB's note.
+    - RowCompareExpr struct fields:
+        - PG commit 5d29d525ffe028fdf6b2d3ff7502243e56c6c79a reformatted struct comments to separate lines; PG commit 6339f6468e8217f556e38482626250dc72d7cd00 changed `RowCompareType rctype` to `CompareType cmptype`.
+        - YB commit ada31e719db783e6c26b1b0b8c9447174ad7cbc5 changed `List *rargs` to `Node *rargs`.
+        - Took PG's formatting and `CompareType cmptype`; kept YB's `Node *rargs` type change.
+
+- src/backend/executor/execGrouping.c:
+    - includes:
+        - PG changed `TupleHashTableMatch` signature.
+        - YB added YB includes above `TupleHashTableMatch` declaration (adjacent line conflict).
+        - Kept YB includes above PG's new signature.
+    - BuildTupleHashTable, FindTupleHashEntry, LookupTupleHashEntry hashtable field assignment (4 conflicts):
+        - PG commit c106ef08071ad611fdf4febb3a8d2da441272a6d changed `tablecxt` to `tuplescxt`; PG commit 0f5738202b812a976e8612c85399b52d16a0abb6 changed `in_hash_funcs` to `in_hash_expr`.
+        - YB commit a1a5160c39bd0e639d85643dee55208f0957cee9 added `yb_keyColExprs`, `yb_in_keycolExprs`, `in_keyColIdx` (adjacent line conflicts).
+        - Combined both changes.
+    - BuildTupleHashTable ExecBuildGroupingInternal:
+        - PG commit 08cdb079d4a8a82c687321e9ffe0a3d3fbcc0551 changed arguments.
+        - YB's side of this conflict matches the old PG code.
+        - Took PG's changes.
+    - LookupTupleHashEntry:
+        - PG changed `in_hash_funcs` to `in_hash_expr`.
+        - YB added `in_keyColIdx`, `yb_in_keycolExprs`.
+        - Combined both.
+    - FindTupleHashEntry:
+        - PG commit 0f5738202b812a976e8612c85399b52d16a0abb6 changed parameter `hashfuncs` to `hashexpr`.
+        - YB added `keyColIdx`.
+        - Combined both.
+    - TupleHashTableHash_internal declarations:
+        - PG commit 0f5738202b812a976e8612c85399b52d16a0abb6 replaced `hashfuncs` and `i` declarations with `isnull`.
+        - YB added `eval_exprs`.
+        - Combined both changes.
+    - TupleHashTableHash_internal if (tuple == NULL) block:
+        - PG commit 0f5738202b812a976e8612c85399b52d16a0abb6 replaced `hashfunctions` and `slot` assignment.
+        - YB added `keyColIdx` and `eval_exprs` assignment.
+        - Combined both changes.
+    - TupleHashTableHash_internal else block:
+        - PG commit 0f5738202b812a976e8612c85399b52d16a0abb6 completely replaced the for loop with `ExecEvalExpr`.
+        - YB added YB logic to the old for loop.
+        - Took PG's changes; added a `YB_TODO_PG19MERGE`.
+
+- src/backend/executor/nodeModifyTable.c:
+    - declarations (2 conflicts):
+        - PG added new declarations `ExecOnConflictLockRow`, `ExecOnConflictSelect`, `ExecForPortionOfLeftovers`.
+        - YB added YB parameters `yb_oldtuple`, `ybConflictSlot` to `ExecCrossPartitionUpdateForeignKey`, `ExecOnConflictUpdate` respectively.
+        - Combined both changes.
+    - ExecComputeStoredGenerated:
+        - PG added `if (cmdtype == CMD_UPDATE)` guard around `ri_extraUpdatedCols` update.
+        - YB replaced `FirstLowInvalidHeapAttributeNumber` with `YBGetFirstLowInvalidAttributeNumber(rel)`.
+        - Kept PG's guard; used YB's attribute number function.
+    - YbExecInsertPrologue definition:
+        - PG changed `inserted_destrel` to `insert_destrel` in the comment above `ExecInsert`.
+        - YB commit a120c2588cab65ebe497e0b8c64bd826b54a99e1 split `ExecInsert` into `YbExecInsertPrologue` and `YbExecInsertAct`.
+        - Kept YB's structure; applied PG's `ExecInsert` comment update.
+    - YbExecInsertAct ExecCheckIndexConstraints call:
+        - PG commit 9758174e2e5cd278cf37e0980da76b51890e0011 added an additional `tupleid` parameter to `ExecCheckIndexConstraints` (call site passes `&invalidItemPtr`).
+        - YB commit a120c2588cab65ebe497e0b8c64bd826b54a99e1 moved this logic into `YbExecInsertAct` and replaced the `ExecCheckIndexConstraints` call with `YbExecCheckIndexConstraints`, which calls `ExecCheckIndexConstraints` internally.
+        - Kept YB's change; added a new `tupleid` parameter to `YbExecCheckIndexConstraints` to pass to `ExecCheckIndexConstraints`. Updated other `YbExecCheckIndexConstraints` call in `ExecUpdateAct` as well.
+    - YbExecInsertAct ExecInsertIndexTuples calls:
+        - PG commit b7271aa1d71acda712a372213633fdb55c1465c1 changed `ExecInsertIndexTuples` signature: reordered params; replaced `bool update` and `bool noDupErr` with a bitmask.
+        - YB moved this logic from `ExecInsert` into `YbExecInsertAct`; added an if/else block with separate `ExecInsertIndexTuples` calls (PG logic in else block).
+        - Kept YB's if/else structure. Updated all `ExecInsertIndexTuples` calls to PG's new signature (bitmask options `EIIT_IS_UPDATE`, `EIIT_NO_DUPE_ERROR` replacing `bool update`/`bool noDupErr`, reordered parameters).
+    - ExecInsert speculative insert / ON CONFLICT block:
+        - PG commit bc32a12e0db2df203a9cb2315461578e08568b9c added `INJECTION_POINT("exec-insert-before-insert-speculative")`; PG commit b7271aa1d71acda712a372213633fdb55c1465c1 changed `ExecInsertIndexTuples` to bitmask signature (`EIIT_IS_UPDATE`, `EIIT_NO_DUPE_ERROR`).
+        - YB commit a120c2588cab65ebe497e0b8c64bd826b54a99e1 moved PG's speculative insert logic into an else block; added a YB `if (IsYBRelation)` block with `YBCHeapInsert`.
+        - Kept YB's if/else structure. Ported PG's `INJECTION_POINT` and updated `ExecInsertIndexTuples` signature into the else block. Updated YB's if block call to PG's bitmask signature (`EIIT_IS_UPDATE | EIIT_NO_DUPE_ERROR` mapping from old `update=true, noDupErr=true`).
+    - ExecDeleteAct:
+        - PG commit db89a47115f0c7e664832f4b41cb03130b8a4fbe added `option` argument to `table_tuple_delete` call.
+        - YB added YB-specific logic and `resultRelationDesc`.
+        - Combined both changes.
+    - ExecUpdateEpilogue index update + FOR PORTION OF:
+        - PG commit 19d8e2308bc51ec4ab993ce90077342c915dd116 added `TU_Summarizing` / `EIIT_ONLY_SUMMARIZING` flag logic; PG commit b7271aa1d71acda712a372213633fdb55c1465c1 changed `ExecInsertIndexTuples` to bitmask signature; PG commit 8e72d914c52876525a90b28444453de8085c866f added `ExecForPortionOfLeftovers` call.
+        - YB commit f0a5db706e8 added if/else split with `YbExecUpdateIndexTuples` for YB relations.
+        - Kept YB's if/else structure. Ported PG's `TU_None`/`TU_Summarizing` flag logic and bitmask `ExecInsertIndexTuples` signature into the else block. Kept `ExecForPortionOfLeftovers` outside the if/else (applies to both paths).
+    - ExecOnConflictLockRow / ExecOnConflictUpdate refactoring:
+        - PG commit 88327092ff06c48676d2a603420089bf493770f3 extracted the tuple locking logic from `ExecOnConflictUpdate` into a new `ExecOnConflictLockRow` function; `ExecOnConflictUpdate` now calls `ExecOnConflictLockRow`.
+        - YB commit 11001d370f5ee07284a169e02c6a1581aa8f97ff added `if (IsYBRelation) goto yb_skip_transaction_control_check` locking logic (now in `ExecOnConflictLockRow`); YB commit efd4cb7fea876ed9c13d9ce94ea989ed52aeaf69 added `ybConflictSlot` parameter to `ExecOnConflictUpdate`; YB also added `ybOldTuple`/`ybShouldFree` locals and YB-specific tuple visibility handling.
+        - Resolutions:
+            - header mismatch: took PG's `ExecOnConflictLockRow` header; moved conflicting YB `ExecOnConflictUpdate` header to the definition below.
+            - locking logic: in `ExecOnConflictLockRow`, added YB's `if (IsYBRelation(relation))` skip block before the `table_tuple_lock` call; updated `ExecOnConflictUpdate`: added `ybConflictSlot` parameter, added `ybOldTuple`/`ybShouldFree` locals.
+    - ExecOnConflictUpdate:
+        - PG commit 80feb727c869cc0b2e12bd1543bafa449be9c8e2 added `existing` as the new `oldSlot` parameter to `ExecUpdate`.
+        - YB commit 161efd6fe7dfa52896dd7e5c0c8641082ab4ef1d and a87fee24675c52723ac4dc9495acf344c165761c changed PG parameters `conflictTid`, `NULL` to `ybTid`, `ybOldTuple`.
+        - Combined both changes.
+    - ExecMergeMatched:
+        - PG commit 5f2e179bd31e5f5803005101eb12a8d7bf8db8f3 moved `ExecUpdateAct` into the else block (after the INSTEAD OF trigger check).
+        - YB added YB parameters.
+        - Took PG's structure; added YB parameters to the new location.
+    - MERGE ExecInsert call:
+        - PG changed `(void) ExecInsert(...)` to `rslot = ExecInsert(...)`.
+        - YB commit d20a6b3ce4d3840e93b5ecc336080d61b906b790 and others added an extra YB parameter to `ExecInsert` (`blockInsertStmt`).
+        - Combined both changes.
+    - ExecGetUpdateNewTuple call in ExecModifyTable:
+        - YB moved PG logic into an if/else block above.
+        - PG did not make any changes to this line that aren't already present in YB.
+        - Dropped PG's side of this conflict.
+
+
+- src/backend/optimizer/path/allpaths.c:
+    - declarations:
+        - PG added parameter child_append_relid_sets to get_singleton_append_subpath and accumulate_append_subpath
+        - YB commit 2a308fc8b326f792dd1de5c9686b46c54158b32f removed forward declaration for get_singleton_append_subpath and made the function non-static
+        - accept PG's changes to accumulate_append_subpath, and remove get_singleton_append_subpath forward declaration
+    - make_one_rel all_baserels loop + YB relation loop
+        - PG commit 2489d76c4906f4461a364ca8ad7e0751ead8aa0d moved all_baserels construction from make_one_rel to initsplan.c.
+        - YB commit 3ca3ac8f38efd580704ae55ea364a4bf868f83ff added is_yb_relation / yb_pushable initialization loop 
+        - Dropped the all_baserels loop (moved by PG), keeping only YB's loop.
+    - set_rel_pathlist:
+        - PG added set_grouped_rel_pathlist
+        - YB added ybTraceCheapestPaths 
+        - keep both
+    - add_paths_to_append_rel batching check:
+        - PG commit 7358abcc6076f4b2530d10126ab379f8aea612a5 renamed subpaths_valid to parameterized_valid and refactored subpath storage into a struct.
+        - YB commit 8ac82f424701adecbf5a2537e7ca95eff4126dae added yb_has_same_batching_reqs(subpaths) check before add_path.
+        - Kept both: YB's batching check adapted to PG's renamed variable (parameterized_valid) and struct field (parameterized.subpaths).
+    - get_singleton_append_subpath signature:
+        - PG added parameter `child_append_relid_sets`.
+        - YB commit 2a308fc8b326f792dd1de5c9686b46c54158b32f made the function non-static.
+        - Combined both changes.
+    - standard_join_search: PG commit 8e11859102f947e6145acdd809e5cdcdfbe90fa5 added an if block, YB also added one at the same location; kept both.
+    - end-of-file functions:
+        - PG commit 77db132637661f6e01497959128fb650330552b4 removed debug support functions at the bottom of the file and replaced usages with `pprint()`.
+        - YB added YB functions and made YB modifications to PG debug support functions.
+        - Kept YB helpers; discarded PG debug support functions.
+
+- src/backend/optimizer/path/costsize.c:
+    - final_cost_nestloop:
+        - PG commit e22253467942fdb100087787c3e1e3a8620c54b2 removed disabled node cost penalty.
+        - YB added some checks.
+        - Took PG's changes; added a `YB_TODO_PG19MERGE` to revisit.
+    - compute_semi_anti_join_factors:
+        - PG commit 6190d828cd25ae20c0a8548765a0e1b880f1f66d removed the block of `norm_sjinfo.* =` and replaced it with `init_dummy_sjinfo`.
+        - YB commit 50eceddc53178ce31a0c7248c81d32b43cde27c8 renamed `norm_sjinfo` to `temp_sjinfo`.
+        - Took PG's changes; renamed argument `norm_sjinfo` to `temp_sjinfo` in the `init_dummy_sjinfo` call.
+    - end-of-file functions: PG added a function, YB added others; kept both.
+
+- src/backend/optimizer/path/pathkeys.c:
+    - includes + GUC: PG added `enable_group_by_reordering` GUC variable, YB added includes; kept both.
+    - make_pathkey_from_sortinfo strategy/cmptype:
+        - PG replaced `BTGreaterStrategyNumber`/`BTLessStrategyNumber` with `CompareType` enum (`COMPARE_GT`/`COMPARE_LT`).
+        - YB added `yb_is_hash` check using `BTEqualStrategyNumber` for hash indexes.
+        - Kept YB's structure with PG's changes in the else block; changed YB's hash check to PG's `CompareType`: `COMPARE_EQ` for hash.
+    - get_cheapest_path_for_pathkeys:
+        - PG commit 9caf042088e7416ed612e52519ee15f0717e86a7 moved `require_parallel_safe` check to before cost comparison.
+        - YB commit d91f628fc179f1b2f3a883aa872c94b6d2a8d0ec added `yb_prefer_bnl` / `YB_PATH_NEEDS_BATCHED_RELS` preference check.
+        - Kept only YB's BNL preference.
+    - truncate_useless_pathkeys comment: PG updated comment wording, YB added distinct index scan documentation; kept both (PG's updated description + YB's distinct index scan notes).
+    - truncate_useless_pathkeys body:
+        - PG commit e3b9e44689051d5bee199e333c748aac83396378 refactored function body.
+        - YB added `yb_distinct_nkeys` check.
+        - Took PG's changes; appended YB's `yb_distinct_nkeys` check at the end.
+
+- src/backend/optimizer/plan/createplan.c:
+    - create_append_plan:
+        - PG commit 55a780e9476a753354a6db887e92125c7886ca6d replaced `Sort *sort = make_sort(...)` with `Plan *sort_plan;` + an `if (enable_incremental_sort && presorted_keys > 0)` / else branching on `make_incrementalsort` vs `make_sort`. Variable renamed `sort` -> `sort_plan`.
+        - YB inserted `yb_assign_unique_plan_node_id(root, (Plan *) sort);` between `make_sort(...)` and `label_sort_with_costsize(...)`.
+        - Kept PG's if/else; added `yb_assign_unique_plan_node_id(root, sort_plan);` after.
+    - create_merge_append_plan: same as above.
+    - create_memoize_plan make_memoize call:
+        - PG added trailing params `est_calls`, `est_unique_keys`, `est_hit_ratio` to `make_memoize`.
+        - YB replaced the `singlerow` arg with `yb_singlerow`.
+        - Passed `yb_singlerow`; appended PG's three new args.
+    - create_unique_plan (whole function):
+        - PG commit 24225ad9aafc576295e210026d8ffa9f50d61145 removed the existing `create_unique_plan` definition and renamed `create_upper_unique_plan` to `create_unique_plan` with some changes in the definition.
+        - YB added `yb_assign_unique_plan_node_id(root, (Plan *) sort);` between `make_sort_from_sortclauses` and `label_sort_with_costsize` in the `UNIQUE_PATH_SORT` branch.
+        - Added a `YB_TODO_PG19MERGE` to port the lost `yb_assign_unique_plan_node_id` if needed.
+    - create_nestloop_plan make_nestloop / YbBatchedNestLoop:
+        - PG commit a16ef313f2c21225e89ddb9168f30601f21c7d07 and others added an arg to `identify_current_nestloop_params`, plus a foreach loop before `make_nestloop`.
+        - YB commit 49ed1065dabd2a9456b830c69b4bb8d584491ff8 wrapped the `make_nestloop(...)` call in `if (yb_is_batched) { make_YbBatchedNestLoop(...); prepare_sort_from_pathkeys(...); } else { make_nestloop(...); }`.
+        - Took PG's new arg + loop; placed YB's if/else around the final `make_*nestloop` call.
+    - create_mergejoin_plan:
+        - PG commit 55a780e9476a753354a6db887e92125c7886ca6d replaced `Sort *sort = make_sort_from_pathkeys(...)` with `Plan *sort_plan;` + Assert + if/else on `make_incrementalsort_from_pathkeys` vs `make_sort_from_pathkeys`.
+        - YB inserted `yb_assign_unique_plan_node_id(root, (Plan *) sort);` between `make_sort_from_pathkeys(...)` and `label_sort_with_costsize(...)`.
+        - Same resolution as Append/MergeAppend: added `yb_assign_unique_plan_node_id(root, sort_plan);` after if/else.
+    - replace_nestloop_params_mutator:
+        - PG reformatted the `expression_tree_mutator` call and removed the `void` cast.
+        - YB added two special-case branches.
+        - Kept both YB branches; used PG's call.
+
+- src/include/utils/guc.h:
+    - GucSource enum trailing entry:
+        - YB added `YSQL_CONN_MGR` (SET SESSION PARAMETER packet) as the last enum value.
+        - Kept YB's added entry.
+    - log_min_messages declaration:
+        - PG commit 38e0190ced714b33c43c9676d768cc6814fc662a changed `int log_min_messages` to `int log_min_messages[]` (per-process-type array).
+        - YB added `int yb_log_min_backtraces;`.
+        - Combined: PG's array form + YB's new var.
+
+- src/include/utils/memutils.h:
+    - GetMemoryChunkContext + MemoryContextCreate decls:
+        - PG commit c6e0fe1f2a08505544c410f613839664eea9eb21 moved both; `GetMemoryChunkContext` is now declared `extern` higher in `memutils.h` (with the body in `mcxt.c`).
+        - YB added a YB null-pointer `YBC_LOG_ERROR_STACK_TRACE` check.
+        - Took PG's changes; moved YB's block to the new location in `mcxt.c`.
+    - end-of-file functions: kept both PG's and YB's additions.
+
+- src/include/utils/rel.h:
+    - ForeignKeyCacheInfo struct:
+        - PG commit eec0040c4bcd650993bb058ebdf61ab94171fda4 and others changed formatting and added a new `bool conenforced;` field.
+        - YB added `Oid ybconindid;` (oid of index supporting the FK constraint).
+        - Kept PG's structure; inserted `Oid ybconindid;` after `conenforced` with a `/* YB: */` comment.
+    - StdRdOptions struct:
+        - PG commit 4d6a66f675815a5d40a650d4dcfb5ddb89c6ad2f changed `bool vacuum_truncate` to `pg_ternary vacuum_truncate`; PG commit 052026c9b903380b428a4c9ba2ec90726db81288 added `double vacuum_max_eager_freeze_failure_rate;`.
+        - YB added 5 fields: `bool colocated; Oid tablegroup_oid; Oid colocation_id; Oid table_oid; Oid row_type_oid;`.
+        - Kept PG's new `pg_ternary` type + new field; appended YB's 5 fields.
+
+- src/backend/optimizer/util/plancat.c:
+    - index AM info copy block:
+        - PG commit 3c569049b7b502bb4952483d19ce622ff0af5fd6 wrapped the `rd_indam` field copies in a new `if (indexRelation->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)` guard (PG also added an `else` branch that NULLs the AM fields for partitioned indexes).
+        - YB added 3 fields here: `info->yb_amhasgetbitmap = (amroutine->yb_amgetbitmap != NULL);`, `info->yb_amiscopartitioned = amroutine->yb_amiscopartitioned;`, `info->yb_cached_ybctid_size = 0;`.
+        - Took PG's guarded structure; ported YB's 3 fields into the new if/else blocks.
+    - index sort-info loop:
+        - PG commit 3c569049b7b502bb4952483d19ce622ff0af5fd6 restructured code (moved the for loop into a different location).
+        - YB added a `if (IsYBRelation(relation)` block within the for loop.
+        - Kept PG's new structure; wrapped YB's hash-column branching around the `reverse_sort`/`nulls_first` assignments.
+    - index size-estimation guard:
+        - PG wrapped the size-estimation block in `if (indexRelation->rd_rel->relkind != RELKIND_PARTITIONED_INDEX)` (with an `else`).
+        - YB added `!IsYBRelation(indexRelation)` to a smaller block.
+        - Took PG's new structure; moved YB's condition to the new location.
+
+- src/backend/replication/pgoutput/pgoutput.c:
+    - module magic + YB include:
+        - PG replaced `PG_MODULE_MAGIC;` with `PG_MODULE_MAGIC_EXT` and dropped the `extern` declaration for `_PG_output_plugin_init`.
+        - YB added includes.
+        - Kept PG's changes; kept YB's includes.
+    - pgoutput_change UPDATE case:
+        - PG commit da324d6cd45bbbcc1682cc2fcbc4f575281916af refactored this function.
+        - YB added YB-specific logic.
+        - Took PG's changes; passed NULL for YB params in `logicalrep_write_update` for now; added a `YB_TODO_PG19MERGE`.
+    - end-of-file functions:
+        - PG removed `update_replication_progress`.
+        - YB added `yb_support_yb_specific_replica_identity(bool)`.
+        - Kept YB's function bodies.
+
+- src/backend/utils/activity/backend_status.c:
+    - top-of-file static decls: PG added some declarations, YB added `static char *DatabaseNameBuffer = NULL;`; kept both.
+    - BackendStatusShmemRequest body:
+        - PG commit 9b5acad3f40fa6015f367fbf887ae5c1a93a3698 refactored from a returns-`Size` function (manual `add_size`/`mul_size` accounting + return) into a per-callback set of `ShmemRequestStruct(...)` calls.
+        - YB appended its own `size = add_size(size, mul_size(NAMEDATALEN, NumBackendStatSlots));` (database-name buffer) and `size = add_size(size, sizeof(uint64_t));` (`yb_new_conn` metric) lines.
+        - Took PG's new structure; added a `YB_TODO_PG19MERGE` for YB additions.
+    - pgstat_bestart initial-population:
+        - PG commit c76db55c9085d0b7984ea337576e45a7d1268b97 split `bestart` — at this site `st_databaseid = InvalidOid; st_userid = InvalidOid;`, with a separate post-database phase populating them after authentication.
+        - YB added `yb_new_conn` counter increment, a `YBIsEnabledInPostgresEnvVar()` block looking up the database name into `st_databasename`, and an extended userid block accepting YB-specific backend types (`YB_AUTO_ANALYZE_BACKEND`, `YB_YSQL_CONN_MGR`, `YB_YSQL_CONN_MGR_WAL_SENDER`).
+        - Kept PG's changes; kept YB's `yb_new_conn` increment at this location; moved the other two blocks into the new location in `pgstat_bestart_final`.
+
+- src/backend/utils/mmgr/generation.c:
+    - GenerationAllocLarge entry:
+        - PG commit a0cd95448067273a5cf92ad578a1e2de3b62aa2f split the over-sized chunk path into its own `GenerationAllocLarge` function and added `MemoryContextCheckSize(context, size, flags);` at the top.
+        - YB had added `YbPgMemAddConsumption(blksize);` after the `block = malloc(blksize)` allocation in the inline (pre-split) version.
+        - Took PG's new entry; inserted `YbPgMemAddConsumption(blksize);` immediately after PG's malloc inside `GenerationAllocLarge`.
+    - GenerationAllocChunkFromBlock body:
+        - PG commit a0cd95448067273a5cf92ad578a1e2de3b62aa2f moved the "allocate a new block if needed" logic out of the inline `GenerationAlloc` (now lives in `GenerationAllocFromNewBlock`).
+        - YB had previously added `YbPgMemAddConsumption(blksize);` inside that old logic block.
+        - Took PG's removal; added `YbPgMemAddConsumption(blksize);` after PG's malloc in `GenerationAllocFromNewBlock`.
+    - GenerationReset empty-block free path:
+        - PG simplified to `else GenerationBlockFree(set, block);`.
+        - YB added `YbPgMemSubConsumption(freed_sz);`.
+        - Took PG's call form (the existing `GenerationBlockFree` body already includes `YbPgMemSubConsumption(freed_sz);`).
+    - Added a `YB_TODO_PG19MERGE` for this file in case this needs to be looked at more thoroughly.
+
+- src/backend/utils/mmgr/mcxt.c:
+    - top-of-file infrastructure block:
+        - PG added new macros and helpers.
+        - YB added `#define MEMORY_CONTEXT_IDENT_DISPLAY_SIZE 1024`.
+        - Kept PG's full block; appended YB's `#define` after it.
+    - MemoryContextReset body:
+        - PG removed trailing `VALGRIND_DESTROY_MEMPOOL` / `VALGRIND_CREATE_MEMPOOL`.
+        - YB commit ff80cfddee1f6a44b3916a95281a47b84ad5cb5f added a newline before these calls.
+        - Took PG's deletion.
+    - MemoryContextStatsDetail tail + MemoryContextStatsUsage:
+        - PG commit 4c1973fcaecd9ef11de14ac55d3ec1432f6b82dc added a closing brace.
+        - YB added `if (IsYugaByteEnabled())` block printing `YbcTcmallocStats` to this function; YB also added `MemoryContextStatsUsage`.
+        - Combined both changes.
+
+- src/bin/pg_dump/dumputils.c:
+    - 3 conflicts in REVOKE/GRANT/GRANT-WITH-GRANT-OPTION formatting blocks (same pattern):
+        - PG added `if (name && *name)` block.
+        - YB changed to `yb_sql` buffer.
+        - Kept PG's changes; used YB's `yb_sql`.
+
+- src/bin/pg_upgrade/dump.c:
+    - generate_old_dump globals call:
+        - PG added new args.
+        - YB renamed the binary to `ysql_dumpall`.
+        - Kept PG's changes; used YB binary name `ysql_dumpall`.
+    - generate_old_dump per-db call:
+        - PG added new args.
+        - YB renamed the binary to `ysql_dump`.
+        - Kept PG's changes; used YB binary name `ysql_dump`.
+    - statistics flag:
+        - PG commit 6a46089e458f2d700dd3b8c3f6fc782de933529a renamed `--with-statistics` to `--statistics`.
+        - YB commit 1d0241f523c27a57af0105d898f7327f5cd71adc imported PG commits to preserve statistics during upgrade.
+        - Kept PG's rename.
+
+- src/bin/pg_upgrade/option.c:
+    - getopt_long shortopts string:
+        - PG's string was `b:B:cd:D:j:kNo:O:p:P:rs:U:v`.
+        - YB added YB-specific options `h:`, `H:`, `S:`, `w:`.
+        - Merged into `b:B:cd:D:h:H:j:kNo:O:p:P:rs:S:U:vw:`; updated YB comment.
+    - usage() printf block:
+        - PG added `--set-char-signedness=OPTION`, `--swap`, `--sync-method=METHOD` lines.
+        - YB added `-h/--old-host`, `-H/--new-host`, `-s/--old-socketdir`, `-S/--new-socketdir`, `-w/--yb-working-dir` lines.
+        - Kept both blocks (PG's first, YB's after).
+    - get_sock_dir entry:
+        - PG changed the platform guard from `#if defined(HAVE_UNIX_SOCKETS) && !defined(WIN32)` to `#if !defined(WIN32)` and changed `if (!live_check)` to `if (!user_opts.live_check || cluster == &new_cluster)`.
+        - YB added an assert.
+        - Kept YB's assert above PG's new #if.
+
+- src/backend/optimizer/plan/planner.c:
+    - PlannerGlobal init block:
+        - PG added `glob->partition_directory = NULL` and `glob->rel_notnullatts_hash = NULL`.
+        - YB added hint/plan an `IsYugaByteEnabled()` block that sets up hint alias mappings for target relations.
+        - Kept both: PG fields first, then YB fields and block.
+    - PlannerInfo init (2 conflicts):
+        - PG added `root->assumeReplanning = false` and `root->join_domains = list_make1(makeNode(JoinDomain))` and removed 
+        `root->partColsUpdated` (commit 812221b204276b884d2b14ef56aabd9e1946be81)
+        - YB added batched NL fields
+        - Kept both: PG's `assumeReplanning` and `join_domains`, YB's batched relids and hint fields all preserved.
+    - create_distinct_paths sorted-path loop:
+        - PG commits 7ab80ac1caf9f48064190802e1068ef89e2883c4, 24225ad9aafc576295e210026d8ffa9f50d61145, 3c6fc58209f24b959ee18f5d19ef96403d08f15c refactored code.
+        - YB commits aa2c9b4da0847306f2af774e1f99c496c2b1b0f6 and c4b2c39c98f0fca8f6e4c5a0fa0f5d9e9f724c95 added a `yb_distinct_paths` skip and an `UpperUniquePath` unwrap, plus a separate explicit-sort block after the loop for the cheapest path.
+        - Took PG's changes; added YB_TODO_PG19MERGE.
+    - hashagg for DISTINCT:
+        - PG changed `parse->distinctClause` to `root->processed_distinctClause` (new preprocessed form).
+        - YB added to the condition
+        - Used PG's `root->processed_distinctClause`; kept YB's `yb_distinct_paths` guard.
+    - plan_cluster_use_sort and plan_create_index_workers inits:
+        - PG added `root->join_domains = list_make1(makeNode(JoinDomain))`.
+        - YB added hint fields (`ybBlockId`, `ybHintedJoinsOuter/Inner`, `ybProhibitedJoinTypes/Joins`).
+        - Kept both in each location.
+    - End-of-file function additions:
+        - Kept both PG and YB functions.
+
+- src/backend/regex/regc_pg_locale.c:
+    - file body:
+        - PG commit 5a38104b364234615c780656a8b2424f96ed9efa restructured locale handling: removed PG_Locale_Strategy enum, removed pg_regex_strategy and pg_regex_collation static vars, moved pg_char_properties table and PG_IS* macros into utils/pg_locale_c.h, and rewrote regc_wc_is*/regc_wc_to* to a simple `if (pg_regex_locale->ctype_is_c)` branch.
+        - YB added `#include "pg_yb_utils.h"`, marked the three static vars YB_THREAD_LOCAL (commit 0e51069b56acc2768879c4408334801af99a422c), and added `yb_switch_fallthrough()` calls inside the per-strategy switches.
+        - Took PG's rewritten bodies, dropping yb_switch_fallthrough (no switches anymore), keeping YB include and `YB_THREAD_LOCAL` on the surviving `pg_regex_locale` declaration.
+
+- src/backend/optimizer/util/inherit.c:
+    - expand_partitioned_rtentry pruning call:
+        - PG dropped the local `live_parts` variable and uses `relinfo->live_parts` directly.
+        - YB added a 2nd `partdesc->oids` arg to `prune_append_rel_partitions`.
+        - Kept PG's structure with YB's extra arg.
+    - expand_single_inheritance_child child-RTE col-priv translation:
+        - PG commits a61b1f74823c9c4f79c95226a461f1e7a367764b and  3f7836ff651ad710fef52fa87b248ecdfc6468dc removed the entire selectedCols/insertedCols/updatedCols translation block: those fields moved from RangeTblEntry to RTEPermissionInfo and child RTEs get `perminfoindex = 0` (no perm checks on children).
+        - YB added parameter `yb_min_attr` to translate_col_privs call
+        - Took PG's removal.
+    - translate_col_privs_multilevel return:
+        - PG added code before the return
+        - YB added a 3rd `yb_min_attr` arg (using `YBGetFirstLowInvalidAttributeNumberFromOid(appinfo->parent_reloid)`).
+        - Kept PG's code; kept YB's augmented return.
+    - apply_child_basequals local var name and make_restrictinfo call:
+        - PG added the local variable `childrinfo` to construct the RestrictInfo, perform some checks and then append it to `childquals` (previously PG directly appended to `childquals`)
+        - YB also independently created a local variable `childri` to construct the RestrictInfo and added a `childrel->is_yb_relation` block evaluates `yb_pushable`
+        - Took PG's name and signature; appended YB's is_yb_relation block.
+    - expand_partitioned_rtentry recursive translate_col_privs call (out of conflict):
+        - PG added a new translate_col_privs call here for `child_updatedCols` (2-arg).
+        - YB changed translate_col_privs to require a 3rd `yb_min_attr` arg.
+        - Passed `YBGetFirstLowInvalidAttributeNumber(parentrel)` as the 3rd arg.
+
+- src/backend/replication/slot.c:
+    - ReplicationSlotCreate signature:
+        - PG added parameters
+        - YB added others
+        - Combined both changes.
+    - ReplicationSlotCleanup body:
+        - PG commit 67c20979ce72b8c236622e5603f9775968ff501c added local variables `found_valid_logicalslot` and `dropped_logical` to `ReplicationSlotCleanup` and changed the function's code.
+        - YB refactored ReplicationSlotCleanup into a wrapper plus a helper `ReplicationSlotCleanupForProc`
+        - Kept YB's structure; moved PG's new variables into `ReplicationSlotCleanupForProc`.
+    - ReplicationSlotCleanupForProc loop predicate:
+        - PG renamed `slot->active_pid` to and uses `MyProcNumber`, also added code above the condition.
+        - YB compares `s->active_pid == proc->pid` since the helper takes a PGPROC* (commit 70fbb382e1a913c651a6dbc85a75bcf2e25d32a8)
+        - Kept PG's changes; kept YB's `proc->pid`.
+    - ReplicationSlotDrop body:
+        - PG added an if block below `ReplicationSlotAcquire` plus changed the function to take a third bool argument.
+        - YB added a IsYugaByteEnabled() block before ReplicationSlotAcquire
+        - Ordered YB's early-return block first, then PG's `ReplicationSlotAcquire(name, nowait, false)` followed by the if block.
+
+- src/backend/optimizer/util/pathnode.c:
+    - compare_path_costs / compare_path_costs_fuzzily disabled-nodes priority:
+        - PG added a `disabled_nodes` priority check at the top that trumps cost.
+        - YB added a hint priority block (ybHasHintedUid / ybIsHinted) at the same location.
+        - Kept both: PG's disabled_nodes check first, then YB's hint priority block.
+    - add_path:
+        - PG commit e22253467942fdb100087787c3e1e3a8620c54b2 added disabled_nodes to the if condition
+        - YB used a `ybNewPathCostsMore` boolean with branching.
+        - Kept YB's structure and PG's disabled_nodes-or-cost test in the final else if.
+    - add_partial_path trace block:
+        - PG updated a comment.
+        - YB added a `yb_enable_planner_trace` debug ereport block.
+        - Kept YB's block; took PG's updated comment.
+    - create_append_path baserel param_info gating:
+        - PG broadened the condition to `rel->reloptkind == RELOPT_BASEREL && root && input.subpaths != NIL` and renamed `subpaths` -> `input.subpaths` 
+        - YB added a block for `yb_cur_batched_relids` (adjacent line conflict).
+        - Took PG's broader gate; nested YB's batching block under an inner `IS_PARTITIONED_REL(rel)` check, using `input.subpaths`.
+    - create_unique_path (semijoin form, before create_gather_merge_path):
+        - PG commit 24225ad9aafc576295e210026d8ffa9f50d61145 removed the 4-arg `create_unique_path(root, rel, subpath, sjinfo)` semijoin function and simultaneously renamed `create_upper_unique_path` -> `create_unique_path` (DISTINCT form). Semijoin uniquification now happens via `create_unique_paths` (plural) in planner.c, which builds UniquePaths through the renamed `create_unique_path` and `create_agg_path` constructors.
+        - YB added `yb_assign_unique_path_node_id` and `yb_propagate_fields` calls inside the old semijoin function.
+        - Resolved with a YB_TODO_PG19MERGE: kept the old YB-side semijoin function commented out above the renamed `create_unique_path` (DISTINCT form), to be reviewed before deleting. The two YB hooks (`yb_assign_unique_path_node_id`, `yb_propagate_fields`) are already invoked by the renamed `create_unique_path` and by `create_agg_path`, both of which `create_unique_paths` (planner.c) calls into, so the hooks may be redundant; confirm before removing.
+    - calc_non_nestloop_required_outer batching skip:
+        - PG declared `Relids outerrelids` and changed usages of `outer_path->parent->relids` to `outerrelids`
+        - YB added `inner_req_batched`/`outer_req_unbatched` locals and an `is_batched` early-skip guarding the bms_overlap test, but used `outer_path->parent->relids`.
+        - Kept PG's `outerrelids`; used it inside YB's batching test.
+    - create_agg_path (2 whitespace conflicts):
+        - Kept YB calls.
+    - create_setop_path signature change (2 conflicts):
+        - PG changed `create_setop_path` to take separate `leftpath` and `rightpath` instead of a single `subpath`, and stores them as `pathnode->leftpath`/`rightpath`.
+        - YB added `yb_assign_unique_path_node_id` call and `yb_propagate_fields` call using subpath.
+        - Kept PG's changes, adding `yb_assign_unique_path_node_id`, and switching YB propagation to `yb_propagate_fields2(parent, &leftpath->yb_path_info, &rightpath->yb_path_info)`.
+
+- src/backend/replication/slotfuncs.c:
+    - create_physical_replication_slot ReplicationSlotCreate call:
+        - PG added three trailing bool args (repack, failover, synced).
+        - YB added five trailing args (yb_plugin_name, yb_snapshot_action, yb_consistent_snapshot_time, lsn_type, yb_ordering_mode).
+        - Combined: PG bools first, then YB args.
+    - create_logical_replication_slot body:
+        - PG added the three new bools to ReplicationSlotCreate, added EnsureLogicalDecodingEnabled() and an Assert before CreateInitDecodingContext, and added a `not repack` arg to CreateInitDecodingContext.
+        - YB merged its five extra args into ReplicationSlotCreate and gated the CreateInitDecodingContext call behind `if (!IsYugaByteEnabled())`, added a YB comment.
+        - Kept YB's structure, collapsing both into one ReplicationSlotCreate with PG and YB args combined, keeping EnsureLogicalDecodingEnabled and then putting PG's CreateInitDecodingContext (with `not repack`) above the existing YB `if (!IsYugaByteEnabled())` block.
+    - pg_create_logical_replication_slot arg parsing:
+        - PG added `bool failover = PG_GETARG_BOOL(4)`.
+        - YB added two PG_ARGISNULL/PG_GETARG_NAME pairs at index 4 and 5 for yb_lsn_type and yb_ordering_mode.
+        - Kept PG_GETARG_BOOL(4) for failover; shifted YB's args to indices 5 and 6.
+    - pg_get_replication_slots PG_GET_REPLICATION_SLOTS_COLS:
+        - PG bumped the count to 21 (added failover, synced, slotsync_skip_reason, etc.).
+        - YB added a separate YB_PG_GET_REPLICATION_SLOTS_COLS = 4 (adjacent line conflict).
+        - Kept PG's 21 plus YB's 4-column macro for the trailing yb-specific fields.
+    - pg_get_replication_slots loop bound:
+        - PG changes to `max_replication_slots + max_repack_replication_slots`.
+        - YB iterates `yb_totalslots` (yb_numreplicationslots when IsYugaByteEnabled, max_replication_slots otherwise).
+        - Updated `yb_totalslots` assignment to `max_replication_slots + max_repack_replication_slots` when `!IsYugabyteEnabled()`.
+    - pg_get_replication_slots if/else blocks:
+        - PG switched from `active_pid != 0` to `active_proc != INVALID_PROC_NUMBER`.
+        - YB branched on IsYugaByteEnabled to emit yb_stream_active.
+        - Kept YB's branch; used PG's active_proc/INVALID_PROC_NUMBER spelling in the non-YB block.
+    - WALAVAIL switch in pg_get_replication_slots:
+        - PG commit 5a38104b364234615c780656a8b2424f96ed9efa-era restructured the invalidated check to `slot_contents.data.invalidated != RS_INVAL_NONE` and switched the WALAVAIL_REMOVED branch to use `slot->active_proc` / INVALID_PROC_NUMBER.
+        - YB wrapped the original switch in `if (IsYugaByteEnabled()) { yb-branch } else { pg15-switch }`.
+        - Kept YB's structure; moved PG's changes to the else block.
+
+- src/backend/replication/walsender.c:
+    - parseCreateReplSlotOptions signature + locals:
+        - PG added a `bool *failover` out-param (and matching `failover_given` local).
+        - YB added two out-params `YbCRSLsnType *lsn_type, YbCRSOrderingMode *ordering_mode` (and matching `lsn_type_given`, `ordering_mode_given` locals).
+        - Combined: PG failover first, then YB lsn_type/ordering_mode.
+    - parseCreateReplSlotOptions failover branch + lsn_type/ordering_mode branches:
+        - PG added an `else if (defname == "failover")` block.
+        - YB added two `else if (defname == "lsn_type" / "ordering_mode")` blocks.
+        - Kept all three else-if blocks back-to-back.
+    - parseCreateReplSlotOptions call in CreateReplicationSlot:
+        - PG passed `&failover`.
+        - YB passed `&lsn_type, &yb_ordering_mode`.
+        - Passed all three.
+    - Physical-slot ReplicationSlotCreate call in CreateReplicationSlot:
+        - PG added `false, false, false` (repack, failover, synced).
+        - YB added `cmd->plugin, snapshot_action, NULL, lsn_type, yb_ordering_mode` and moved call to !IsYugabyteEnabled block.
+        - Combined.
+    - Logical-slot ReplicationSlotCreate call:
+        - PG added `false, failover, false` (repack, failover, synced).
+        - YB added the same five YB params; wrapped the slot-creation in `if (!IsYugaByteEnabled())` guard for a different code path.
+        - Kept a single ReplicationSlotCreate with PG bools + YB params; dropped the now-redundant YB wrapper since both call sites converge to one ReplicationSlotCreate inside the existing else branch.
+    - Snapshot-build path (after option validation):
+        - PG added EnsureLogicalDecodingEnabled + Assert and a `false /* not repack */` arg to CreateInitDecodingContext.
+        - YB wrapped the entire snapshot-build path in `if (IsYugaByteEnabled()) { yb-master path } else { pg path }`.
+        - Kept PG's EnsureLogicalDecodingEnabled + Assert; kept YB's if/else block with PG's changes to `CreateInitDecodingContext` inside the else block.
+    - xloc snprintf:
+        - PG commit e83aa9f92fdd88c2912cc43a61fd9f59f4c8f4d3 and others restructured code (removed ReplicationSlotMarkDirty and surrounding code) and bumped the format to `%X/%08X`.
+        - YB added an IsYugaByteEnabled() branch returning `0/2` and kept the PG `%X/%X` form for non-YB.
+        - Took PG's removal; kept YB's branch using PG's `%X/%08X` in the non-YB arm.
+    - flushPtr update:
+        - PG commit 0fdab27ad68a059a1663fa5ce48d76333f1bd74c replaced the `flushPtr == InvalidXLogRecPtr` re-init with a `if (!XLogRecPtrIsValid(flushPtr) || ...)` block that uses GetXLogReplayRecPtr for am_cascading_walsender.
+        - YB added a YBCGetFlushRecPtr() branch.
+        - Kept PG's changes; added an early `if (IsYugaByteEnabled()) flushPtr = YBCGetFlushRecPtr();` before PG's am_cascading_walsender check.
+    - WalSndWakeup tail:
+        - PG commit bc971f4025c378ce500d86597c34b0ef996d4d8c replaced the entire function body
+        - YB added an `if (YBIsEnabledInPostgresEnvVar()) return;` early return
+        - Took PG's changes; kept YB's early return.
+
+- src/backend/replication/logical/logical.c:
+    - CheckLogicalDecodingRequirements wal_level guard:
+        - PG commit 67c20979ce72b8c236622e5603f9775968ff501c removed the `wal_level < WAL_LEVEL_LOGICAL` check.
+        - YB wrapped the check in `if (!IsYugaByteEnabled())`.
+        - Took PG's removal.
+    - StartupDecodingContext callbacks (update_progress_txn vs yb_schema_change):
+        - PG added `ctx->reorder->update_progress_txn`
+        - YB added `ctx->reorder->yb_schema_change`.
+        - Kept both assignments.
+    - StartupDecodingContext in_create + yb_needs_relcache_invalidation block:
+        - PG15 backpatch commit aee8c2b95492e1b0a228184cd9147b1c0749d673 added the `LogicalDecodingContext.in_create` field and `ctx->in_create = in_create;` as a backport fix; PG master fixed the same bug via bb19b70081e2248f242cd00227abff5b1e105eb6 without that field. YB inherited the field through PG15-stable, not as a YB authored change.
+        - YB also added a `yb_needs_relcache_invalidation` HASHCTL init under `if (IsYugaByteEnabled())`.
+        - Dropped `ctx->in_create = in_create;` (field doesn't exist in PG19); kept the YB hash-table init.
+    - cb_wrapper functions (update_progress_txn_cb_wrapper vs yb_schema_change_cb_wrapper) (2 conflicts):
+        - PG added a new update_progress_txn_cb_wrapper.
+        - YB added a yb_schema_change_cb_wrapper at the same location.
+        - Kept both functions back-to-back.
+    - LogicalConfirmReceivedLocation candidate-lsn predicate:
+        - PG commit a2b02293bc65dbb2401cb19c724f52c6ee0f2faf switched the predicate from `!= InvalidXLogRecPtr` to the `XLogRecPtrIsValid()` macro.
+        - YB gated the entire block under `!IsYugaByteEnabled()`
+        - Kept YB's `!IsYugaByteEnabled()` gate; used PG's `XLogRecPtrIsValid()` for the inner predicate.
+    - LogicalConfirmReceivedLocation else-branch confirmed_flush update:
+        - PG commit ad5eaf390c58294e2e4c1509aa87bf13261a5d15 added `if (lsn > MyReplicationSlot->data.confirmed_flush) confirmed_flush = lsn;` to prevent moving confirmed_flush backwards.
+        - YB added a restart_lsn update (adjacent line conflict).
+        - Kept PG's changes; appended YB's.
+
+- src/backend/parser/gram.y:
+    - %union new types:
+        - PG added `ReturningClause *retclause; ReturningOptionKind retoptionkind;`.
+        - YB added `YbOptSplit *splitopt; char *grpopt; YbRowBounds *rowbounds;`.
+        - Kept both blocks.
+    - %type <list> sort/index_params line:
+        - PG only reformatted.
+        - YB renamed `index_params` -> `yb_index_params` (YB's nonterminal supports HASH key declarations).
+        - Took PG's two-line split with YB's `yb_index_params` rename.
+    - %type block addition:
+        - PG added a block of new %type declarations.
+        - YB added its own /* YB types */ block.
+        - Kept both.
+    - precedence block (UNBOUNDED/IDENT row):
+        - PG added to the IDENT-precedence row and to the Op precedence line.
+        - YB added `_YB_HASH_P`, `NO_OPCLASS`, `EXPR_LIST` 
+        - Kept PG's IDENT-row and Op-row additions, with YB's precedence declarations between them.
+    - toplevel_stmt list / ClusterStmt:
+        - PG commit c0b53ec06309f955455c7d71da277991d0da4ec0 renamed `ClusterStmt` to `RepackStmt`.
+        - YB added `{ parser_ybc_not_support(...) }`.
+        - Added `parser_ybc_not_support` to `RepackStmt`.
+    - UNIQUE ConstraintElem:
+        - PG added a NULL arg to `processCASbits`.
+        - YB added a loop below for populating yb_index_params.
+        - Kept PG's signature and YB's yb_index_params loop.
+    - PRIMARY KEY TableConstraint (2 conflicts):
+        - PG changed the rule head to `'(' columnList opt_without_overlaps ')'` and added `n->without_overlaps = $5;` plus the 9th NULL arg to processCASbits.
+        - YB changed the rule head to `'(' yb_index_params ')'`, iterates yb_index_params to populate `n->keys`, errors on TABLESPACE on PK, and stores `n->yb_index_params = $4`.
+        - Kept YB's `yb_index_params` followed by `opt_without_overlaps`. Kept YB's body (positions shifted +1 from $5 onward), added PG's `n->without_overlaps = $5;` and 9th NULL arg to processCASbits.
+    - DomainConstraint / opt_no_inherit:
+        - PG added `DomainConstraint` and `DomainConstraintElem`
+        - YB wrapped opt_no_inherit's NO INHERIT branch with `parser_ybc_beta_feature("inheritance")` (adjacent line conflict).
+        - Kept PG's new productions and YB's beta-feature wrapper.
+    - object_type_any_name DROP COLLATION/CONVERSION:
+        - PG added `| PROPERTY GRAPH { OBJECT_PROPGRAPH }`.
+        - YB added `parser_ybc_not_support` checks to the COLLATION and CONVERSION_P branches (adjacent line conflict).
+        - Kept PG's PROPGRAPH branch and YB's wrapped COLLATION/CONVERSION branches.
+    - FetchStmt:
+        - PG commit bee23ea4ddc46198c95a4e73a83f453c09e04bf8 added `n->location` and `n->direction_keyword` fields to every FetchStmt production.
+        - YB added `parser_ybc_signal_unsupported(...)` calls to PRIOR/FIRST_P/LAST_P/ABSOLUTE_P/RELATIVE_P productions.
+        - Kept PG's changes; added the YB ybc_signal_unsupported calls into PRIOR/FIRST_P/LAST_P/ABSOLUTE_P/RELATIVE_P.
+    - IndexStmt rule head:
+        - PG commit 7d158e8cb44b602ab76a3660b9f5f5c5c5992a1f changed `opt_index_name` to generalized `opt_single_name`.
+        - YB added `yb_opt_concurrently_index`, `yb_index_params`, `YbOptSplit`
+        - Adopted PG's `opt_single_name` rename inside YB's structure.
+    - IndexStmt opt_concurrently / yb_opt_concurrently_index / opt_index_name:
+        - PG commit 7d158e8cb44b602ab76a3660b9f5f5c5c5992a1f removed the late `opt_concurrently:` and `opt_index_name:` definitions (centralized as shared helpers earlier; `opt_index_name` was changed to `opt_single_name`).
+        - YB added `yb_opt_concurrently_index`
+        - Kept `yb_opt_concurrently_index`
+    - index_elem_options (rule head):
+        - PG commit 7d158e8cb44b602ab76a3660b9f5f5c5c5992a1f changed `opt_class` to `opt_qualified_name`
+        - YB added `opt_yb_index_sort_order`, `yb_opt_alias`
+        - Kept YB's form with the old `opt_class`; added YB_TODO_PG19MERGE (see opt_class definition resolution below).
+    - index_elem `'(' a_expr ')' index_elem_options` body:
+        - PG added `$$->location = @1;`.
+        - YB unwrapped ColumnRef into `$$->name` and only set `$$->expr` for non-ColumnRef nodes and added other YB rules below.
+        - Took YB's unwrap logic and rules; added PG's `$$->location = @1;`.
+    - opt_class definition:
+        - PG commit 7d158e8cb44b602ab76a3660b9f5f5c5c5992a1f removed `opt_class` (replaced by `opt_qualified_name`).
+        - YB commit 1553aeb762b7c122d886111d123ecbbcebc5c70f added `%prec NO_OPCLASS` on the empty production to break a shift/reduce conflict.
+        - Kept YB's `opt_class:` definition with a YB_TODO_PG19MERGE.
+    - ReindexStmt productions (2 conflicts):
+        - PG commit 83011ce7d7f42b744a93d2b0819597d0aa94e9cc reworked the REINDEX grammar: added `opt_utility_option_list` (initially `opt_reindex_option_list`, renamed in 1dfe3ef3f960d6924eb1f18facf4fbdae6e1cc1d) to all production heads, started passing options through (`n->params = $2;` instead of `NIL`), and removed the three explicit `REINDEX '(' utility_option_list ')' ...` forms.
+        - YB added `parser_ybc_not_support(@1, "REINDEX CONCURRENTLY")` + "Only support INDEX target" check to the index-target production, and `parser_ybc_not_support(@1, "REINDEX SCHEMA/DATABASE/SYSTEM")` to the multi-table production.
+        - Took PG's reworked grammar everywhere; ported YB's not_support + INDEX-only check into the new productions with PG's shifted positions.
+    - RepackStmt productions (3 conflicts):
+        - PG commit c0b53ec06309f955455c7d71da277991d0da4ec0 renamed ClusterStmt to RepackStmt and added new REPACK productions alongside the existing CLUSTER ones.
+        - YB added `parser_ybc_not_support` to CLUSTER productions. 
+        - Took PG's changes; not_support gating is handled at the toplevel (`| RepackStmt { parser_ybc_not_support(@1, "REPACK/CLUSTER"); }` — see toplevel_stmt resolution above).
+
+- src/backend/parser/parse_utilcmd.c:
+    - CONSTR_PRIMARY fallthrough:
+        - PG commit 8354b9d6b602ea549bc8d85cb404771505662a7b replaced the FALL THRU comment with `pg_fallthrough;`.
+        - YB added `yb_switch_fallthrough()`.
+        - Took PG's `pg_fallthrough;`.
+    - build_attrmap_by_name call:
+        - PG commit ad86d159b6ab90b195b06fb5c7b593900a7f9cd8 added a `bool missing_ok` arg.
+        - YB independently added a `bool yb_ignore_type_mismatch` arg.
+        - Passed both `false`s (merged signature takes both).
+    - transformIndexConstraint comment:
+        - PG commit 190dc27998d5b7b4c36e12bebe62f7176f4b4507 changed the comment.
+        - YB changed `btree` to `btree/lsm`.
+        - Took PG's comment with YB's btree/lsm rename.
+    - transformIndexConstraint loop:
+        - PG added a "If a PK, ensure the columns get not null constraints" block.
+        - YB added an `IsYugaByteEnabled()` block.
+        - Kept both.
+    - iparam field propagation / PK AT_SetNotNull block:
+        - PG commit 62299bbd90d69e2273d3e2ba35af5953d20ca037 added `iparam->location = -1`. PG commit 14e87ffa5c543b5f30ead7413084c25f7735039f removed the post-loop `AT_SetNotNull` block (NOT NULL is now a catalog constraint).
+        - YB commit 6fe8bd22c733c7a5725bb50b35193137c3315d08 changed `iparam->ordering`/`nulls_ordering` from `NIL`/`SORTBY_DEFAULT` to propagation from `index_elem`. YB added `notnullcmd->yb_is_add_primary_key = true;` inside the block.
+        - Kept both changes to `iparams->*`; added YB_TODO_PG19MERGE for `yb_is_add_primary_key` flag.
+
+- src/backend/storage/ipc/sinvaladt.c:
+    - shmInvalBuffer declaration / NumProcStateSlots:
+        - PG added NumProcStateSlots define.
+        - YB commit 70fbb382e1a913c651a6dbc85a75bcf2e25d32a8 dropped `static` and added `extern struct SISeg *shmInvalBuffer;` to sinvaladt.h. The extern was later dropped and no consumer references the variable from outside sinvaladt.c.
+        - Took PG's changes; kept `static`.
+    - CleanupInvalidationStateInternal (3 conflicts):
+        - PG commit 024c521117579a6d356050ad3d78fdc95e44eefa renamed `MyBackendId`/`proc->backendId - 1` to `MyProcNumber`/`proc->procNumber` (0-based), changed the inactive-slot scan to `pgprocnos[i] == MyProcNumber`, and moved `BackendIdGetProc`/`BackendIdGetTransactionIds` out of this file to procarray.c as `ProcNumberGetProc`/`ProcNumberGetTransactionIds`.
+        - YB extracted the body into `CleanupInvalidationStateInternal(SISeg *segP, PGPROC *proc)` and added `CleanupInvalidationStateForProc(PGPROC *proc)` (called from the postmaster.c).
+        - Kept YB's helper split; ported PG's renames inside the helper using `proc->procNumber`; dropped the orphaned PG `BackendIdGetProc`/`BackendIdGetTransactionIds` bodies (now in procarray.c). Renamed YB-specific helpers to `YbCleanupInvalidationStateInternal` / `YbCleanupInvalidationStateForProc` (callers updated).
+    - SICleanupQueue loop / yb_reset_candidates:
+        - PG changed loop to iterate `numProcs`
+        - YB added yb_reset_candidates / yb_num_reset_candidates and a comment block
+        - Combined both changes.
+
+- src/backend/storage/lmgr/lwlock.c:
+    - BuiltinTrancheNames array:
+        - PG commit da952b415f4444fcc85ea79c3f006af142d3c90a introduced storage/lwlocklist.h with PG_LWLOCK / PG_LWLOCKTRANCHE macros; commit 2047ad068139f0b8c6da73d0b845ca9ba30fb33d entries in lwlock.c, which are now auto-generated by including lwlocklist.h with the macros expanded as array initializers.
+        - YB appended five YB tranche names (YB_ASH_*, YB_QUERY_DIAGNOSTICS*, YB_TERMINATED_QUERIES) to the hand list.
+        - Kept PG's changes and registering the five YB tranches via PG_LWLOCKTRANCHE entries appended at the end of src/include/storage/lwlocklist.h.
+    - LWLockQueueSelf / LWLockDequeueSelf proclist arg (2 conflicts):
+        - PG changed to MyProcNumber.
+        - YB passed proc->pgprocno (using YB's KilledProcToClean fallback proc).
+        - Passed `GetNumberFromPGProc(proc)`.
+    - LWLockAcquire prelude:
+        - PG changed to Assert (from AssertArg)
+        - YB added code above the Assert.
+        - Kept YB's code; took PG's Assert.
+
+- src/backend/replication/logical/proto.c:
+    - logicalrep_write_tuple forward decl / definition / call sites, logicalrep_write_update definition:
+        - PG added `PublishGencolsType include_gencols_type` parameter.
+        - YB added `bool *yb_is_omitted` parameter (and `yb_old_is_omitted`/`yb_new_is_omitted` for logicalrep_write_update).
+        - Combined both sides for all conflicts.
+
+- src/backend/replication/logical/reorderbuffer.c:
+    - top-of-file YB include + MAX_DISTR_INVAL_MSG_PER_TXN:
+        - PG added the MAX_DISTR_INVAL_MSG_PER_TXN macro at file top.
+        - YB added `#include "pg_yb_utils.h"` and `#include "replication/walsender_private.h"`.
+        - Kept both, with YB includes placed below PG includes.
+    - REORDER_BUFFER_CHANGE_INSERT switch fallthrough:
+        - PG used `pg_fallthrough;` macro.
+        - YB used `yb_switch_fallthrough();` macro.
+        - Kept `pg_fallthrough;`.
+    - reloid lookup via RelidByRelfilenumber (2 conflicts):
+        - PG renamed RelidByRelfilenode to RelidByRelfilenumber; relnode.spcNode/relNode to rlocator.spcOid/relNumber.
+        - YB wrapped the lookup in an else branch of `if (IsYugaByteEnabled())`
+        - Kept YB's else wrapper and calling PG's renamed RelidByRelfilenumber with rlocator fields; ditto for the `could not open relation` elog.
+    - rbtxn_is_prepared checks (2 conflicts):
+        - PG renamed rbtxn_prepared to rbtxn_is_prepared 
+        - YB added `if (!IsYugaByteEnabled())` to the condition.
+        - Combined.
+    - txn->base_snapshot == NULL block (inside ReorderBufferReplay):
+        - PG commit abfb29648f9adcde84656afde1d50bc8b8e9b6e0 renamed rbtxn_prepared to rbtxn_is_prepared
+        - YB moved PG code into `!IsYugaByteEnabled()` block
+        - Kept YB's structure and taking PG's rbtxn_is_prepared rename
+    - ReorderBufferCheckMemoryLimit `logical_decoding_work_mem` checks:
+        - PG commits 5de94a041ed7a51b571db2030ba87600c7fc6262, 072ee847ad4c3fb52b0c24f7dddbe0798bd70c24, d3b6183dd988928dd369b4b7d641917e77f1ae4e and others restructured the if/else before the while-loop and changed `* 1024L` to `* (Size) 1024` (041e8b95b8cd251bfec6a3c9c3dd6614de6a4c9b).
+        - YB substituted `logical_decoding_work_mem` with `IsYugaByteEnabled() ? yb_reorderbuffer_max_changes_in_memory : logical_decoding_work_mem` at all memory-limit checks.
+        - Adopted PG's restructure; applied YB's ternary at all three memory-limit references.
+    - ReorderBufferCheckMemoryLimit streaming/serialize sites:
+        - PG commit 072ee847ad4c3fb52b0c24f7dddbe0798bd70c24 added `ReorderBufferCheckAndTruncateAbortedTXN` continue checks before the StreamTXN and SerializeTXN calls.
+        - YB added `if (IsYugaByteEnabled()) elog(DEBUG1, ...)` lines before the same StreamTXN and SerializeTXN calls.
+        - Kept PG's abort-truncation continues followed by YB's DEBUG1 elogs at both sites.
+    - ReorderBufferGetInvalidations / YBAllocateIsOmittedArray / YBReorderBufferSchemaChange:
+        - PG added ReorderBufferGetInvalidations.
+        - YB added YBAllocateIsOmittedArray and YBReorderBufferSchemaChange.
+        - Kept all three.
+
+- src/backend/storage/lmgr/proc.c:
+    - ProcStructLock declaration:
+        - PG commit 7984ce7a1d21819865e473f17cb6b928cf58a10d removed ProcStructLock from this location.
+        - YB commit e5caabcfb079ac7d8616484353f15716f5f5ba22 added `RetryMaxBackoffMsecs` / `RetryMinBackoffMsecs` / `RetryBackoffMultiplier`; YB later added `yb_max_query_layer_retries` (adjacent line conflict)
+        - Kept YB's retry GUCs; dropped ProcStructLock.
+    - ProcGlobalShmemInit per-PGPROC init:
+        - PG dereferences via local `proc` pointer.
+        - YB added LWLockInitialize for yb_ash_metadata_lock.
+        - Kept PG's `proc->` form; ported YB's yb_ash_metadata_lock init.
+    - ProcGlobalShmemInit tail:
+        - PG indexes PreparedXactProcs at FIRST_PREPARED_XACT_PROC_NUMBER and removed ProcStructLock setup.
+        - YB added yb_too_many_conn shmem alloc.
+        - Kept PG's changes; kept YB's yb_too_many_conn alloc.
+    - InitProcess too-many-clients branch:
+        - PG changed to ProcGlobal->freeProcsLock and uses AmWalSenderProcess().
+        - YB incremented yb_too_many_conn
+        - Kept PG's changes; kept YB's yb_too_many_conn increment.
+    - InitProcess post-acquisition cleanup:
+        - PG commit 2bbc261ddbdfee2def5d14ee9fcc09c70bdf84e6 removed MarkPostmasterChildActive call.
+        - YB added three YB MyProc state initializers.
+        - Dropped PG-removed call; kept YB's three initializers (and comment).
+    - ProcKill (4 conflicts):
+        - PG commit 7984ce7a1d21819865e473f17cb6b928cf58a10d moved ProcStructLock onto `ProcGlobal->freeProcsLock` and converted the freelist to dlist (procgloballist becomes `dlist_head *`, push_head/push_tail). PG also added a `proc->pid = 0; proc->vxid.procNumber/lxid` reset block before the lock acquire. PG commit 2bbc261ddbdfee2def5d14ee9fcc09c70bdf84e6 removed the `MarkPostmasterChildInactive()` call; PG also removed the `kill(AutovacuumLauncherPid, SIGUSR2)` block;
+        - YB extracted the lock-group-detach into `RemoveLockGroupLeader(PGPROC *)` and the freelist return into `ReleaseProcToFreeList(PGPROC *)`. YB also added an `if (IsYugaByteEnabled()) YBOnPostgresBackendShutdown();` call.
+        - Kept YB's helper split; ported PG's changes (`&ProcGlobal->freeProcsLock`, dlist ops, `dlist_head *procgloballist`) into both helpers; kept PG's "Mark proc no longer in use" proc->pid block; dropped the `MarkPostmasterChildInactive` block and the autovac wakeup. Renamed helpers `YbRemoveLockGroupLeader` / `YbReleaseProcToFreeList` (callers updated).
+
+- src/backend/tcop/postgres.c:
+    - SocketBackend message-type switch (Bind/Parse):
+        - PG renamed message constants to PqMsg_* enums.
+        - YB added 'n' / 'p' YSQL Conn Mgr handling with yb_switch_fallthrough() into 'B'/'P'.
+        - Kept YB's 'n'/'p' cases (with pg_fallthrough) before PqMsg_Bind / PqMsg_Parse with a YB_TODO_PG19MERGE.
+    - exec_simple_query locals:
+        - PG added `const char *cmdtagname; size_t cmdtaglen;`.
+        - YB added `bool yb_collect_commit_stats = false;`.
+        - Kept all three.
+    - exec_parse_message ParseComplete emit:
+        - PG commit f4b54e1ed9853ab9aff524494866823f951b1e7f changed `pq_putemptymessage('1')` to `pq_putemptymessage(PqMsg_ParseComplete)`.
+        - YB parameterized the function (`whereToSendOutput` -> `output_dest` arg + `yb_parse_custom_parse_complete` arg) and wrapped the emit in an if/else with PG's ParseComplete in the else.
+        - Kept YB's structure with PG's `PqMsg_ParseComplete`.
+    - ProcessRecoveryConflictInterrupt cases (3 conflicts):
+        - PG removed the fallthrough from each case and replaced it with a return.
+        - YB added `yb_switch_fallthrough()`.
+        - Kept PG's changes.
+    - ProcessInterrupts (2 conflicts):
+        - PG added ParallelApplyMessagePending / SlotSyncShutdownPending / RepackMessagePending.
+        - YB added YbLogCatcacheStatsPending and LogHeapSnapshotPending.
+        - Kept all five.
+    - postgres.c stack-depth helpers (set_stack_base, stack_is_too_deep, check_max_stack_depth, IA64 helpers):
+        - PG moved these into src/backend/utils/misc/stack_depth.c.
+        - YB added an ADDRESS_SANITIZER block inside stack_is_too_deep, and some other macros.
+        - Took PG's changes; added YB_TODO_PG19MERGE.
+    - InitPostgres PostmasterContext drop comment:
+        - PG trimmed the comment.
+        - YB added a YB note.
+        - Kept PG's short comment plus the YB note.
+    - ReadyForQuery first-time setup-duration log + YB ASH unset:
+        - PG added the `conn_timing.ready_for_use` first-time setup-duration log block.
+        - YB added a yb_is_ash_metadata_set unset block in the same place.
+        - Kept both blocks back-to-back.
+    - PostgresMain Parse case (2 conflicts):
+        - PG renamed 'P' -> PqMsg_Parse and called added valgrind_report_error_query.
+        - YB added 'n'/'p' YSQL Conn Mgr cases, expanded exec_parse_message with extra args, and wrapped in PG_TRY/PG_CATCH.
+        - Kept YB's 'n'/'p' cases (using pg_fallthrough), PG's PqMsg_Parse name, YB's PG_TRY wrapper and expanded exec_parse_message args with PG's valgrind_report_error_query after the PG_TRY/PG_CATCH.
+    - PostgresMain Execute case:
+        - PG added a comment below exec_execute_message.
+        - YB removed exec_execute_message and replaced it with a PG_TRY/PG_CATCH that calls yb_exec_execute_message.
+        - Kept YB's PG_TRY/PG_CATCH followed by the new PG comment.
+    - PostgresMain Sync case:
+        - PG renamed 'S' -> PqMsg_Sync and added EndImplicitTransactionBlock + valgrind_report_error_query.
+        - YB wrapped finish_xact_command in a PG_TRY/PG_CATCH.
+        - Combined: PG's EndImplicitTransactionBlock, YB's PG_TRY around finish_xact_command, valgrind_report_error_query, then YB's YbRefreshSessionStatsDuringExecution.
+    - PostgresMain EOF fallthrough:
+        - PG used `pg_fallthrough;`.
+        - YB used `yb_switch_fallthrough();`.
+        - Kept `pg_fallthrough;`.
+
+- src/backend/tcop/utility.c:
+    - T_CheckPointStmt body / T_ReindexStmt case:
+        - PG commit a4f126516e688736bfed332b44a0c221b8dc118a refactored the T_CheckPointStmt body into `ExecCheckpoint()`. Commit f21848de20130146bc8039504af40bd24add54cd moved T_ReindexStmt.
+        - YB commit 986ea6a8eca22c3aa0e807f85b60c677783da87e added `CHECKPOINT_CAUSE_CLIENT |` to the inline `RequestCheckpoint` flags (CHECKPOINT_CAUSE_CLIENT is a YB-defined macro in xlog.h).
+        - Took PG's changes; ported YB's `CHECKPOINT_CAUSE_CLIENT |` into `RequestCheckpoint` inside `ExecCheckpoint` (checkpointer.c).
+    - T_WaitStmt / T_YbCreateProfileStmt / T_YbDropProfileStmt:
+        - PG added T_WaitStmt.
+        - YB added T_YbCreateProfileStmt / T_YbDropProfileStmt cases.
+        - Kept all three.
+    - DefineIndex partitioned table comment:
+        - PG updated the comment
+        - YB added a "YB: ..." line.
+        - Kept PG's full text; appended YB's note.
+    - T_RefreshMatViewStmt PG_TRY:
+        - PG changed `PG_TRY()` to `PG_TRY(2)`
+        - YB added two volatile locals (yb_old_type / yb_type_changed) before PG_TRY() (adjacent line conflict).
+        - Kept YB's volatile locals; used PG's PG_TRY(2).
+    - DROP INDEX CONCURRENTLY fallthrough:
+        - PG used `pg_fallthrough;`.
+        - YB used `yb_switch_fallthrough();`.
+        - Kept `pg_fallthrough;`.
+    - UtilityReturnsTuples / UtilityTupleDescriptor:
+        - PG added T_WaitStmt entries.
+        - YB added T_YbBackfillIndexStmt entries.
+        - Kept both cases in each function.
+
+- src/include/replication/reorderbuffer.h:
+    - DebugLogicalRepStreamingMode enum vs ReorderBufferTupleBuf struct:
+        - PG (commit 08e6344fd6423210b339e92c069bb979ba4e7cd6 and others) added  `DebugLogicalRepStreamingMode` enum, removed the `ReorderBufferTupleBuf` struct
+        - YB commit fddfec620d291de3423277812bbe6097dfcbce3d added fields inside ReorderBufferTupleBuf
+        - Took PG's removal; added YB_TODO_PG19MERGE for YB's fields.
+    - ReorderBufferChange.tp.newtuple type:
+        - PG commit 08e6344fd6423210b339e92c069bb979ba4e7cd6 changed `newtuple` from `ReorderBufferTupleBuf *` to `HeapTuple`.
+        - YB added `Oid yb_table_oid` alongside.
+        - Combined both changes.
+    - ReorderBufferUpdateProgressTxnCB / YBReorderBufferSchemaChangeCB: kept both callback typedefs.
+
+- src/include/replication/slot.h:
+    - top-of-file PG_REPLSLOT_DIR / CONFLICT_DETECTION_SLOT:
+        - PG added these defines.
+        - YB added includes.
+        - Kept both.
+    - ReplicationSlotPersistentData:
+        - PG added some fields.
+        - YB added others.
+        - Kept both.
+    - ReplicationSlotCreate / ReplicationSlotDrop signatures:
+        - PG added repack/failover/synced bools to Create.
+        - YB added 5 yb_* args to Create and 2 yb_* args to Drop, and some extern PGDLLIMPORT declarations.
+        - Combined both changes.
+
+- src/pl/plpgsql/src/pl_comp.c:
+    - plpgsql_compile body:
+        - PG commit refactored the entire compile/lookup into cached_function_compile() helper.
+        - YB added inline plpgsql_HashTableLookup with extensive YB invalidation logic (yb_invalid, yb_catalog_version freshness, trigger-fn secondary-entry sweep).
+        - Adopted PG's cached_function_compile() call; added YB_TODO_PG19MERGE for the invalidation logic port.
+    - do_compile field init (has_exception_block / yb_catalog_version):
+        - PG added function->has_exception_block
+        - YB added function->yb_catalog_version
+        - Kept both.
+    - plpgsql_add_initdatums dtype switch fallthrough:
+        - PG changed fallthrough to break.
+        - YB used yb_switch_fallthrough().
+        - Kept break.
+
+- src/backend/utils/adt/datetime.c:
+    - DTK_NUMBER ptype value-name + pre-validation switch:
+        - PG commit 5b3c5953553bb9fb0b171abc6041e7c7e9ca5b4d switch and renamed the local `val` to `value`.
+        - YB added `yb_switch_fallthrough();`.
+        - Took PG's changes.
+    - pg_fallthrough vs yb_switch_fallthrough (3 conflicts): keep pg_fallthrough.
+
+- src/backend/utils/adt/pg_locale.c:
+    - includes:
+        - PG added the PGLOCALE_SUPPORT_ERROR macro and TEXTBUFLEN define.
+        - YB added an include.
+        - Kept both.
+    - lc_collate_is_c / lc_ctype_is_c:
+        - PG commits 06421b08436414b42cd169501005f15adee986f1 and 51edc4ca54f826cfac012c7306eee479f07a5dc7 removed both functions entirely (replaced by per-locale provider helpers).
+        - YB added YB-specific code inside both function bodies (YBCPgIsYugaByteEnabled assert, YB_THREAD_LOCAL caches) and added an `extern bool lc_collate_is_c(Oid)` declaration to `src/include/utils/builtins.h` (commit 6c8deb0504274a16bae390dcbabf45aa5ac23fbb).
+        - Added YB_TODO_PG19MERGE: function bodies commented out, YB extern in builtins.h removed, `lc_collate_is_c` callers in ybginget.c and pg_yb_utils.c commented out.
+    - pg_newlocale_from_collation:
+        - PG commit 3aa2373c114124f62e80016d8939331fcb4d5586 extracted the inline `SearchSysCache1` + locale-construction block out of `lookup_collation_cache` into a new `create_pg_locale(collid, CollationCacheContext)`; Follow-up commit 1ba0782ce90cb4261098de59b49ae5cb2326566b further split `create_pg_locale` into per-provider helpers.
+        - YB added `YbCheckUnsupportedLibcLocale` calls inside the libc branch of the inline construction.
+        - Kept PG's `create_pg_locale(...)` changes; YB_TODO_PG19MERGE to port `YbCheckUnsupportedLibcLocale`.
+
+- src/backend/utils/misc/postgresql.conf.sample:
+    - all conflicts:
+        - Took PG's new entries and reformatted indentation; added YB's additions.
+
+- src/backend/utils/mmgr/slab.c:
+    - SlabReset block-free site:
+        - PG added VALGRIND_MEMPOOL_FREE before free(block) and removed nblocks
+        - YB added freed_sz tracking and YbPgMemSubConsumption
+        - Kept both.
+    - SlabDelete:
+        - Same as above.
+    - SlabAllocFromNewBlock:
+        - Same as above.
+    - SlabFree empty-block path:
+        - PG commit d21ded75fdbc18d68be6e6c172f0f842c50e9263 moved the block-free into an else branch
+        - YB added YbPgMemSubConsumption(freed_sz) after free(block).
+        - Moved YB's YbPgMemSubConsumption into PG's else branch.
+
+- src/backend/utils/sort/tuplesort.c:
+    - top-of-file include + sort-type macros / yb_sort_type_name:
+        - PG commit d0b193c0fad13cf35122b0d3dc805c76e323e8bf removed the sort-type defines, PARALLEL_SORT macro (moved into tuplesortvariants.c / tuplesort.h).
+        - YB added pg_yb_utils.h include, YB_SORT_UNINITIALIZED define, and yb_sort_type_name helper.
+        - Took PG's removal; kept the YB include; moved yb_sort_type_name definition to tuplesortvariants.c; added YB_SORT_UNINITIALIZED define and yb_sort_type_name extern declaration in `tuplesort.h` (as they have references in both tuplesort.c and tuplesortvariants.c).
+    - Tuplesortstate struct:
+        - PG commit ec92fe98356a8a36427fe9ef52873b50fe17852e replaced nKeys/sortopt/tuples and other fields on Tuplesortstate with a TuplesortPublic base member.
+        - YB added `int yb_sort_type`
+        - Kept PG's changes and YB's yb_sort_type field on Tuplesortstate.
+    - tuplesort_begin_common init:
+        - PG commit ec92fe98356a8a36427fe9ef52873b50fe17852e rewrote field accesses to state->base.*.
+        - YB added state->yb_sort_type = YB_SORT_UNINITIALIZED.
+        - Took PG's body; inserted YB's yb_sort_type init.
+    - tuplesort_begin_heap/cluster/index_btree/index_hash/index_gist/datum:
+        - PG commit d0b193c0fad13cf35122b0d3dc805c76e323e8bf moved these functions into tuplesortvariants.c.
+        - YB added a state->yb_sort_type = HEAP_SORT/CLUSTER_SORT/INDEX_SORT/DATUM_SORT assignment in each function (and LSM_AM_OID alongside BTREE_AM_OID in cluster's assert).
+        - Took PG's removal; ported each yb_sort_type assignment + LSM_AM_OID check into the corresponding function in tuplesortvariants.c.
+
+- src/include/executor/executor.h:
+    - EXEC_FLAG comment block:
+        - PG added WITH_NO_DATA description.
+        - YB added YB_AGG_PARENT description.
+        - Kept both.
+    - FindTupleHashEntry signature:
+        - PG replaced FmgrInfo *hashfunctions with ExprState *hashexpr.
+        - YB added an AttrNumber *keyColIdx param.
+        - Kept both.
+    - ExecConstraints / ExecRelGenVirtualNotNull:
+        - PG added ExecRelGenVirtualNotNull extern.
+        - YB added a ModifyTableState *mstate parameter to ExecConstraints.
+        - Kept both.
+    - ExecCheckIndexConstraints signature:
+        - PG added const ItemPointerData *tupleid parameter.
+        - YB added TupleTableSlot **ybConflictSlot parameter.
+        - Kept both.
+
+- src/include/pgstat.h:
+    - PgStat_Kind enum:
+        - PG commit d35ea27e51c05cbe3575d50a6b99d64f20a3a742 moved PgStat_Kind from an enum in pgstat.h to #define values in src/include/utils/pgstat_kind.h.
+        - YB added PGSTAT_KIND_YB_TERMINATED_QUERIES
+        - Took PG's removal; added `#define PGSTAT_KIND_YB_TERMINATED_QUERIES 25` to pgstat_kind.h.
+    - PgStat_WalCounters / inline YB structs:
+        - PG inserted typedef struct PgStat_WalCounters at this position.
+        - YB carried a pre-existing #ifdef YB_TODO block (PG15-merge remnant) with ProgressCommandType / PgBackendStatus / LocalPgBackendStatus copies; PG commit e1025044cd4e7f33f7304aed54d5778b8a82cd5d already moved these to utils/backend_status.h.
+        - Kept PG's PgStat_WalCounters typedef and the YB #ifdef YB_TODO block as-is with a YB_TODO_PG19MERGE.
+    - pgstat_update_parallel_workers_stats / yb_pgstat_clear_entry_pid:
+        - PG added pgstat_update_parallel_workers_stats extern.
+        - YB added yb_pgstat_clear_entry_pid extern; the adjacent pgstat_report_query_termination extern is already wrapped in #ifdef YB_TODO (PG-stats refactor pending).
+        - Kept both PG and YB externs; preserved the #ifdef YB_TODO pgstat_report_query_termination block with a YB_TODO_PG19MERGE.
+    - end-of-file PendingWalStats + YB externs:
+        - PG removed `extern PGDLLIMPORT PgStat_WalStats PendingWalStats;` (moved to backend_status.h).
+        - YB kept the PendingWalStats line and appended yb_pgstat_report_allocated_mem_bytes / yb_pgstat_set_catalog_version / yb_pgstat_set_has_catalog_version externs.
+        - Kept YB's three yb_pgstat_* externs.
+
+- src/interfaces/libpq/fe-connect.c:
+    - PQconninfoOptions table tail:
+        - PG added entries before the terminating sentinel.
+        - YB added a yb_auto_analyze entry.
+        - Kept all PG entries followed by the YB entry.
+    - pqConnectOptions2 pguser default:
+        - PG dropped the `if (conn->pguser)` guard before free().
+        - YB hard-coded strdup("postgres") for `conn->pguser` (adjacent line conflict).
+        - Kept PG's unguarded free() and YB's "postgres" default.
+    - pqConnectOptions2 dbName default:
+        - Same as above (hardcoded default "yugabyte").
+    - freePGconn:
+        - PG (commit 02c408e21a6e78ff246ea7a1beb4669634fa9c4c and others) dropped the `if (x) free(x)` guards and removed some fields.
+        - YB added `if (conn->yb_auto_analyze) free(conn->yb_auto_analyze)`.
+        - Kept PG's changes; appended free(conn->yb_auto_analyze) (unguarded).
+
+- src/test/regress/pg_regress_main.c:
+    - PG changes vs ysqlsh_cmd/ysqlsh rename (4 conflicts):
+        - Took PG's changes; kept YB's rename to ysqlsh_cmd.
+
+- src/backend/utils/adt/ruleutils.c:
+    - pg_get_indexdef_worker forward decl + propgraph helpers:
+        - PG added new declarations.
+        - YB extended pg_get_indexdef_worker with YB params.
+        - Kept YB's expanded signature; kept PG's new declarations.
+    - pg_get_constraintdef_worker PK column decompile:
+        - PG added new parameter to decompile_column_index_array and added WITHOUT OVERLAPS append.
+        - YB branched on is_yb_alter_table + IsYBRelationById to call yb_decompile_pk_column_index_array (preserves HASH/ASC/DESC).
+        - Combined: YB branch, fallback to PG's new call, then PG's WITHOUT OVERLAPS append.
+    - find_param_referent NestLoop check:
+        - PG commit adaf34241acd83afaa45a8b614b6484a285da847 removed `in_same_plan_level`
+        - YB extended the predicate to also recognize YbBatchedNestLoop.
+        - Followed PG; kept YB's YbBatchedNestLoop branch.
+    - get_rule_expr fallthrough:
+        - PG used `pg_fallthrough`.
+        - YB used `yb_switch_fallthrough()`.
+        - Kept `pg_fallthrough`.
+    - get_rule_expr T_MergeSupportFunc / T_YbBatchedExpr:
+        - PG added T_MergeSupportFunc case
+        - YB added T_YbBatchedExpr case
+        - Kept both cases.
+
+- src/backend/utils/mmgr/aset.c:
+    - AllocSetDelete delete-on-freelist drain:
+        - PG commit bb049a79d3447e97c0d4fa220600c423c4474bf9 added VALGRIND_DESTROY_MEMPOOL(oldset) before free(oldset).
+        - YB added freed_sz and YbPgMemSubConsumption(freed_sz) after free(oldset).
+        - Kept both.
+    - AllocSetDelete block-free site:
+        - PG commit bb049a79d3447e97c0d4fa220600c423c4474bf9 added VALGRIND_MEMPOOL_FREE; PG commit 2c2eb0d6b27f498851bace47fc19e4c7fc90af4f changed `block != set->keeper` to `!IsKeeperBlock(set, block)`.
+        - YB added freed_sz = ASET_BLOCK_TOTAL_SIZE(block) and YbPgMemSubConsumption(freed_sz) after free(block).
+        - Kept PG's IsKeeperBlock + VALGRIND_MEMPOOL_FREE; added YB's freed_sz tracking after free(block).
+    - AllocSetAlloc large-chunk path / new-block path (2 conflicts):
+        - PG commit 413c18401dcc170636429127e2494d8beba4b92f extracted the large-chunk and new-block paths into AllocSetAllocLarge / AllocSetAllocFromNewBlock / AllocSetAllocChunkFromBlock helpers.
+        - YB added YbPgMemAddConsumption(blksize) inline at the post-malloc site in both paths.
+        - Adopted PG's helpers; ported YbPgMemAddConsumption(blksize) into AllocSetAllocLarge and AllocSetAllocFromNewBlock at the malloc-success site; stashed the YB inline bodies in `#if 0` with a YB_TODO_PG19MERGE.
+    - AllocSetFree block-remove site:
+        - PG commit 2c2eb0d6b27f498851bace47fc19e4c7fc90af4f changed context->mem_allocated to set->header.mem_allocated.
+        - YB added freed_sz = ASET_BLOCK_TOTAL_SIZE(block) before the mem_allocated decrement
+        - Kept PG's set->header.mem_allocated; kept YB's freed_sz local before it.
+
+- src/bin/psql/describe.c:
+    - default ACLs CASE block:
+        - PG added DEFACLOBJ_LARGEOBJECT (sixth WHEN).
+        - YB added DEFACLOBJ_TABLEGROUP.
+        - Extended the CASE format to seven WHENs; kept both objects.
+    - \d index column-list query:
+        - PG added c2.reltablespace + conditional con.conperiod selection.
+        - YB added i.indexrelid for yb_table_properties.
+        - Appended YB's i.indexrelid; appended PG's con.conperiod logic; added YB_TODO_PG19MERGE (breaks column numbering).
+    - \d Replica Identity (gate + label-rendering ternary):
+        - PG switched from raw chars to named constants (REPLICA_IDENTITY_INDEX/DEFAULT/NOTHING).
+        - YB commit 4da9d867bdd46af982a885d46184aa6dc785289e added YB_REPLICA_IDENTITY_CHANGE and made it the default for user tables, so the gate is per-schema and the rendering ternary a case that maps DEFAULT to "DEFAULT" case.
+        - Kept YB's per-schema gate and rendering, expressed with PG's named constants.
+
+- src/include/nodes/parsenodes.h:
+    - SortByDir enum: YB added SORTBY_HASH; kept it.
+    - RTEPermissionInfo / RangeTblEntry tail:
+        - PG (commit a61b1f74823c9c4f79c95226a461f1e7a367764b and others) split permission-checking fields out of RangeTblEntry into a new RTEPermissionInfo struct, removed extraUpdatedCols, and relocated securityQuals.
+        - YB added 4 yb fields (ybHintAlias, ybUniqueBaseId, ybScannedObjectName, ybSchemaName).
+        - Took PG's changes; appended YB's 4 yb fields to RangeTblEntry with `pg_node_attr(query_jumble_ignore)`.
+    - ObjectType / AlterTableType YB additions: YB added OBJECT_YBPROFILE / AT_YbAlterIndexAttributeType; kept both.
+    - Constraint struct:
+        - PG commit fbc93b8b5f59cfb23c22a26a46ca7bcc826be442 moved  skip_validation/initially_valid earlier in the struct and moved `location` field at the end
+        - YB added yb_index_params
+        - Took PG's changes; appended yb_index_params with `pg_node_attr(query_jumble_ignore)`.
+
+- src/backend/optimizer/path/indxpath.c:
+    - get_index_paths build_index_paths call:
+        - PG commit 5bf748b86bc6786a3fc57fc7ce296c37da6564b0 removed the `skip_lower_saop` argument and removed the `if (skip_lower_saop)` block.
+        - YB added a `yb_bitmap_idx_pushdowns` parameter to build_index_paths inside `if (skip_lower_saop)`.
+        - Kept PG's changes with a YB_TODO_PG19MERGE.
+    - build_index_paths comment:
+        - PG removed the comment for `skip_lower_saop`.
+        - YB added to the comment.
+        - Kept YB's comment.
+    - build_index_paths body:
+        - PG 5bf748b86bc6786a3fc57fc7ce296c37da6564b0 removed `skip_lower_saop` and restructured this block.
+        - YB added yb_hash_code_on_left and is_yb_index handling.
+        - Kept PG's changes with a YB_TODO_PG19MERGE.
+    - match_join_clauses_to_index:
+        - PG commit 627d63419e22054551327216d2b2de3e6977fade removed the `else` before match_clause_to_index.
+        - YB added a parameter to match_clause_to_index.
+        - Kept PG's changes; kept YB's additional parameter.
+    - expand_indexqual_rowcompare:
+        - PG commit c23e3e6beb273ae8c0f8e616edb7ed1acb0271c4 replaced `list_truncate(list_copy(...), n)` with the new `list_copy_head(list, n)` helper.
+        - YB casted the `non_var_args` assignment to `(Node *)` because YB commit ada31e719db783e6c26b1b0b8c9447174ad7cbc5 changed `RowCompareExpr.rargs` from `List *` to `Node *` (see also -- the YB comment in primnodes.h for RowCompareExpr)
+        - Adopted PG's `list_copy_head` form; preserved YB's `(Node *)` cast on `rc->rargs`.
+    - relation_has_unique_index_for:
+        - PG commit bf9ee294e567654231c5b2fef09b8a5367907366 removed exprlist/oprlist params (and the assertion).
+        - YB added a block for ybIndexList.
+        - Kept YB's ybIndexList block.
+
+- src/backend/utils/cache/inval.c:
+    - TransInvalidationInfo tail:
+        - PG moved CurrentCmdInvalidMsgs and RelcacheInitFileInval into the new InvalidationInfo base struct.
+        - YB added YbNumInvalMsgsInTxn[YB_SUBGROUP_COUNT].
+        - Kept only YbNumInvalMsgsInTxn.
+    - relsync_callback_list / yb_accept_inval_failed_version:
+        - PG added relsync_callback_*.
+        - YB added yb_accept_inval_failed_version + yb_refresh_cache_in_progress globals.
+        - Kept both blocks.
+    - RegisterRelcacheInvalidation YB global-DDL detection:
+        - PG commit 243e9b40f1b2dd09d6e5bf91ebf6e822a2cd3704 switched `transInvalInfo->...` to `info->...` (InvalidationInfo* param); commit 3abe9dc18892b9f69bb48a2eb21fbe5cf348a489 added RegisterRelsyncInvalidation.
+        - YB added a YbSetIsGlobalDDL gate.
+        - Kept PG's changes; appended YB's gate after `info->RelcacheInitFileInval = true;`.
+    - InvalidateSystemCachesExtended / CallSystemCacheCallbacks:
+        - PG (commit 3abe9dc18892b9f69bb48a2eb21fbe5cf348a489 and others) added a relsync_callback_list iteration loop inside InvalidateSystemCachesExtended and re-ordered the functions in this file.
+        - YB extended InvalidateSystemCachesExtended's signature with a `bool yb_callback` arg and added CallSystemCacheCallbacks below.
+        - Ported YB's changes to the new InvalidateSystemCachesExtended location (YB's `bool yb_callback` param, YB's gate wrapping the cache reset, PG's three callback loops (syscache + relcache + relsync) kept); appended YB's CallSystemCacheCallbacks helper.
+    - AcceptInvalidationMessages:
+        - PG added an USE_ASSERT_CHECKING block calling AssertCouldGetRelation.
+        - YB added a YbIsInvalidationMessageEnabled block
+        - Kept both, PG block first.
+    - CacheInvalidateSmgr static-assert vs YB portability test:
+        - PG added a StaticAssertDecl.
+        - YB added a yb_test_inval_message_portability hook and yb_version write.
+        - Kept both, PG static-assert first.
+
+- src/bin/pg_dump/t/002_pg_dump.pl:
+    - all 6 conflicts:
+        - No YB changes to this file, only PG imports. The conflicts exist only because yb-pg15 cherry-picks included PG cleanups for this file that YB master's imports left behind. Resolved all by taking PG's version.
+
+- src/include/nodes/execnodes.h:
+    - top-of-file forward references:
+        - PG converted the whole list to typedef-style forward refs.
+        - YB added an include.
+        - Kept PG's typedef list; prepended YB's ybc_pg_typedefs.h include.
+    - EState es_resultrelinfo_extra:
+        - PG removed the field; YB had it inside EState.
+        - Dropped the field, dropped PG's closing brace for the struct (YB added additional fields below the conflict marker).
+    - TupleHashTableData YB key-expression fields:
+        - PG made whitespace changes for `} TupleHashTableData;`.
+        - YB added yb_keyColExprs / in_keyColIdx / yb_in_keycolExprs.
+        - Kept the YB additions before the closing brace.
+    - ModifyTableState YB attributes:
+        - PG added mt_updateColnosLists / mt_mergeActionLists / mt_mergeJoinConditions.
+        - YB added yb_fetch_target_tuple / yb_is_update_optimization_enabled / yb_is_inplace_index_update_enabled / yb_ioc_state.
+        - Kept both.
+    - YbBitmapIndexScanState / SharedBitmapState / ParallelBitmapHeapState:
+        - PG removed/moved SharedBitmapState and ParallelBitmapHeapState.
+        - YB added YbBitmapIndexScanState in this region.
+        - Kept YbBitmapIndexScanState; dropped the PG-removed structs.
+    - TidScanState YB fields:
+        - PG removed HeapTupleData tss_htup.
+        - YB added List *yb_tss_aggrefs.
+        - Combined both.
+
+- src/backend/utils/adt/ri_triggers.c:
+    - RI_ConstraintInfo struct tail:
+        - PG added conindid, pk_is_partitioned and *fpmeta.
+        - YB also independently added conindid (commit ca81018844a4c0b68fc386c16495a3fe02d5fd43)
+        - Kept PG's changes.
+    - RI_FKey_check fast paths:
+        - PG added a `ri_fastpath_is_applicable` short-circuit before SPI_connect, then SPI_connect, then table_open(pk_rel).
+        - YB added a separate IsYBRelation(pk_rel) fast path that needs pk_rel already open and short-circuits before SPI work.
+        - Kept PG's `ri_fastpath_is_applicable` block, then table_open(pk_rel), then YB's IsYBRelation fast path, then SPI_connect. This swaps PG's SPI_connect/table_open order so YB's fast path can short-circuit before SPI connect.
+    - SetUserId perminfo selectedCols recompute:
+        - PG changed pkrte and fkrte to pk_perminfo and fk_perminfo.
+        - YB used YBGetFirstLowInvalidAttributeNumber(pk_rel/fk_rel).
+        - Kept PG's `pk_perminfo->selectedCols` / `fk_perminfo->selectedCols` writes; used YBGetFirstLowInvalidAttributeNumber.
+    - ri_LoadConstraintInfo conindid + hasperiod:
+        - PG added `riinfo->hasperiod = conForm->conperiod` (before DeconstructFkConstraintRow) and `riinfo->conindid = conForm->conindid` (after, outside the confict marker).
+        - YB added `riinfo->conindid = conForm->conindid` before DeconstructFkConstraintRow.
+        - Kept PG's hasperiod + PG's conindid; discarded YB's assignment.
+    - ri_PerformCheck SPI_execute_snapshot:
+        - PG updated the comment above SPI_execute_snapshot.
+        - YB wrapped the call in PG_TRY/PG_CATCH.
+        - Kept PG's comment plus YB's PG_TRY wrapper.
+    - end-of-file function definitions:
+        - PG added the ri_FastPath* helpers
+        - YB added YbAddTriggerFKReferenceIntent and HasNonRITrigger.
+        - Kept PG's functions; kept YB's.
+
+- src/backend/utils/resowner/resowner.c:
+    - ResourceOwnerRelease: both PG and YB independently added #ifdef blocks; kept both.
+    - remaining conflicts:
+        - PG commit b8bff07daa85c837a2747b4d35cd5a27e73fb7b2 reworked the ResourceOwner design. Took PG's side; stubbed YB's three `ResourceOwner*YbPgInheritsRef*` helpers as no-ops with a YB_TODO_PG19MERGE pointing at `catcache_resowner_desc` as the re-port template.
+
+- src/include/utils/resowner_private.h:
+    - PG removed the header in commit 06a0f4d52be3a52a74725dd29c66cd486256a209; the prior refactor b8bff07daa85c837a2747b4d35cd5a27e73fb7b2 had already moved its decls into the owning subsystem headers, leaving the file empty.
+    - YB added `ResourceOwnerEnlargeYbPgInheritsRefs` / `Remember` / `Forget` decls.
+    - Kept the file as a YB-only header (just the three decls) with a YB_TODO_PG19MERGE.
+
+- src/backend/utils/time/snapmgr.c:
+    - top-of-file YB / OldSnapshot includes:
+        - PG removed an include and some globals.
+        - YB added includes.
+        - Kept YB includes.
+    - SerializedSnapshotData tail / SnapMgrShmemSize / SnapMgrInit:
+        - PG removed whenTaken and lsn fields, SnapMgrShmemSize and SnapMgrInit.
+        - YB added yb_read_point_handle and some YB helpers.
+        - Kept only `YbOptionalReadPointHandle yb_read_point_handle` on SerializedSnapshotData; kept all the YB helpers.
+    - PushActiveSnapshotWithLevel:
+        - PG removed OldestActiveSnapshot null check.
+        - YB added YbLogActiveSnapshot and YBCOnActiveSnapshotChange.
+        - Kept YbLogActiveSnapshot and YBCOnActiveSnapshotChange.
+    - ImportSnapshot:
+        - PG split AllocateFile error handling into ENOENT vs other-errno cases.
+        - YB wrapped the PG body in an else block.
+        - Adopted YB's if/else; ported PG's ENOENT split into the else branch.
+    - SerializeSnapshot whenTaken/lsn/yb_read_point_handle:
+        - PG removed whenTaken and lsn.
+        - YB added yb_read_point_handle.
+        - Kept only yb_read_point_handle.
+    - ResOwnerReleaseSnapshot / YbGetCatalogSnapshotReadPoint / YbInvalidateCatalogSnapshot:
+        - PG added the ResOwnerReleaseSnapshot callback.
+        - YB added YbGetCatalogSnapshotReadPoint and YbInvalidateCatalogSnapshot helpers.
+        - Kept both.
+
+- src/bin/pg_dump/pg_backup_archiver.c:
+    - InitDumpOptions:
+        - PG defaulted false.
+        - YB defaulted true.
+        - Kept YB's default (true).
+    - restore tail commit gating + YB auto-analyze re-enable:
+        - PG added `|| ropt->txn_size > 0)` to the condition.
+        - YB inserted a yb_disable_auto_analyze=off re-enable block right before (adjacent line conflict).
+        - Kept YB's auto-analyze re-enable block, then PG's combined single_txn || txn_size>0 gate.
+    - StartTransaction-on-restore prelude:
+        - PG started a transaction in --transaction-size mode.
+        - YB emitted `\set use_tablespaces`, `\set use_roles` and a yb_disable_auto_analyze=on toggle.
+        - Emitted YB's metadata toggles first, then PG's StartTransaction.
+    - _getObjectDescription:
+        - PG removed `USER MAPPING`.
+        - YB added `TABLEGROUP`.
+        - Kept PG's changes; kept YB's `TABLEGROUP`.
+    - _printTocEntry te->defn emission:
+        - PG added txn_size for semicolon-counting.
+        - YB added a binary-upgrade special-case that flips AH->outputKind to OUTPUT_OTHERDATA so each statement in the defn is sent as a separate request.
+        - Combined: YB's outputKind special-case if/else first, then PG's semicolon-counting txn_size logic.
+    - _printTocEntry owner-emission desc-list test:
+        - PG simplified the test to a single `BLOB METADATA` branch.
+        - YB added TABLEGROUP.
+        - Kept PG's BLOB METADATA + generic _getObjectDescription else; left a YB_TODO_PG19MERGE.
+    - WriteToc owner-emission body:
+        - PG commit a45c78e3284b269085e9a0cbd0ea3b236b7180fa added the BLOB METADATA if branch; PG commit 3655b46aa0b8156aced0b9ee3d10875632f84407 simplified the generic else branch via _getObjectDescription.
+        - YB added some `include_yb_metadata` / `\if :use_roles` logic.
+        - Kept PG's changes. Same YB_TODO_PG19MERGE as above.
+
+- src/include/catalog/pg_proc.dat:
+    - pg_stat_get_activity columns:
+        - PG added a `gss_delegation` column.
+        - YB added a `yb_backend_xid` column at the end and an adjacent entry for yb_pg_stat_get_queries.
+        - Kept both pg_stat_get_activity columns and yb_pg_stat_get_queries.
+    - jsonb_path_*_tz functions:
+        - PG has 5 timezone-aware jsonpath functions at oids 1177, 1179, 1180, 2023, 2030.
+        - YB commit e591a963176fd0901707b9b175c1824e9c750147 moved these into the YB OID range (8005-8009) at the end of the file. The signatures/fields are identical to the PG entries; this was a pure OID renumber. The move appears unnecessary (these are not YB functions, and oids 1177/1179/1180/2023/2030 don't collide with any YB-added entry).
+        - Kept PG's original location and OIDs. Deleted YB's duplicate copies at oids 8005-8009.
+    - pg_get_replication_slots columns:
+        - PG added two_phase_at, inactive_since, conflicting, invalidation_reason, failover, synced, slotsync_skip_reason.
+        - YB added yb_stream_id, yb_restart_commit_ht, yb_lsn_type, yb_restart_time.
+        - Combined.
+    - pg_create_logical_replication_slot signature:
+        - PG added a `failover` arg.
+        - YB added `yb_lsn_type name, yb_ordering_mode name` args.
+        - Combined.
+    - binary_upgrade_* additions:
+        - PG added 6312/6319/6320/9159 (logical-slot/sub-rel/replorigin/conflict-detection helpers).
+        - YB added 8095/8100 (yb_binary_upgrade_set_next_pg_enum_sortorder / set_next_colocation_id).
+        - Kept all six.
+    - Statistics import functions:
+        - PG has these at oids 6362 / 6397 / 6363 / 6398.
+        - YB commit 715eb578ed84cfbb7c927055563daca8e3216e21 backported them from PG and assigned YB-range oids 8091-8094. No YB specific fields were added.
+        - Kept PG's entries.
+    - end-of-file block:
+        - PG added new entries.
+        - YB added others.
+        - Kept both sets of entries.
+    - Added YB_TODO_PG19MERGE for duplicate '8060' OID.
+
+
+- src/include/utils/elog.h:
+    - top-of-file include:
+        - PG added an include and a `struct Node;` forward decl.
+        - YB added an include.
+        - Kept both (YB include after PG include).
+    - ereport_domain macro (pg_integer_constant_p path):
+        - PG commit 59c2f03d1ece7b9b215751a508b3a84728419246 replaced the bare `__builtin_constant_p` callsite with a portable wrapper, renaming the macro `HAVE__BUILTIN_CONSTANT_P` to `HAVE_PG_BUILTIN_INTEGER_CONSTANT_P`. PG commit 8e2acda2b098bf53120721e16a7b1055c4e5b3a6 then renamed the wrapper and macro to `pg_integer_constant_p` / `HAVE_PG_INTEGER_CONSTANT_P`. PG commit 320f92b744b44f961e5d56f5f21de003e8027a7f replaced `PG_FUNCNAME_MACRO` with `__func__`.
+        - YB wrapped errstart/errfinish in an `if (IsMultiThreadedMode())` block with yb_errstart / yb_errfinish / yb_errstart_cold and a `YB_TODO` note.
+        - Kept YB's IsMultiThreadedMode branch structure with PG's renamed identifiers in both branches. Preserved the YB note (renamed to YB_TODO_PG19MERGE).
+    - ereport_domain fallback (no constant_p):
+        - Same as above.
+    - PG_TRY / PG_CATCH / PG_FINALLY / PG_END_TRY:
+        - PG commit 112f0225dbfe8af217294bfa0bd227f3302a1658 added the variadic suffix `##__VA_ARGS__` so PG_TRY can be nested.
+        - YB replaced direct PG_exception_stack reads/writes with yb_get_exception_stack/yb_set_exception_stack, and added yb_reset_error_status() in PG_END_TRY.
+        - Kept PG's `##__VA_ARGS__` suffix; used YB's yb_get_/yb_set_exception_stack helpers (and yb_reset_error_status() in PG_END_TRY).
+
+- src/include/nodes/pathnodes.h:
+    - PlannerGlobal:
+        - PG added several new fields and added pg_node_attr to partition_directory
+        - YB added other fields (all yb prefixed)
+        - Kept PG's fields; appended YB's fields.
+    - PlannerInfo:
+        - PG added new fields and removed partColsUpdated.
+        - YB added other fields (all yb prefixed).
+        - Kept PG's changes; appended YB's yb_-prefixed fields. Added a YB_TODO_PG19MERGE to evaluate whether the YB fields need `pg_node_attr`.
+    - RelOptInfo:
+        - PG made formatting changes and added `pg_node_attr` to some fields.
+        - YB added other yb prefixed fields.
+        - Kept PG's changes; appended YB's yb_* fields. Added a YB_TODO_PG19MERGE similar to above.
+    - IndexOptInfo amcostestimate signature + YB:
+        - PG changed amcostestimate declaration.
+        - YB added 6 yb fields.
+        - Kept PG's full signature; appended YB's 6 yb fields.
+    - ParamPathInfo ppi_serials / yb_ppi_req_outer_batched:
+        - PG added `Bitmapset *ppi_serials`.
+        - YB added `Relids yb_ppi_req_outer_batched`.
+        - Kept both.
+    - Path struct comment + tail (2 conflicts):
+        - PG added to the comment above the struct and reformatted the `pathkeys` comment.
+        - YB also added to the comment and added additional yb fields.
+        - Kept both comments + YB's fields.
+    - RestrictInfo hasheq + YB:
+        - PG added `pg_node_attr(equal_ignore)` to left/right_hasheqoperator.
+        - YB added `bool yb_pushable` and `List *yb_batched_rinfo`.
+        - Kept both.
+
+- src/include/nodes/plannodes.h:
+    - all 8 conflicts:
+        - PG reformatted comments to live on their own lines above each field (and added some new fields).
+        - YB used the old inline-comment format and appended its own fields.
+        - Took PG's changes; appended YB's fields (with the new comment format).
+
+- src/backend/utils/adt/timestamp.c:
+    - top-of-file YB include block:
+        - PG removed `__FAST_MATH__` guard and `SAMESIGN` macro.
+        - YB added includes.
+        - Kept YB's includes.
+    - pg_fallthrough vs yb_switch_fallthrough (7 conflicts):
+        - PG used `pg_fallthrough;`.
+        - YB used `yb_switch_fallthrough();` with `/* FALL THRU */` comments.
+        - Kept `pg_fallthrough`.
+    - generate_series_timestamptz:
+        - PG added `generate_series_timestamptz` wrapper.
+        - YB added `yb_timestamptz_to_micros_time_t` helper.
+        - Kept both.
+
+- src/bin/pg_upgrade/pg_upgrade.c:
+    - includes:
+        - PG added a macro and some forward decls.
+        - YB added an include.
+        - Kept both.
+    - setup() forward decl:
+        - PG added create_logical_replication_slots and create_conflict_detection_slot forward decls, and removed the live_check parameter.
+        - YB added yb_execute_extension_updates.
+        - Kept PG's changes; added YB's yb_execute_extension_updates.
+    - main() data-dir / GetDataDirectoryCreatePerm:
+        - PG changed pg_fatal's format to use %m specifier.
+        - YB wrapped PG logic in `if (!(is_yugabyte_enabled() && user_opts.check))` with an else branch for the YB online-upgrade flow.
+        - Kept YB's wrapping; applied PG's %m format change in both branches.
+    - main() check_cluster_versions / get_sock_dir
+        - PG dropped the `live_check` arg from get_sock_dir and from check_cluster_compatibility.
+        - YB wrapped check_cluster_versions/get_sock_dir in `if (is_yugabyte_enabled()) yb_check_cluster_versions(); else { ... }` and gated check_cluster_compatibility with `!is_yugabyte_enabled()`.
+        - Kept YB's wrapping; applied PG's signature changes.
+    - main() destructive-changes block (copy_xact_xlog_xid / set_new_cluster_char_signedness / start_postmaster):
+        - PG added set_new_cluster_char_signedness and removed the `/* New now using xids of the old system */` comment.
+        - YB wrapped the entire block in `if (!is_yugabyte_enabled())` .
+        - Split YB's guard so set_new_cluster_char_signedness runs unconditionally between two `!is_yugabyte_enabled()` guards (one wrapping copy_xact_xlog_xid, the other wrapping start_postmaster); dropped PG-removed comment.
+    - main() post-restore finalization block (2 conflicts):
+        - PG made changes to this block (added another transfer mode TRANSFER_MODE_SWAP, migrates logical replication slots, etc.)
+        - YB moved all of the PG logic under a `if (!is_yugabyte_enabled())`.
+        - Gated PG's body in `if (!is_yugabyte_enabled())`.
+    - pg_restore --transaction-size + --dbname:
+        - PG added `--transaction-size=%d` above `--dbname postgres`.
+        - YB changed to `--dbname yugabyte`.
+        - Kept PG's --transaction-size and YB's `--dbname yugabyte`.
+    - end-of-file functions:
+        - PG helpers.
+        - YB added yb_execute_extension_updates.
+        - Kept both.
+
+- src/bin/pgbench/pgbench.c:
+    - includes + globals (2 conflicts):
+        - PG added a comment and a global.
+        - YB added some declarations and YB globals.
+        - Kept both.
+    - command-status / transaction-status fallthroughs (2 conflicts):
+        - PG used `pg_fallthrough;`.
+        - YB used `yb_switch_fallthrough();`.
+        - Replaced all such sites with `pg_fallthrough;`.
+    - initPopulateTable:
+        - PG rewrote the COPY-statement construction.
+        - YB renamed the target tables from `pgbench_*` to `ysql_bench_*`.
+        - Took PG's changes.
+    - error message "no pgbench_accounts/ysql_bench_accounts table found":
+        - PG changed to backslash-quoted `\"search_path\"`.
+        - YB changed to `ysql_bench_accounts`.
+        - Combined: YB's `ysql_bench_accounts` with PG's `\"search_path\"` quoting.
+    - QUERY_PREPARED postprocess fallthrough:
+        - Same as above.
+    - main long_options / switch (2 conflicts):
+        - PG added exit-on-abort/debug/continue-on-error at slots 16/17/18.
+        - YB added yb-metrics-bind-address/port and yb-connection-init-sql at slots 16/17/18.
+        - Kept PG's three options at slots 16/17/18 and shifting YB's three to slots 19/20/21; updated the matching `case 19/20/21:` arms in pgbench's getopt_long switch.
+
+
+- src/backend/utils/cache/catcache.c:
+    - CatalogCacheComputeHashValue / CatalogCacheComputeTupleHashValue fallthroughs (4 conflicts): fallthrough pattern
+    - CatCachePrintStats (3 conflicts):
+        - PG changed types from `long` to `uint64` and used PRIu64 format strings.
+        - YB added a `long yb_cc_size_bytes`, changed log level to `yb_log_level`, added yb_cc_size_bytes / yb_cc_size to the debug output.
+        - Kept PG's uint64 counters / PRIu64 formats and YB's yb_log_level + yb_cc_size accounting.
+    - SearchCatCache yb_cc_is_fully_loaded gate:
+        - PG moved the `memcpy(cur_skey, ...)` and the preceding comment block out of the do-while retry loop, updated the preceding comment, changed `IndexScanOK(cache, cur_skey)` to `IndexScanOK(cache)`, etc.
+        - YB wrapped the entire block in an `if` block, adding YB miss counters and a yb_debug_log_catcache_events block inside the gate before the existing scan; YB made no changes to the loop internals.
+        - Kept YB's gate + miss counters + debug log; PG's updates all apply inside the gate.
+    - CatalogCacheCreateEntry:
+        - PG switched to using MemoryContextAlloc.
+        - YB switched to `oldcxt = MemoryContextSwitchTo(CacheMemoryContext)` plus palloc and bumped yb_cc_size_bytes under #ifdef CATCACHE_STATS.
+        - Kept PG's changes; appended YB's.
+    - RelationHasCachedLists vs ResourceOwner callbacks:
+        - PG added `/* ResourceOwner callbacks */` comment.
+        - YB commit e89d75bc16af0e819a56edd75126ba0ccc42174d added the `RelationHasCachedLists` helper.
+        - Kept both.
+
+- src/backend/utils/cache/relcache.c:
+    - RelationRebuildRelation nailed-rel branch:
+        - PG commit 2b9b8ebbf8a2f621d1cecc4db759700f9ce6ce66 split RelationClearRelation into a smaller RelationClearRelation, RelationRebuildRelation and RelationInvalidateRelation.
+        - YB added a yb_debug_log_catcache_events "Delete relcache entry..." log inside the PG `if (!rebuild) { delete }` block.
+        - Followed PG's split (RelationReloadNailed in the nailed-rel branch of RelationRebuildRelation); ported YB's delete log into the new RelationClearRelation.
+    - RelationRebuildRelation rebuild logging:
+        - PG added `Assert(relation->rd_rel->relkind == newrel->rd_rel->relkind);` (in the new RelationRebuildRelation from the split via PG commit 2b9b8ebbf8a2f621d1cecc4db759700f9ce6ce66).
+        - YB added a yb_debug_log_catcache_events Rebuild log line.
+        - Kept both.
+    - YbRelationCacheInvalidate / RelationCloseSmgrByOid:
+        - PG commit 21d9c3ee4ef74e2229341d39811c97f85071c90a removed RelationCloseSmgrByOid.
+        - YB added YbRelationCacheInvalidate.
+        - Kept YB's YbRelationCacheInvalidate.
+    - RelationBuildLocalRelation:
+        - PG renamed `InvalidOid` to `InvalidRelFileNumber` and `relfilenode` to `relfilenumber` in RelationMapUpdateMap call.
+        - YB wrapped the map-update in `if (!IsYBRelation(rel))`.
+        - Kept PG's renamed names and YB's IsYBRelation guard.
+    - RelationSetNewRelfilenumber signature:
+        - PG renamed RelationSetNewRelfilenode to RelationSetNewRelfilenumber.
+        - YB added `bool yb_copy_split_options, YbOptSplit *preserved_index_split_options` args.
+        - Kept PG's name + YB's two extra args.
+    - RelationSetNewRelfilenumber drop-old / create-new blocks:
+        - PG renamed rd_node to rd_locator, newrnode to newrlocator, table_relation_set_new_filenode to table_relation_set_new_filelocator, etc.
+        - YB wrapped PG code into the `else` block of `if (IsYBRelation(relation)) { /* DocDB drop+create */ } else { ... }` and inverted the order in the else (create-new before drop-old) -- order flip introduced by YB merge commit 5627af5d6009b6d5b14bbbb552f6fd2a9ae43c3a.
+        - Followed PG inside YB's else: drop-old block first, create-new second, all with PG's new names.
+    - ForeignKeyCacheInfo conenforced / ybconindid:
+        - PG added `info->conenforced = constraint->conenforced;`.
+        - YB added `info->ybconindid = constraint->conindid;`.
+        - Kept both writes.
+    - rd_replidindex pkdeferrable + YB CHANGE replica identity:
+        - PG added `relation->rd_ispkdeferrable = pkdeferrable;` and a `&& !pkdeferrable` clause.
+        - YB widened the predicate to also accept YB_REPLICA_IDENTITY_CHANGE.
+        - Kept PG's pkdeferrable handling and widening to also accept YB_REPLICA_IDENTITY_CHANGE.
+    - RelationGetIndexAttrBitmap attr_offset / *attrs (3 conflicts):
+        - PG commit 19d8e2308bc51ec4ab993ce90077342c915dd116 split the single `indexattrs` bitmap into `hotblockingattrs` / `summarizedattrs`, selected per index via a `Bitmapset **attrs` pointer; uses `attrnum - FirstLowInvalidHeapAttributeNumber` offset.
+        - YB added `attrnum - attr_offset` (where `attr_offset = YBGetFirstLowInvalidAttributeNumber(relation)`) and switched `pull_varattnos` -> `pull_varattnos_min_attr(..., attr_offset + 1)`.
+        - Combined: PG's `*attrs` indirection + YB's attr_offset (`*attrs = bms_add_member(*attrs, attrnum - attr_offset)`), and `pull_varattnos_min_attr(..., attrs, attr_offset + 1)`.
+
+- src/bin/initdb/initdb.c:
+    - functions below includes and macros:
+        - PG added save_global_locale_t typedef and save/restore_global_locale helpers.
+        - YB added IsEnvSet / IsYugaByteGlobalClusterInitdb / IsYugaByteLocalNodeInitdb / YBIsMajorUpgradeInitDb / yb_pclose_check helpers.
+        - Kept both.
+    - test_config_settings:
+        - PG added AV_SLOTS_FOR_CONNS.
+        - YB added a comment about trying 300 connections first.
+        - Kept PG's AV_SLOTS_FOR_CONNS macro and then YB's trial_conns comment.
+    - pg_hba.conf creation block (3 conflicts):
+        - PG changed pg_hba creation: removed the HAVE_UNIX_SOCKETS / HAVE_IPV6 ifdefs, switched from `::1` to `::1/128`, dropped the trailing `free(conflines)`.
+        - YB wrapped the entire pg_hba creation block in `if (!IsYugaByteGlobalClusterInitdb() && !IsYugaByteLocalNodeInitdb())` (skip when running under YB).
+        - Kept YB's gate with all of PG's changes inside it.
+    - bki_lines DATLOCALE / ICU_RULES / FLOAT8PASSBYVAL:
+        - PG added DATLOCALE + ICU_RULES replacements and removed FLOAT8PASSBYVAL + ICU_LOCALE replacements.
+        - YB wrapped the bki_lines substitution block in `if (!IsYugaByteLocalNodeInitdb())`.
+        - Kept YB's gate with PG's changes inside.
+    - setup_depend pg_stop_making_pinned_objects / VACUUM:
+        - PG commit 1bd47d0dca9f63dc26abc00d4912857440cd101c collapsed the `pg_depend_setup[]` array + foreach loop into a single inline `PG_CMD_PUTS("SELECT pg_stop_making_pinned_objects();...")`.
+        - YB added a `strncmp(*line, "VACUUM", 6) == 0 continue` skip inside the loop. The array only ever contained pg_stop_making_pinned_objects (no VACUUM), so YB's skip was dead code.
+        - Adopted PG's compact form; YB's dead VACUUM-skip drops with the loop.
+    - setup_collation pg_import_system_collations:
+        - PG changed the comment.
+        - YB wrapped the call in `if (!IsYugaByteGlobalClusterInitdb() || YBIsCollationEnabled())`.
+        - Kept PG's trimmed comment inside YB's gate.
+    - template0 setup block (2 conflicts: CREATE DATABASE + VACUUM):
+        - PG commit 1bd47d0dca9f63dc26abc00d4912857440cd101c collapsed the `template0_setup[]` array + foreach loop into inline `PG_CMD_PUTS` calls for CREATE DATABASE, UPDATE template0 collversion NULL, UPDATE template1 collversion, REVOKE x2, COMMENT, and VACUUM pg_database.
+        - YB added a YB-mode dispatch over the `template0_setup[]` array: under `IsYugaByteGlobalClusterInitdb()`, emit only [0] (CREATE, replaced by an env-OID PG_CMD_PRINTF when YBIsMajorUpgradeInitDb), [2] (UPDATE template1 collversion), [3] (REVOKE template1), [4] (REVOKE template0); skip [1] (UPDATE template0 collversion NULL), [5] (COMMENT), [6] (VACUUM).
+        - Followed PG's inline form. Kept YB's CREATE-DATABASE branch (PG_CMD_PRINTF with env OID for major upgrade, PG's PG_CMD_PUTS otherwise). Each of [1] (UPDATE template0 collversion NULL), [5] (COMMENT), [6] (VACUUM) is gated with `if (!IsYugaByteGlobalClusterInitdb())` to match YB's skip behavior.
+    - setlocales:
+        - PG updated the `set empty lc_ ...` comment
+        - YB added a block that prepopulates `locale` and `lc_collate = C`.
+        - Kept YB's locale defaulting block before PG's updated comment.
+
+- src/backend/postmaster/postmaster.c:
+    - declarations:
+        - PG removed the `PgArchStartupAllowed` macro 
+        - YB added a `CleanupKilledProcess` declaration.
+        - Kept YB's declaration; dropped the `PgArchStartupAllowed` macro (no callers in the merged tree).
+    - getopt -C/-D (2 conflicts):
+        - PG renamed `optarg` accessor to `optctx.optarg`.
+        - YB wrapped the optarg with `yb_postmaster_strdup`.
+        - Combined: `yb_postmaster_strdup(optctx.optarg)`.
+    - wal_level / max_wal_senders error:
+        - PG changed the error message to use a quoted identifier.
+        - YB added a `!YBIsEnabledInPostgresEnvVar()` guard on the max_wal_senders branch (adjacent line conflict).
+        - Kept both: PG's quoted-identifier message + YB's guard.
+    - ServerLoop pre-loop init:
+        - PG commit 7389aad63666a2cac18cd6d7496378d7f50ef37b removed `nSockets = initMasks(&readmask)`.
+        - YB added APPLE/linux env-var setup.
+        - Kept YB's env-var setup.
+    - ServerLoop event handling:
+        - PG commit 7389aad63666a2cac18cd6d7496378d7f50ef37b restructured the loop.
+        - YB added #ifdef __APPLE__ block.
+        - Kept PG's changes with a YB_TODO_PG19MERGE.
+    - missing-process restarts:
+        - PG collapsed per-process restart logic into `LaunchMissingBackgroundProcesses()`.
+        - YB added a guard around the autovac launcher start.
+        - Took PG's changes with a YB_TODO_PG19MERGE.
+    - shutdown condition:
+        - PG removed the `SendStop` reference.
+        - YB added `(YBIsEnabledInPostgresEnvVar() && Shutdown >= FastShutdown)`.
+        - Kept YB's clause; dropped the PG-removed SendStop reference.
+    - initMasks / ProcessStartupPacket mega-block:
+        - PG commit 05c3980e7f473ac2061dad9bbb7a9f0ede0279d9 and others removed/moved these functions to backend_startup.c.
+        - YB made changes to several functions.
+        - Added a YB_TODO_PG19MERGE. Moved `YbProcessStartupPacket` (a wrapper around the `ProcessStartupPacket`) to backend_startup.c.
+    - SIGHUP block:
+        - PG replaced the per-child signal_child with `SignalChildren(SIGHUP, btmask_all_except(B_DEAD_END_BACKEND))`.
+        - YB added conn_mgr SIGHUP LCV logic.
+        - Kept YB conn_mgr block + PG's `SignalChildren(...)` in place of the per-child loop.
+    - process_pm_child_exit start of the loop:
+        - PG commit a78af0427015449269fb7d9d8c6057cfcb740149 changed the logic to use PMChild slots. PG commit 7389aad63666a2cac18cd6d7496378d7f50ef37b also renamed reaper to process_pm_child_exit.
+        - YB added a PGPROC scan with crash-containment checks (ybLWLockAcquired, ybSpinLocksAcquired, ybInitializationCompleted, ybTerminationStarted, ybEnteredCriticalSection).
+        - Kept PG's changes with a YB_TODO_PG19MERGE.
+    - process_pm_child_exit StartWorkerNeeded:
+        - PG collapsed per-process restart logic into `LaunchMissingBackgroundProcesses()` and replaced it with `StartWorkerNeeded = true;` (commit 3354f85284dc5439c25b57e002e62a88490aca1e)
+        - YB added a guard around the autovac launcher start.
+        - Took PG's changes with a YB_TODO_PG19MERGE.
+    - process_pm_child_exit CleanupBackend:
+        - PG commit a78af0427015449269fb7d9d8c6057cfcb740149 changed the logic to use PMChild slots.
+        - YB added a `foundProcStruct` check and `yb_pgstat_clear_entry_pid` call.
+        - Took PG's changes; added YB_TODO_PG19MERGE.
+    - CleanupBackgroundWorker / CleanupKilledProcess block:
+        - PG commit 28a520c0b77325a97bafd0f57cc7bd0dd523b71e collapsed `CleanupBackend` + `CleanupBackgroundWorker` into a single `CleanupBackend(PMChild *bp)`.
+        - YB made no changes to CleanupBackgroundWorker; YB added a new `CleanupKilledProcess` helper immediately after it.
+        - Took PG's changes; added YB_TODO_PG19MERGE for `CleanupKilledProcess` to change backend id usages.
+    - CleanupBackend process-name + LogChildExit relocation:
+        - PG commit 28a520c0b77325a97bafd0f57cc7bd0dd523b71e combined `CleanupBackend` and `CleanupBackgroundWorker`. As a result, the `LogChildExit` at the top of this function was removed; new call sites were added later in the function body; PG also added the procname block at the top of CleanupBackend.
+        - YB had wrapped the early `LogChildExit` in `if (YBIsEnabledInPostgresEnvVar())`, elevated the level for abnormal exits to `WARNING`, and added `yb_report_query_termination`.
+        - Took PG's procname construction at the top, keeping YB's `yb_report_query_termination` SIGKILL/SIGSEGV block guarded by `YBIsEnabledInPostgresEnvVar()`, and applying YB's `DEBUG2 : WARNING` elevation guarded by `YBIsEnabledInPostgresEnvVar()` at all the new call-sites in this function.
+    - HandleChildCrash restructure into HandleFatalError (3 conflicts):
+        - PG changed the body of `HandleChildCrash` across several commits: d239c1a8e5b6ac467b3479bf3840e3d297a40bef, 8edd8c77c88e75822334ccb8376d2c151d6e5615, 463a2ebd9fda4fa94833838d0a372f7fd53b5b8a and others.
+        - YB modified the old `HandleChildCrash` body.
+        - Took PG's changes with a YB_TODO_PG19MERGE.
+    - BackendStartup tail:
+        - PG removed `BackendList` / `ShmemBackendArrayAdd`.
+        - YB added `SetOomScoreAdjForPid` after the registration.
+        - Kept YB's `SetOomScoreAdjForPid`.
+    - BackendInitialize:
+        - PG commits 05c3980e7f473ac2061dad9bbb7a9f0ede0279d9 and f1baed18bc3db50c72bfb00b6247b47689158445 relocated these functions to backend_startup.c / launch_backend.c.
+        - of these, only `BackendInitialize` had YB modifications
+        - Added a YB_TODO_PG19MERGE for `BackendInitialize`.
+    - StartChildProcess:
+        - PG added `AssignPostmasterChildSlot` and replaced the `AuxProcType` argument with a `BackendType` (commit 067701f57758f9baed5bd9d868539738d77bfa92).
+        - YB added an early-return keyed on the old `AuxProcType` values.
+        - Took PG's `AssignPostmasterChildSlot`; rewrote YB's early-return against the new `BackendType` (`B_*`) values.
+    - MaxLivePostmasterChildren:
+        - PG commits a78af0427015449269fb7d9d8c6057cfcb740149 and others removed some functions; moved others to pmchild.c / bgworker.c.
+        - YB made changes to BackgroundWorkerInitializeConnection, BackgroundWorkerInitializeConnectionByOid and added a helper YbBackgroundWorkerInitializeConnectionByOid.
+        - Added a YB_TODO_PG19MERGE. Commented out the reference to YbBackgroundWorkerInitializeConnectionByOid in parallel.c.
+    - StartBackgroundWorker:
+        - PG commit aafc05de1bf5c0324cb5e690c6742118c1ac4af6 removed the fork and the switch.
+        - YB added `SetOomScoreAdjForPid(MyProcPid, rw->rw_worker.bgw_oom_score_adj)`.
+        - Took PG's changes with a YB_TODO_PG19MERGE.
+    - bgworker_should_start_now fallthroughs (2 conflicts):
+        - PG used `pg_fallthrough`.
+        - YB used `yb_switch_fallthrough()`.
+        - Took PG's `pg_fallthrough`.
+
+- contrib/pg_stat_statements/pg_stat_statements.c, contrib/pg_stat_statements/Makefile, contrib/pg_stat_statements/pg_stat_statements.control:
+    - Not resolved. Conflict markers preserved in all three files.
+    - Build-skipped temporarily by removing `pg_stat_statements` from contrib/Makefile SUBDIRS and from contrib/meson.build, so the unresolved markers don't block the cluster build.
+    - Full resolution deferred to a dedicated pass.
+
+- src/include/commands/variable.h:
+    - PG commit 0a20ff54f5e66158930d5328f89f087d4e9ab400 split `guc.c`; PG-side declarations moved from `variable.h` to `src/include/utils/guc_hooks.h` and the file was removed.
+    - YB added YB-specific GUC hook declarations.
+    - Kept `variable.h` as a slimmed YB-only header containing just the YB declarations. Retained the include in `guc.c`, `pg_yb_utils.c` and `postgres.c`.
+
+- src/backend/utils/misc/guc.c:
+    - includes:
+        - PG removed PG_KRB_SRVTAB macro.
+        - YB added includes.
+        - Kept YB includes.
+    - declarations:
+        - This conflict is due to a massive refactor. A lot of YB code is interleaved with PG code that was removed from this file. The resolution is broken into the following parts:
+        - Part 1:
+            - PG commit 0a20ff54f5e66158930d5328f89f087d4e9ab400 moved check/assign/show hook functions out of guc.c to the variable's home module (and removed their forward declarations).
+            - YB added forward declarations for YB functions and hooks.
+            - Kept YB's forward decls in this file; added YB_TODO_PG19MERGE for cleanup.
+        - Part 2:
+            - PG commit 0a20ff54f5e66158930d5328f89f087d4e9ab400 moved enum-options arrays out of this file to guc_tables.c
+            - YB added YB-specific enum-option arrays (yb_batch_detection_mechanism_options, yb_read_after_commit_visibility_options,yb_sampling_algorithm_options,
+            yb_cost_model_options,
+            yb_qpm_track_options,
+            yb_cache_replacement_algorithm_options,
+            yb_qpm_plan_format_options)
+            - Moved YB's enum-option arrays to guc_tables.c.
+        - Part 3:
+            - PG commit 0a20ff54f5e66158930d5328f89f087d4e9ab400 moved the GUC globals and the static "dummies" section into guc_tables.c.
+            - YB added `yb_log_min_backtraces` to the GUC globals and a section of YB GUCs below the "dummies" section. Specifically:
+                - yb_enable_memory_tracking
+                - yb_effective_transaction_isolation_level_string
+                - yb_xcluster_consistency_level_string
+                - yb_read_time_string
+                - yb_neg_catcache_ids_string
+                - yb_conn_mgr_modifying_defaults;
+                - yb_test_skip_binding_scan_keys
+                - yb_bypass_cond_recheck
+                - yb_pushdown_is_not_null
+                - yb_pushdown_strict_inequality
+            - Moved YB's GUCs to guc_tables.c.
+        - Part 4:
+            - PG commit 0a20ff54f5e66158930d5328f89f087d4e9ab400 moved config_type_names to guc_tables.c
+            - YB added "oid" to config_type_names
+            - Added "oid" to config_type_names in guc_tables.c.
+        - The remaining code in the conflict is PG code that was untouched by YB and moved by PG's refactor.
+    - Contents of GUC tables:
+        - This conflict is due to a massive refactor. PG commit 0a20ff54f5e66158930d5328f89f087d4e9ab400 moved the GUC definitions out of guc.c into guc_tables.c, and 63599896545c7869f7dd28cd593e8b548983d613 then moved them into guc_parameters.dat (Perl hash format processed by gen_guc_tables.pl into guc_tables.inc.c). Two kinds of YB content interleaved with the moved PG content: YB-modified PG GUC entries, and YB-added GUC entries (plus all surrounding YB comments).
+        - Resolution shape: YB-added per-type GUC entries are kept as trimmed `static struct config_X ConfigureNames<Type>[]` arrays in `guc.c` (registered alongside PG's generated `ConfigureNames[]` inside `build_guc_variables`); YB modifications to existing PG GUCs are applied directly to the corresponding `guc_parameters.dat` entries with a `# YB` comment.
+        - Part 1: ConfigureNamesBool
+            - YB-modified PG bool GUCs (4):
+                - enable_partitionwise_aggregate (boot_val false -> true)
+                - jit (no-op; PG19 already defaults to false)
+                - transaction_deferrable (add assign_hook assign_transaction_deferrable)
+                - transaction_read_only (add assign_hook assign_transaction_read_only)
+            - YB-added bool GUCs: 140 (kept inline in guc.c's `ConfigureNamesBool[]`).
+        - Part 2: ConfigureNamesInt
+            - YB-modified PG int GUCs (4):
+                - lock_timeout (add assign_hook YBCSetLockTimeout)
+                - max_connections (add show_hook yb_show_maxconnections)
+                - max_replication_slots (add assign_hook yb_assign_max_replication_slots)
+                - temp_file_limit (boot_val -1 -> 1024 * 1024)
+            - YB-added int GUCs: 48 (kept inline in guc.c's `ConfigureNamesInt[]`).
+        - Part 3: ConfigureNamesOid
+            - YB-added GUC type with no PG analog; `guc_parameters.dat` only models bool/int/real/string/enum. Kept the manual `static struct yb_config_oid ConfigureNamesOid[]` in `guc.c` with a YB_TODO_PG19MERGE.
+        - Part 4: ConfigureNamesReal
+            - YB-modified PG real GUCs (2):
+                - parallel_setup_cost (boot_val DEFAULT_PARALLEL_SETUP_COST -> YB_DEFAULT_PARALLEL_SETUP_COST)
+                - parallel_tuple_cost (boot_val DEFAULT_PARALLEL_TUPLE_COST -> YB_DEFAULT_PARALLEL_TUPLE_COST)
+            - YB-added real GUCs: 7 (kept inline in guc.c's `ConfigureNamesReal[]`).
+        - Part 5: ConfigureNamesString
+            - YB-modified PG string GUCs (0): none.
+            - YB-added string GUCs: 9 (kept inline in guc.c's `ConfigureNamesString[]`).
+        - Part 6: ConfigureNamesEnum
+            - YB-modified PG enum GUCs (4):
+                - default_toast_compression (boot_val DEFAULT_TOAST_COMPRESSION -> TOAST_LZ4_COMPRESSION)
+                - default_transaction_isolation (add check_hook check_yb_default_xact_isolation)
+                - transaction_isolation (add assign_hook yb_assign_XactIsoLevel)
+                - wal_level (boot_val WAL_LEVEL_REPLICA -> WAL_LEVEL_LOGICAL; PG's YB-NOTE comment about logical-replication client compatibility preserved as a `# YB:` comment in .dat)
+            - YB-added enum GUCs: 8 (kept inline in guc.c's `ConfigureNamesEnum[]`).
+    - map_old_guc_names:
+        - Both sides added entries; kept both.
+    - guc_strdup:
+        - PG commit 407b50f2d421bca5b134a0033176ea8f8c68dc6b changed to guc_malloc
+        - YB added __lsan_ignore_object(data)
+        - Kept PG's changes; added YB's __lsan_ignore_object.
+    - string_field_used:
+        - PG changed the for loop
+        - YB added a `ysql_conn_mgr_saved_default` check above the for loop (adjacent line conflict)
+        - Kept PG's for loop with YB's block.
+    - extra_field_used:
+        - PG simplified to a single `gconf->reset_extra` read (removed the switch) and changed the for loop.
+        - YB added PGC_OID case to the switch, plus a `ysql_conn_mgr_saved_default` check 
+        - Took PG; ported YB's `ysql_conn_mgr_saved_default` check; ported the PGC_OID branch as a single `gconf->vartype == PGC_OID` guarded check against `((struct yb_config_oid *) gconf)->reset_extra`.
+    - build_guc_variables:
+        - PG commit 0a20ff54f5e66158930d5328f89f087d4e9ab400 reworked from per-type ConfigureNamesBool/Int/Real/String/Enum arrays + sorted `guc_variables` array to a single unified `ConfigureNames[]` + hash table (`guc_hashtab`).
+        - YB added a ConfigureNamesOid loop to the set of per-type loops.
+        - Took PG's changes; preserved PG's old per-type vartype-setting loops in the count phase; added parallel registration loops (using a `YB_REGISTER_GUC_ARRAY` macro) into `guc_hashtab` for ConfigureNamesBool/Int/Oid/Real/String/Enum so YB GUCs are reachable for now, since YB GUCs haven't been ported to guc_parameters.dat.
+    - find_option / define_custom_variable:
+        - PG made changes at the top of the function
+        - YB added a `#ifdef ADDRESS_SANITIZER` block creating a placeholder `struct config_generic` with `name` set.
+        - Ported the YB ASAN placeholder block at both sites: the conditional `key` / `nameAddr` `const char **` is passed to PG's `hash_search(guc_hashtab, ...)` instead of `&name` directly.
+    - ResetAllOptions / AtEOXact_GUC / ReportChangedGUCOptions:
+        - PG (f13b2088fa2d4455936e65459b77698a4452f932) changed GUC reporting.
+        - YB commits eda482d8bb7464cca3f6d74102a7697407db7e27 and others added connection manager logic.
+        - Took PG's changes with a YB_TODO_PG19MERGE.
+    - ReportGUCOption comment:
+        - PG trimmed the comment.
+        - YB added to the comment.
+        - Took PG's new comment with YB's addition.
+    - ReportGUCOption pq_beginmessage: 
+        - PG changed 'S' to PqMsg_ParameterStatus in pq_beginmessage.
+        - YB commit eda482d8bb7464cca3f6d74102a7697407db7e27 and others added a connection manager if/else block.
+        - Kept YB's block with PG's changes in the else branch.
+    - ReportGUCOption tail:
+        - PG removed `record->status &= ~GUC_NEEDS_REPORT`
+        - YB added updates to `record->status` guarded by `YbIsClientYsqlConnMgr` 
+        - Took PG's changes; added YB_TODO_PG19MERGE.
+    - set_config_with_handle pg_fallthrough rename (trivial):
+        - PG modernized `/* FALLTHROUGH */` + YB's `yb_switch_fallthrough()` macro into PG's new `pg_fallthrough` macro.
+        - Took PG's `pg_fallthrough`.
+    - set_config_with_handle changeVal block (5 sites):
+        - PG commit f13b2088fa2d4455936e65459b77698a4452f932 changed conf->gen.source/scontext/srole to record.*.
+        - YB added `if (gucReset) conf->gen.status |= YB_GUC_VALUE_RESET;` after the source/scontext assignments.
+        - Took PG's record.* form and set_guc_source(), porting YB's gucReset block to use record->status. Also update the PGC_OID changeVal block that was auto-merged without conflict.
+    - set_config_with_handle session_authorization:
+        - PG changed `set_config_option_ext` to `set_config_with_handle` and `conf->gen.name` to `record->name`.
+        - YB added a block to set `yb_ysql_conn_mgr_sticky_guc`.
+        - Took PG's rename; kept YB's sticky block with `record->flags` instead of `conf->gen.flags`.
+    - set_config_with_handle final report-gate:
+        - PG (f13b2088fa2d4455936e65459b77698a4452f932) changed GUC reporting.
+        - YB added connection manager logic.
+        - Took PG's changes; added YB_TODO_PG19MERGE.
+    - ExecSetVariableStmt:
+        - PG commit 0a20ff54f5e66158930d5328f89f087d4e9ab400 moved `ExecSetVariableStmt` (and other functions) to `guc_funcs.c`, leaving an empty stub on this side of the conflict.
+        - YB made modifications to `ExecSetVariableStmt`.
+        - Kept a YB_TODO_PG19MERGE; the YB modifications need to be re-ported into `guc_funcs.c`'s `ExecSetVariableStmt`.
+    - DefineCustomStringVariable:
+        - PG commit a13833c35f9e07fe978bf6fad984d6f5f25f59cd changed `init_custom_variable` to return `struct config_generic *` and introduced `var->_string.*` member access.
+        - YB added `var->gen.flags |= GUC_YB_CUSTOM_STICKY;`.
+        - Took PG's form; adapted the YB sticky line to `var->flags |= GUC_YB_CUSTOM_STICKY`.
+    - ShowGUCOption:
+        - PG commit 0a20ff54f5e66158930d5328f89f087d4e9ab400 and others removed/moved many functions and updated the comment for `ShowGUCOption`.
+        - YB made changes to `GetConfigOptionsByNum` (removed by PG).
+        - Took PG's comment update; added YB_TODO_PG19MERGE.
+    - call_oid_check_hook:
+        - PG changed the signature for call_real_check_hook.
+        - YB added call_oid_check_hook above.
+        - Kept PG's new signature; kept YB's hook.
+    - check/assign/show hook implementations:
+        - This conflict is related to the one described under "declarations".
+        - PG commit 0a20ff54f5e66158930d5328f89f087d4e9ab400 moved check/assign/show hook functions out of guc.c. YB added YB-specific hook functions. There were no YB changes made to PG hooks.
+        - Kept YB's hooks.

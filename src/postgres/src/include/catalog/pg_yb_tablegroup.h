@@ -47,4 +47,6 @@ typedef FormData_pg_yb_tablegroup *Form_pg_yb_tablegroup;
 
 DECLARE_UNIQUE_INDEX_PKEY(pg_yb_tablegroup_oid_index, 8037, YbTablegroupOidIndexId, on pg_yb_tablegroup using btree(oid oid_ops));
 
+MAKE_SYSCACHE(YBTABLEGROUPOID, pg_yb_tablegroup_oid_index, 4);
+
 #endif							/* PG_YB_TABLEGROUP_H */
