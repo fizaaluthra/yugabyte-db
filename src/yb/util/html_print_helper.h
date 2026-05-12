@@ -66,6 +66,10 @@ class HtmlTablePrintHelper {
     // Sorting by column will first sort by sort_order, then by value.
     size_t sort_order = 0;
     size_t rowspan = 1;
+
+    TableColumnValue() = default;
+    TableColumnValue(std::string value_, size_t sort_order_ = 0, size_t rowspan_ = 1)
+        : value(std::move(value_)), sort_order(sort_order_), rowspan(rowspan_) {}
   };
 
   class TableRow {
