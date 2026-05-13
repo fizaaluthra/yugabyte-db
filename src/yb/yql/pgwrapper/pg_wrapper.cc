@@ -113,7 +113,10 @@ DECLARE_string(metric_node_name);
 TAG_FLAG(pg_transactions_enabled, advanced);
 TAG_FLAG(pg_transactions_enabled, hidden);
 
-DEFINE_UNKNOWN_bool(pg_stat_statements_enabled, true,
+// YB_TODO_PG19MERGE: default flipped to false because pg_stat_statements is
+// not currently built in the YB PG19 tree. Flip back to true once contrib install
+// is wired up.
+DEFINE_UNKNOWN_bool(pg_stat_statements_enabled, false,
             "True to enable statement stats in PostgreSQL server");
 TAG_FLAG(pg_stat_statements_enabled, advanced);
 TAG_FLAG(pg_stat_statements_enabled, hidden);
@@ -677,9 +680,17 @@ Result<string> WritePostgresConfig(const PgProcessConf& conf) {
     metricsLibs.push_back("pg_stat_statements");
   }
   metricsLibs.push_back("yb_pg_metrics");
-  metricsLibs.push_back("pgaudit");
-  metricsLibs.push_back("pg_hint_plan");
-  metricsLibs.push_back("yb_xcluster_ddl_replication");
+  /*
+   * YB_TODO_PG19MERGE: pgaudit, pg_hint_plan, and yb_xcluster_ddl_replication
+   * are not currently built in the YB PG19 tree (YB_SKIP_THIRD_PARTY_EXTENSIONS
+   * + yb_xcluster_ddl_replication is explicitly dropped from
+   * src/postgres/yb-extensions/Makefile DIRS during PG19 bringup).  Postgres
+   * refuses to start with "could not access file" if a preload library is
+   * missing.  Re-add once contrib + yb-extensions are wired up.
+   */
+  // metricsLibs.push_back("pgaudit");
+  // metricsLibs.push_back("pg_hint_plan");
+  // metricsLibs.push_back("yb_xcluster_ddl_replication");
 
   if (FLAGS_enable_pg_cron) {
     metricsLibs.push_back("pg_cron");

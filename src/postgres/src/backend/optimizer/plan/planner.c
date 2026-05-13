@@ -10743,7 +10743,7 @@ ybInitHintedUids(PlannerGlobal *glob)
 
 	List	   *nameList = NIL;
 
-	if (SplitIdentifierString(yb_hinted_uids, ',', &nameList))
+	if (yb_hinted_uids && SplitIdentifierString(yb_hinted_uids, ',', &nameList))
 	{
 		ListCell   *lc;
 

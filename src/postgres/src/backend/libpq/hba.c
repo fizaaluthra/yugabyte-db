@@ -1020,8 +1020,9 @@ yb_tokenize_line(const char *filename,
 	{
 		TokenizedAuthLine *tok_line;
 
-		tok_line = (TokenizedAuthLine *) palloc(sizeof(TokenizedAuthLine));
+		tok_line = (TokenizedAuthLine *) palloc0(sizeof(TokenizedAuthLine));
 		tok_line->fields = current_line;
+		tok_line->file_name = pstrdup(filename);
 		tok_line->line_num = line_number;
 		tok_line->raw_line = pstrdup(rawline);
 		tok_line->err_msg = err_msg;

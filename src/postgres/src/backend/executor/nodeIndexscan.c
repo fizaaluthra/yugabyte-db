@@ -1063,6 +1063,7 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 	ExecInitScanTupleSlot(estate, &indexstate->ss,
 						  RelationGetDescr(currentRelation),
 						  table_slot_callbacks(currentRelation),
+						  IsYBRelation(currentRelation) ? 0 :
 						  TTS_FLAG_OBEYS_NOT_NULL_CONSTRAINTS);
 
 	/*

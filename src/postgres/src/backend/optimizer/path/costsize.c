@@ -161,8 +161,8 @@ double		random_page_cost = DEFAULT_RANDOM_PAGE_COST;
 double		cpu_tuple_cost = DEFAULT_CPU_TUPLE_COST;
 double		cpu_index_tuple_cost = DEFAULT_CPU_INDEX_TUPLE_COST;
 double		cpu_operator_cost = DEFAULT_CPU_OPERATOR_COST;
-double		parallel_tuple_cost = DEFAULT_PARALLEL_TUPLE_COST;
-double		parallel_setup_cost = DEFAULT_PARALLEL_SETUP_COST;
+double		parallel_tuple_cost = YB_DEFAULT_PARALLEL_TUPLE_COST;
+double		parallel_setup_cost = YB_DEFAULT_PARALLEL_SETUP_COST;
 
 /* Following parameters are used by the older heuristics-based cost model */
 double		yb_network_fetch_cost = YB_DEFAULT_FETCH_COST;
@@ -215,7 +215,7 @@ bool		enable_mergejoin = true;
 bool		enable_hashjoin = true;
 bool		enable_gathermerge = true;
 bool		enable_partitionwise_join = false;
-bool		enable_partitionwise_aggregate = false;
+bool		enable_partitionwise_aggregate = true;
 bool		enable_parallel_append = true;
 bool		enable_parallel_hash = true;
 bool		enable_partition_pruning = true;

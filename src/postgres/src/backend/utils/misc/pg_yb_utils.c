@@ -2258,7 +2258,12 @@ YbWholeRowAttrRequired(Relation relation, CmdType operation)
 
 bool		yb_enable_create_with_table_oid = false;
 int			yb_index_state_flags_update_delay = 1000;
-bool		yb_enable_expression_pushdown = true;
+/*
+ * YB_TODO_PG19MERGE: forced false until YbGate's expression evaluator is brought
+ * up to date with PG19. The corresponding GUC entry is in the #if 0'd
+ * ConfigureNamesBool block so the AutoFlag doesn't override this initializer.
+ */
+bool		yb_enable_expression_pushdown = false;
 bool		yb_enable_distinct_pushdown = true;
 bool		yb_enable_index_aggregate_pushdown = true;
 bool		yb_enable_primary_key_decode_from_index = false;
@@ -6323,47 +6328,16 @@ YBComputeNonCSortKey(Oid collation_id, const char *value, int64_t bytes)
 	memcpy(buf1, value, bytes);
 	buf1[buflen1] = '\0';
 
-	/* YB_TODO_PG19MERGE: code below needs to be reworked. */
-	(void) locale;
-	(void) bsize;
-	(void) buflen2;
-#if 0
-#ifdef USE_ICU
-	int32_t		ulen = -1;
-	UChar	   *uchar = NULL;
-#endif
-
-#ifdef USE_ICU
-	/* When using ICU, convert string to UChar. */
-	if (locale && locale->provider == COLLPROVIDER_ICU)
-	{
-		is_icu_provider = true;
-		ulen = icu_to_uchar(&uchar, buf1, buflen1);
-	}
-#endif
-
 	/*
-	 * Loop: Call strxfrm() or ucol_getSortKey(), possibly enlarge buffer,
-	 * and try again. Both of these functions have the result buffer
-	 * content undefined if the result did not fit, so we need to retry
-	 * until everything fits.
+	 * Loop: Call pg_strnxfrm(), possibly enlarge buffer, and try again. The
+	 * function has the result buffer content undefined if the result did not
+	 * fit, so we need to retry until everything fits.
 	 */
 	for (;;)
 	{
-#ifdef USE_ICU
-		if (locale && locale->provider == COLLPROVIDER_ICU)
-		{
-			bsize = ucol_getSortKey(locale->info.icu.ucol,
-									uchar, ulen,
-									(uint8_t *) buf2, buflen2);
-		}
+		if (locale && locale->collate && pg_strxfrm_enabled(locale))
+			bsize = pg_strnxfrm(buf2, buflen2, buf1, buflen1, locale);
 		else
-#endif
-#ifdef HAVE_LOCALE_T
-		if (locale && locale->provider == COLLPROVIDER_LIBC)
-			bsize = strxfrm_l(buf2, buf1, buflen2, locale->info.lt);
-		else
-#endif
 			bsize = strxfrm(buf2, buf1, buflen2);
 
 		if (bsize < buflen2)
@@ -6376,12 +6350,6 @@ YBComputeNonCSortKey(Oid collation_id, const char *value, int64_t bytes)
 		buflen2 = Max(bsize + 1, Min(buflen2 * 2, MaxAllocSize));
 		buf2 = palloc(buflen2);
 	}
-
-#ifdef USE_ICU
-	if (uchar)
-		pfree(uchar);
-#endif
-#endif
 
 	pfree(buf1);
 	if (is_icu_provider)
@@ -6520,11 +6488,8 @@ YBIsCollationValidNonC(Oid collation_id)
 		   collation_id == C_COLLATION_OID);
 
 	bool		is_valid_non_c = (YBIsCollationEnabled() &&
-								  OidIsValid(collation_id));
-	/* YB_TODO_PG19MERGE: function doesn't exist*/
-#if 0
-								   && !lc_collate_is_c(collation_id));
-#endif
+								  OidIsValid(collation_id) &&
+								  !pg_newlocale_from_collation(collation_id)->collate_is_c);
 	return is_valid_non_c;
 }
 

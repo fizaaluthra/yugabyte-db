@@ -765,6 +765,7 @@ ExecInitTidScan(TidScan *node, EState *estate, int eflags)
 						  IsYBRelation(currentRelation) ?
 						  &TTSOpsVirtual :
 						  table_slot_callbacks(currentRelation),
+						  IsYBRelation(currentRelation) ? 0 :
 						  TTS_FLAG_OBEYS_NOT_NULL_CONSTRAINTS);
 
 	/*
