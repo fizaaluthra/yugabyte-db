@@ -419,7 +419,9 @@ YbctidListEval(TidScanState *tidstate)
 		qsort(ybctidList, numYbctids, sizeof(Datum), ybctid_comparator);
 		numYbctids = qunique(ybctidList, numYbctids, sizeof(Datum), ybctid_comparator);
 	}
-	HandleYBStatus(YBCPgBindYbctids(ybScan->handle, numYbctids, ybctidList));
+	/* YB_TODO_PG19MERGE: Datum (uint64_t) vs uintptr_t (unsigned long) on LP64;
+	 * see PG commit 2a600a93c7b. Cast through uintptr_t * matches yb_scan.c. */
+	HandleYBStatus(YBCPgBindYbctids(ybScan->handle, numYbctids, (uintptr_t *) ybctidList));
 	pfree(ybctidList);
 }
 
@@ -558,7 +560,7 @@ YbTidNext(TidScanState *node)
 		{
 			TupleDesc	tupdesc = CreateTemplateTupleDesc(list_length(node->yb_tss_aggrefs));
 
-			ExecInitScanTupleSlot(node->ss.ps.state, &node->ss, tupdesc, &TTSOpsVirtual);
+			ExecInitScanTupleSlot(node->ss.ps.state, &node->ss, tupdesc, &TTSOpsVirtual, 0 /* flags */);
 			slot = node->ss.ss_ScanTupleSlot;
 		}
 

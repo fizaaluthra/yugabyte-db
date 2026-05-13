@@ -40,6 +40,7 @@
 #include "access/transam.h"
 #include "commands/yb_tablegroup.h"
 #include "miscadmin.h"
+#include "pg_yb_utils.h"
 
 /*
  * Contents of pg_class.reloptions
@@ -1576,7 +1577,7 @@ ybExcludeNonPersistentReloptions(Datum options)
 	Datum		result = (Datum) 0;
 
 	/* Nothing to do if no options */
-	if (!PointerIsValid(DatumGetPointer(options)))
+	if (DatumGetPointer(options) == NULL)
 		return result;
 
 	ArrayType  *array = DatumGetArrayTypeP(options);
@@ -1942,14 +1943,14 @@ parse_one_reloption(relopt_value *option, char *text_str, int text_len,
 			{
 				yb_relopt_oid *optoid = (yb_relopt_oid *) option->gen;
 
-				parsed = parse_oid(value, &option->values.oid_val, NULL);
+				parsed = parse_oid(value, &option->oid_val, NULL);
 				if (validate && !parsed)
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("invalid value for OID option \"%s\": %s",
 									option->gen->name, value)));
-				if (validate && (option->values.oid_val < optoid->min ||
-								 option->values.oid_val > optoid->max))
+				if (validate && (option->oid_val < optoid->min ||
+								 option->oid_val > optoid->max))
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("value %s out of bounds for option \"%s\"",
@@ -2119,7 +2120,7 @@ fillRelOptions(void *rdopts, Size basesize,
 						break;
 					case RELOPT_TYPE_OID:
 						*(Oid *) itempos = options[i].isset ?
-							options[i].values.oid_val :
+							options[i].oid_val :
 							((yb_relopt_oid *) options[i].gen)->default_val;
 						break;
 					case RELOPT_TYPE_REAL:

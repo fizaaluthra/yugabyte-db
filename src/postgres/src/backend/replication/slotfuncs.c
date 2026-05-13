@@ -445,7 +445,10 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 			slot_contents.data.confirmed_flush = slot->confirmed_flush;
 			yb_restart_commit_ht = slot->record_id_commit_time_ht;
 			slot_contents.data.xmin = slot->xmin;
-			slot_contents.active_pid = slot->active_pid;
+			/* YB_TODO_PG19MERGE: active_pid -> active_proc; the YB virtual slot's
+			 * pid still comes through slot->active_pid (typed pid_t in YbcReplicationSlot). */
+			slot_contents.active_proc = (slot->active_pid != 0
+										 ? slot->active_pid : INVALID_PROC_NUMBER);
 			/*
 			 * Set catalog_xmin as xmin to make the PG Debezium connector work.
 			 * It is not used in our implementation.
@@ -454,7 +457,8 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 
 			/* Fill in the dummy/constant values. */
 			slot_contents.data.persistency = RS_PERSISTENT;
-			slot_contents.data.invalidated_at = InvalidXLogRecPtr;
+			/* YB_TODO_PG19MERGE: PG19 replaced invalidated_at (LSN) with invalidated (enum cause). */
+			slot_contents.data.invalidated = RS_INVAL_NONE;
 			slot_contents.data.two_phase_at = InvalidXLogRecPtr;
 			slot_contents.data.two_phase = false;
 		}

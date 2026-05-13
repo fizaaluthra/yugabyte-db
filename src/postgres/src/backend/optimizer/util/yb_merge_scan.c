@@ -38,6 +38,7 @@
 #include "rewrite/rewriteHandler.h"
 #include "utils/array.h"
 #include "utils/fmgroids.h"
+#include "utils/rel.h"			/* YB_TODO_PG19MERGE: RelationGetDescr/RelationGetRelationName moved out of transitive includes */
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
@@ -472,13 +473,15 @@ yb_get_sort_info_from_pathkeys(List *tlist,
 		 * Look up the correct sort operator from the PathKey's slightly
 		 * abstracted representation.
 		 */
-		sortop = get_opfamily_member(pathkey->pk_opfamily,
-									 pk_datatype,
-									 pk_datatype,
-									 pathkey->pk_strategy);
+		/* YB_TODO_PG19MERGE: PG19 renamed PathKey.pk_strategy -> pk_cmptype and
+		 * uses get_opfamily_member_for_cmptype for CompareType lookups. */
+		sortop = get_opfamily_member_for_cmptype(pathkey->pk_opfamily,
+												 pk_datatype,
+												 pk_datatype,
+												 pathkey->pk_cmptype);
 		if (!OidIsValid(sortop))	/* should not happen */
 			elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
-				 pathkey->pk_strategy, pk_datatype, pk_datatype,
+				 pathkey->pk_cmptype, pk_datatype, pk_datatype,
 				 pathkey->pk_opfamily);
 
 		/* Add the column to the sort arrays */

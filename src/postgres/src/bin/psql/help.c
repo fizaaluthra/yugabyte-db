@@ -50,6 +50,9 @@ usage(unsigned short int pager)
 	PQExpBufferData buf;
 	int			nlcount;
 	FILE	   *output;
+	/* YB_TODO_PG19MERGE: PG19 dropped a function-scope `char *env` local used
+	 * for the connection-options default printout. */
+	const char *env;
 
 	/*
 	 * To avoid counting the output lines manually, build the output in "buf"

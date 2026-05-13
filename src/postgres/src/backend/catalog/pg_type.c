@@ -42,9 +42,6 @@
 #include "catalog/yb_oid_assignment.h"
 #include "pg_yb_utils.h"
 
-static char *makeUniqueTypeName(const char *typeName, Oid typeNamespace,
-								bool tryOriginal);
-
 /* Potentially set by pg_upgrade_support functions */
 Oid			binary_upgrade_next_pg_type_oid = InvalidOid;
 

@@ -66,7 +66,7 @@ startScanEntry(GinScanEntry entry)
 	entry->list = NULL;
 	entry->nlist = 0;
 	entry->matchBitmap = NULL;
-	entry->matchResult = NULL;
+	entry->matchResult.blockno = InvalidBlockNumber;
 	entry->reduceResult = false;
 	entry->predictNumberResult = 0;
 }

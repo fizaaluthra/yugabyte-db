@@ -730,14 +730,16 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 									   index_itlist,
 									   INDEX_VAR,
 									   rtoffset,
-									   NUM_EXEC_QUAL(plan));
+								NRM_EQUAL,
+								NUM_EXEC_QUAL(plan));
 					splan->yb_idx_pushdown.colrefs = (List *)
 						fix_upper_expr(root,
 									   (Node *) splan->yb_idx_pushdown.colrefs,
 									   index_itlist,
 									   INDEX_VAR,
 									   rtoffset,
-									   NUM_EXEC_TLIST(plan));
+								NRM_EQUAL,
+								NUM_EXEC_TLIST(plan));
 					pfree(index_itlist);
 				}
 				/*
@@ -813,14 +815,16 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 									   index_itlist,
 									   INDEX_VAR,
 									   rtoffset,
-									   NUM_EXEC_QUAL(plan));
+								NRM_EQUAL,
+								NUM_EXEC_QUAL(plan));
 					splan->yb_idx_pushdown.colrefs = (List *)
 						fix_upper_expr(root,
 									   (Node *) splan->yb_idx_pushdown.colrefs,
 									   index_itlist,
 									   INDEX_VAR,
 									   rtoffset,
-									   NUM_EXEC_TLIST(plan));
+								NRM_EQUAL,
+								NUM_EXEC_TLIST(plan));
 					splan->indextlist =
 						fix_scan_list(root, splan->indextlist, rtoffset,
 									  NUM_EXEC_TLIST(plan));
@@ -1565,14 +1569,16 @@ set_indexonlyscan_references(PlannerInfo *root,
 					   index_itlist,
 					   INDEX_VAR,
 					   rtoffset,
-					   NUM_EXEC_QUAL((Plan *) plan));
+				   NRM_EQUAL,
+				   NUM_EXEC_QUAL((Plan *) plan));
 	plan->yb_pushdown.colrefs = (List *)
 		fix_upper_expr(root,
 					   (Node *) plan->yb_pushdown.colrefs,
 					   index_itlist,
 					   INDEX_VAR,
 					   rtoffset,
-					   NUM_EXEC_TLIST((Plan *) plan));
+				   NRM_EQUAL,
+				   NUM_EXEC_TLIST((Plan *) plan));
 	/* indexqual is already transformed to reference index columns */
 	plan->indexqual = fix_scan_list(root, plan->indexqual,
 									rtoffset, 1);

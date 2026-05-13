@@ -237,7 +237,6 @@ static const FormData_pg_attribute a7 = {
 	.atttypid = BYTEAOID,
 	.attlen = -1,
 	.attnum = YBTupleIdAttributeNumber,
-	.attcacheoff = -1,
 	.atttypmod = -1,
 	.attbyval = false,
 	.attalign = TYPALIGN_INT,
@@ -253,7 +252,6 @@ static const FormData_pg_attribute yb_a1 = {
 	.atttypid = BYTEAOID,
 	.attlen = -1,
 	.attnum = YBUniqueIdxKeySuffixAttributeNumber,
-	.attcacheoff = -1,
 	.atttypmod = -1,
 	.attbyval = false,
 	.attalign = TYPALIGN_INT,
@@ -267,7 +265,6 @@ static const FormData_pg_attribute yb_a2 = {
 	.atttypid = BYTEAOID,
 	.attlen = -1,
 	.attnum = YBIdxBaseTupleIdAttributeNumber,
-	.attcacheoff = -1,
 	.atttypmod = -1,
 	.attbyval = false,
 	.attalign = TYPALIGN_INT,
@@ -416,7 +413,7 @@ heap_create(const char *relname,
 		 * Note that relations defined with BKI_BOOTSTRAP option have no relfilenode
 		 * either, but YB tables shouldn't use it.
 		 */
-		relfilenode = InvalidOid;
+		relfilenumber = InvalidRelFileNumber;
 	else
 	{
 		/*
@@ -3788,7 +3785,8 @@ CopyStatistics(Oid fromrelid, Oid torelid)
 		if (indstate == NULL)
 			indstate = CatalogOpenIndexes(statrel);
 
-		CatalogTupleInsertWithInfo(statrel, tup, indstate);
+		CatalogTupleInsertWithInfo(statrel, tup, indstate,
+								   false /* yb_shared_insert */ );
 
 		heap_freetuple(tup);
 	}

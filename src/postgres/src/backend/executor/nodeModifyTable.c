@@ -99,6 +99,7 @@
 #include "executor/ybModifyTable.h"
 #include "executor/ybOptimizeModifyTable.h"
 #include "optimizer/ybplan.h"
+#include "parser/parse_relation.h"
 #include "parser/parsetree.h"
 #include "pg_yb_utils.h"
 #include "utils/typcache.h"
@@ -1854,7 +1855,7 @@ ExecForPortionOfLeftovers(ModifyTableContext *context,
 		AfterTriggerBeginQuery();
 		ExecSetupTransitionCaptureState(mtstate, estate);
 		fireBSTriggers(mtstate);
-		ExecInsert(context, resultRelInfo, leftoverSlot, false, NULL, NULL);
+		ExecInsert(context, resultRelInfo, leftoverSlot, NULL /* blockInsertStmt */, false, NULL, NULL);
 		fireASTriggers(mtstate);
 		AfterTriggerEndQuery(estate);
 	}
@@ -2941,7 +2942,8 @@ lreplace:
 		*yb_cols_marked_for_update = YbFetchColumnsMarkedForUpdate(context,
 																   resultRelInfo);
 
-		if (resultRelInfo->ri_NumGeneratedNeeded > 0)
+		/* YB_TODO_PG19MERGE: PG19 split ri_NumGeneratedNeeded into ...I/...U; both paths route through the update version here. */
+		if (resultRelInfo->ri_NumGeneratedNeededU > 0)
 		{
 			/*
 			 * Include any affected generated columns. Note that generated columns
@@ -3013,7 +3015,8 @@ lreplace:
 		if (!row_found)
 			return TM_Invisible;
 
-		updateCxt->updated = true;
+		/* YB_TODO_PG19MERGE: PG19 removed UpdateContext.updated; the "did we update"
+		 * signal is now conveyed via the TM_Result return below. Caller observes TM_Ok. */
 		return TM_Ok;
 	}
 
@@ -4889,7 +4892,8 @@ ExecInitMerge(ModifyTableState *mtstate, EState *estate)
 				part_attmap =
 					build_attrmap_by_name(RelationGetDescr(rootRelation),
 										  RelationGetDescr(firstResultRel),
-										  false);
+										  false /* missing_ok */,
+										  false /* yb_ignore_type_mismatch */);
 
 				wcoList = (List *)
 					map_variable_attnos((Node *) wcoList,
@@ -4933,7 +4937,8 @@ ExecInitMerge(ModifyTableState *mtstate, EState *estate)
 					part_attmap =
 						build_attrmap_by_name(RelationGetDescr(rootRelation),
 											  RelationGetDescr(firstResultRel),
-											  false);
+											  false /* missing_ok */,
+											  false /* yb_ignore_type_mismatch */);
 
 				returningList = (List *)
 					map_variable_attnos((Node *) returningList,
@@ -5629,7 +5634,8 @@ ExecModifyTable(PlanState *pstate)
 					}
 					slot = ExecGetUpdateNewTuple(resultRelInfo, context.planSlot,
 												 oldSlot);
-					context.relaction = NULL;
+					/* YB_TODO_PG19MERGE: PG19 dropped ModifyTableContext.relaction;
+					 * MERGE action state is plumbed through different fields now. */
 				}
 
 				/* Now apply the update. */
@@ -7066,15 +7072,18 @@ YbFetchColumnsMarkedForUpdate(ModifyTableContext *context,
 {
 	ModifyTableState *mtstate = context->mtstate;
 	EState	   *estate = context->estate;
+	/* YB_TODO_PG19MERGE: PG19 moved updatedCols from RangeTblEntry to RTEPermissionInfo,
+	 * and renamed ResultRelInfo.ri_RootToPartitionMap -> ri_RootToChildMap. */
 	RangeTblEntry *rte = rt_fetch(partitionRelInfo->ri_RangeTableIndex,
 								  estate->es_range_table);
 	ModifyTable *plan = (ModifyTable *) mtstate->ps.plan;
-	Bitmapset  *cols_marked_for_update = bms_copy(rte->updatedCols);
+	RTEPermissionInfo *perminfo = getRTEPermissionInfo(estate->es_rteperminfos, rte);
+	Bitmapset  *cols_marked_for_update = bms_copy(perminfo->updatedCols);
 	Bitmapset  *partition_cols = NULL;
 
 	if (!(plan->onConflictAction == ONCONFLICT_UPDATE &&
 		  mtstate->mt_partition_tuple_routing &&
-		  partitionRelInfo->ri_RootToPartitionMap))
+		  partitionRelInfo->ri_RootToChildMap))
 
 		return cols_marked_for_update;
 
@@ -7094,7 +7103,7 @@ YbFetchColumnsMarkedForUpdate(ModifyTableContext *context,
 	 * based on 'base' while the correct mapping for 'p1' is as follows:
 	 * {b -> 10, a -> 12}.
 	 */
-	partition_cols = execute_attr_map_cols(partitionRelInfo->ri_RootToPartitionMap->attrMap,
+	partition_cols = execute_attr_map_cols(partitionRelInfo->ri_RootToChildMap->attrMap,
 										   cols_marked_for_update,
 										   partitionRelInfo->ri_RelationDesc);
 

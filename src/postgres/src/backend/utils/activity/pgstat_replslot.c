@@ -79,7 +79,7 @@ pgstat_report_replslot(ReplicationSlot *slot, const PgStat_StatReplSlotEntry *re
 	PgStat_EntryRef *entry_ref;
 	PgStatShared_ReplSlot *shstatent;
 	PgStat_StatReplSlotEntry *statent;
-	int			idx = get_replslot_index(NameStr(slot->data.name));
+	int			idx = get_replslot_index(NameStr(slot->data.name), false);
 
 	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_REPLSLOT, InvalidOid,
 											idx, false);

@@ -87,7 +87,9 @@ typedef struct
 	Oid			dbId;			/* database ID, or 0 if a shared relation */
 	uint32		hashValue;		/* hash value of key for this catcache */
 } SharedInvalCatcacheMsg;
-#define YbSharedInvalCatcacheMsgVersion 0
+/* YB_TODO_PG19MERGE: bumped to 1 because PG19 added 10 new catcache enum
+ * values (EXTENSION{NAME,OID}, 8 PROPGRAPH*) which shifted all later IDs. */
+#define YbSharedInvalCatcacheMsgVersion 1
 
 #define SHAREDINVALCATALOG_ID	(-1)
 

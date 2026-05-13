@@ -25,6 +25,7 @@
 #include "optimizer/optimizer.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
+#include "varatt.h"				/* YB_TODO_PG19MERGE: SET_VARSIZE is now a static-inline declared in varatt.h */
 
 /* YB includes */
 #include <inttypes.h>

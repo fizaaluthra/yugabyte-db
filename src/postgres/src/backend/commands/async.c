@@ -610,7 +610,6 @@ static FormData_pg_attribute yb_notif_uuid_att = {
 	.atttypid = UUIDOID,
 	.attlen = UUID_LEN,
 	.attnum = 1,
-	.attcacheoff = -1,
 	.atttypmod = -1,
 	.attbyval = false,
 	.attalign = TYPALIGN_CHAR,
@@ -624,7 +623,6 @@ static FormData_pg_attribute yb_sender_node_uuid_att = {
 	.atttypid = UUIDOID,
 	.attlen = UUID_LEN,
 	.attnum = 2,
-	.attcacheoff = -1,
 	.atttypmod = -1,
 	.attbyval = false,
 	.attalign = TYPALIGN_CHAR,
@@ -638,7 +636,6 @@ static FormData_pg_attribute yb_sender_pid_att = {
 	.atttypid = INT4OID,
 	.attlen = 4,
 	.attnum = 3,
-	.attcacheoff = -1,
 	.atttypmod = -1,
 	.attbyval = true,
 	.attalign = TYPALIGN_INT,
@@ -652,7 +649,6 @@ static FormData_pg_attribute yb_db_oid_att = {
 	.atttypid = OIDOID,
 	.attlen = sizeof(Oid),
 	.attnum = 4,
-	.attcacheoff = -1,
 	.atttypmod = -1,
 	.attbyval = true,
 	.attalign = TYPALIGN_INT,
@@ -666,7 +662,6 @@ static FormData_pg_attribute yb_is_listen_att = {
 	.atttypid = BOOLOID,
 	.attlen = 1,
 	.attnum = 5,
-	.attcacheoff = -1,
 	.atttypmod = -1,
 	.attbyval = true,
 	.attalign = TYPALIGN_CHAR,
@@ -680,7 +675,6 @@ static FormData_pg_attribute yb_data_att = {
 	.atttypid = BYTEAOID,
 	.attlen = -1,
 	.attnum = 6,
-	.attcacheoff = -1,
 	.atttypmod = -1,
 	.attbyval = false,
 	.attalign = TYPALIGN_INT,
@@ -694,7 +688,6 @@ static FormData_pg_attribute yb_extra_options_att = {
 	.atttypid = JSONBOID,
 	.attlen = -1,
 	.attnum = 7,
-	.attcacheoff = -1,
 	.atttypmod = -1,
 	.attbyval = false,
 	.attalign = TYPALIGN_INT,
@@ -2259,12 +2252,21 @@ YbCleanupListenStateForProc(PGPROC *proc)
 {
 	Assert(MyProcPid == PostmasterPid);
 
-	Assert(proc->backendId);
+	/*
+	 * YB_TODO_PG19MERGE: PG commit 024c521117579a6d356050ad3d78fdc95e44eefa
+	 * ("Replace BackendIds with 0-based ProcNumbers") removed BackendId /
+	 * InvalidBackendId / PGPROC.backendId and replaced them with ProcNumber /
+	 * INVALID_PROC_NUMBER / PGPROC.procNumber. Note the changed sentinel: 0
+	 * was invalid for BackendId (it was 1-based), but 0 is a valid ProcNumber
+	 * and INVALID_PROC_NUMBER is -1. Loop termination also changed from
+	 * "i > 0" to "i != INVALID_PROC_NUMBER".
+	 */
+	ProcNumber	procNumber = GetNumberFromPGProc(proc);
 
-	BackendId	backendId = proc->backendId;
+	Assert(procNumber != INVALID_PROC_NUMBER);
 
 	LWLockAcquire(NotifyQueueLock, LW_SHARED);
-	bool		cleanupNeeded = QUEUE_BACKEND_PID(backendId) == proc->pid;
+	bool		cleanupNeeded = QUEUE_BACKEND_PID(procNumber) == proc->pid;
 
 	LWLockRelease(NotifyQueueLock);
 	if (!cleanupNeeded)
@@ -2275,23 +2277,23 @@ YbCleanupListenStateForProc(PGPROC *proc)
 	 */
 	LWLockAcquire(NotifyQueueLock, LW_EXCLUSIVE);
 	/* Mark our entry as invalid */
-	QUEUE_BACKEND_PID(backendId) = InvalidPid;
-	QUEUE_BACKEND_DBOID(backendId) = InvalidOid;
+	QUEUE_BACKEND_PID(procNumber) = InvalidPid;
+	QUEUE_BACKEND_DBOID(procNumber) = InvalidOid;
 	/* and remove it from the list */
-	if (QUEUE_FIRST_LISTENER == backendId)
-		QUEUE_FIRST_LISTENER = QUEUE_NEXT_LISTENER(backendId);
+	if (QUEUE_FIRST_LISTENER == procNumber)
+		QUEUE_FIRST_LISTENER = QUEUE_NEXT_LISTENER(procNumber);
 	else
 	{
-		for (BackendId i = QUEUE_FIRST_LISTENER; i > 0; i = QUEUE_NEXT_LISTENER(i))
+		for (ProcNumber i = QUEUE_FIRST_LISTENER; i != INVALID_PROC_NUMBER; i = QUEUE_NEXT_LISTENER(i))
 		{
-			if (QUEUE_NEXT_LISTENER(i) == backendId)
+			if (QUEUE_NEXT_LISTENER(i) == procNumber)
 			{
-				QUEUE_NEXT_LISTENER(i) = QUEUE_NEXT_LISTENER(backendId);
+				QUEUE_NEXT_LISTENER(i) = QUEUE_NEXT_LISTENER(procNumber);
 				break;
 			}
 		}
 	}
-	QUEUE_NEXT_LISTENER(backendId) = InvalidBackendId;
+	QUEUE_NEXT_LISTENER(procNumber) = INVALID_PROC_NUMBER;
 
 	/*
 	 * YB: YB-speicific LISTEN state cleanup.
@@ -2317,7 +2319,7 @@ static void
 ybCleanupListenState(void)
 {
 	/* Nothing to do if there are listening backends on this node.  */
-	if (QUEUE_FIRST_LISTENER != InvalidBackendId)
+	if (QUEUE_FIRST_LISTENER != INVALID_PROC_NUMBER)
 		return;
 
 	bool		amPostmaster = MyProcPid == PostmasterPid;
@@ -3777,7 +3779,7 @@ ybInsertPendingNotifiesToTable(void)
 
 		slot->tts_isnull[yb_sender_node_uuid_att.attnum - 1] = false;
 		slot->tts_values[yb_sender_node_uuid_att.attnum - 1] =
-			CStringGetDatum(YBCGetLocalTserverUuid());
+			CStringGetDatum((const char *) YBCGetLocalTserverUuid());
 
 		slot->tts_isnull[yb_sender_pid_att.attnum - 1] = false;
 		slot->tts_values[yb_sender_pid_att.attnum - 1] = Int32GetDatum(MyProcPid);
@@ -3789,8 +3791,8 @@ ybInsertPendingNotifiesToTable(void)
 		slot->tts_values[yb_is_listen_att.attnum - 1] = false;
 
 		slot->tts_isnull[yb_data_att.attnum - 1] = false;
-		slot->tts_values[yb_data_att.attnum - 1] = CStringGetDatum(cstring_to_text_with_len(n->data,
-																							n->channel_len + n->payload_len + 2));
+		slot->tts_values[yb_data_att.attnum - 1] = PointerGetDatum(cstring_to_text_with_len(n->data,
+																						   n->channel_len + n->payload_len + 2));
 
 		slot->tts_isnull[yb_extra_options_att.attnum - 1] = true;
 		ExecStoreVirtualTuple(slot);
@@ -3969,9 +3971,10 @@ ybNotifsPollerInit(void)
 							   "and yb_enable_replication_slot_consumption must be "
 							   "true.")));
 
-		CheckSlotRequirements();
+		CheckSlotRequirements(false /* repack */ );
 		Assert(!MyReplicationSlot);
-		ReplicationSlotAcquire(ybNotifsReplicationSlotName(), /* nowait = */ true);
+		ReplicationSlotAcquire(ybNotifsReplicationSlotName(), /* nowait = */ true,
+							   true /* error_if_invalid */ );
 		publications = ybNotifsPublications();
 
 		YBCInitVirtualWal(publications);

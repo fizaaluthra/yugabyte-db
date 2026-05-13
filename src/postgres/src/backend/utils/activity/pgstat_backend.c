@@ -395,6 +395,14 @@ pgstat_tracks_backend_bktype(BackendType bktype)
 		case B_WAL_SUMMARIZER:
 		case B_WAL_WRITER:
 			return true;
+
+		/* YB_TODO_PG19MERGE: opt YB-only BackendTypes out of backend-stats tracking. */
+		case YB_YSQL_CONN_MGR:
+		case YB_YSQL_CONN_MGR_WAL_SENDER:
+		case YB_AUTO_ANALYZE_BACKEND:
+		case YB_INDEX_BACKFILL_DDL:
+		case YB_MATVIEW_REFRESH_DDL:
+			return false;
 	}
 
 	return false;

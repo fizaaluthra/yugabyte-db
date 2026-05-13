@@ -275,7 +275,7 @@ static bool guc_value_requires_quotes(const char *guc_value);
 static char **readfile(const char *path);
 static void writefile(char *path, char **lines);
 static FILE *popen_check(const char *command, const char *mode);
-static void exit_nicely_with_code(int) pg_attribute_noreturn();
+pg_noreturn static void exit_nicely_with_code(int);
 static char *get_id(void);
 static int	get_encoding_id(const char *encoding_name);
 static void set_input(char **dest, const char *filename);

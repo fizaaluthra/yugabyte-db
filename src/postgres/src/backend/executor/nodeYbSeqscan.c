@@ -85,7 +85,8 @@ YbSeqNext(YbSeqScanState *node)
 			 */
 			TupleDesc	tupdesc = CreateTemplateTupleDesc(list_length(node->aggrefs));
 
-			ExecInitScanTupleSlot(estate, &node->ss, tupdesc, &TTSOpsVirtual);
+			/* YB_TODO_PG19MERGE: PG added uint16 flags arg. */
+			ExecInitScanTupleSlot(estate, &node->ss, tupdesc, &TTSOpsVirtual, 0);
 			/* Refresh the local pointer. */
 			slot = node->ss.ss_ScanTupleSlot;
 		}
@@ -308,7 +309,7 @@ ExecInitYbSeqScan(YbSeqScan *node, EState *estate, int eflags)
 	/* and create slot with the appropriate rowtype */
 	ExecInitScanTupleSlot(estate, &scanstate->ss,
 						  RelationGetDescr(scanstate->ss.ss_currentRelation),
-						  &TTSOpsVirtual);
+						  &TTSOpsVirtual, 0 /* flags */ );
 
 	/*
 	 * Initialize result type and projection.
@@ -341,17 +342,8 @@ ExecEndYbSeqScan(YbSeqScanState *node)
 	 */
 	tsdesc = node->ss.ss_currentScanDesc;
 
-	/*
-	 * Free the exprcontext
-	 */
-	ExecFreeExprContext(&node->ss.ps);
-
-	/*
-	 * clean out the tuple table
-	 */
-	if (node->ss.ps.ps_ResultTupleSlot)
-		ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
-	ExecClearTuple(node->ss.ss_ScanTupleSlot);
+	/* YB_TODO_PG19MERGE: PG19 removed ExecFreeExprContext; per-node end
+	 * routines no longer free their exprcontext or clear tuple tables. */
 
 	/*
 	 * close heap scan

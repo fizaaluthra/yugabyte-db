@@ -1096,7 +1096,10 @@ rebuild_relation(Relation OldHeap, Relation index, bool verbose,
 						 swap_toast_by_content, false, true,
 						 true,	/* reindex */
 						 frozenXid, cutoffMulti,
-						 relpersistence);
+						 relpersistence,
+						 false /* yb_copy_split_options */ ,
+						 NIL /* changedIndexNames */ ,
+						 NIL /* changedIndexSplitOpts */ );
 	}
 }
 

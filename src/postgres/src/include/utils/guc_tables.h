@@ -163,21 +163,32 @@ struct config_int
 	int			reset_val;
 };
 
-struct yb_config_oid
-{
-	struct config_generic gen;
-	/* constant fields, must be set correctly in initial value: */
-	Oid		   *variable;
-	Oid			boot_val;
-	Oid			min;
-	Oid			max;
-	YbGucOidCheckHook check_hook;
-	YbGucOidAssignHook assign_hook;
-	GucShowHook show_hook;
-	/* variable fields, initialized at runtime: */
-	Oid			reset_val;
-	void	   *reset_extra;
-};
+/*
+ * YB_TODO_PG19MERGE: yb_config_oid (and the YB-only ConfigureNamesOid[]
+ * array, plus ConfigureNamesBool/Int/Real/String/Enum) are still in the
+ * pre-PG19 layout: type-specific struct embeds `struct config_generic gen`
+ * as its first field. PG19 commit a13833c35f9e07fe978bf6fad984d6f5f25f59cd
+ * ("Reorganize GUC structs") inverted this for PG's own types - now
+ * config_generic contains the type-specific structs in a union (._bool,
+ * ._int, ...) and the type-specific structs no longer have a gen field.
+ *
+ * Migrating all six YB-only ConfigureNames* arrays (~140 Bool + Int + Real
+ * + String + Enum + Oid entries) and all the PGC_OID switch cases in guc.c
+ * is a real refactor. For now, keep yb_config_oid in the PG15 form so the
+ * existing YB code compiles unchanged. Two consequences this enables:
+ *   - The definition is moved BELOW config_generic so the value-embedded
+ *     `struct config_generic gen` is a complete type at this point.
+ *   - The `struct yb_config_oid oid;` member that the merge resolution
+ *     added to config_generic's union (PG19-style integration) is dropped:
+ *     no YB code actually accesses it; the YB OID GUCs live in their own
+ *     parallel ConfigureNamesOid[] array and are dispatched via
+ *     `(struct yb_config_oid *) gconf` casts (PG15 style), which works
+ *     because gconf points to the embedded gen.
+ *
+ * Revisit once the YB GUC arrays are migrated to PG19's per-type-union
+ * layout - at that point yb_config_oid loses `gen` and `oid` goes back
+ * into config_generic's union next to ._bool / ._int / etc.
+ */
 
 struct config_real
 {
@@ -305,11 +316,33 @@ struct config_generic
 		struct config_real _real;
 		struct config_string _string;
 		struct config_enum _enum;
-		struct yb_config_oid oid;
 	};
 
 	/* YB: Saved default value in case conn mgr overrides the default */
 	GucStack   *ysql_conn_mgr_saved_default;
+};
+
+/*
+ * YB_TODO_PG19MERGE: see the long comment above where yb_config_oid used to
+ * live (between struct config_int and struct config_real). Defined here -
+ * below config_generic - so the embedded `struct config_generic gen` is a
+ * complete type. Keep in lockstep with the eventual full migration to
+ * PG19's per-type-union layout.
+ */
+struct yb_config_oid
+{
+	struct config_generic gen;
+	/* constant fields, must be set correctly in initial value: */
+	Oid		   *variable;
+	Oid			boot_val;
+	Oid			min;
+	Oid			max;
+	YbGucOidCheckHook check_hook;
+	YbGucOidAssignHook assign_hook;
+	GucShowHook show_hook;
+	/* variable fields, initialized at runtime: */
+	Oid			reset_val;
+	void	   *reset_extra;
 };
 
 /* bit values in status field */

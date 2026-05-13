@@ -468,7 +468,7 @@ setup(char *argv0)
 	verify_directories();
 
 	if (is_yugabyte_enabled() && user_opts.check)
-		*live_check = true;
+		user_opts.live_check = true;
 
 	/* no postmasters should be running, except for a live check */
 	if (!is_yugabyte_enabled() && pid_lock_file_exists(old_cluster.pgdata))

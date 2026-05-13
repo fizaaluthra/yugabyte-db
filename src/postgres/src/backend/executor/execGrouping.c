@@ -198,6 +198,23 @@ YbBuildTupleHashTableExt(PlanState *parent,
 						 ExprContext *expr_cxt,
 						 bool use_variable_hash_iv)
 {
+	/*
+	 * YB_TODO_PG19MERGE: TupleHashTableData was substantially refactored in
+	 * PG19: tab_hash_funcs (FmgrInfo*) and in_hash_funcs were replaced with
+	 * tab_hash_expr / in_hash_expr (ExprState*), tablecxt was renamed to
+	 * tuplescxt, entrysize was replaced with additionalsize, and hash_iv was
+	 * removed entirely (the hash IV is now folded into the ExprState). The YB
+	 * variant here was a fork of the old BuildTupleHashTableExt that mirrored
+	 * those fields directly. Reworking it requires building an ExprState for
+	 * the hash function (cf. PG's BuildTupleHashTableExt -> ExecBuildHash32*).
+	 * Stubbed for now so the rest of executor compiles; any caller that
+	 * actually hits this path will fail loudly at runtime.
+	 */
+	elog(ERROR,
+		 "YB_TODO_PG19MERGE: YbBuildTupleHashTableExt needs to be reworked "
+		 "for PG19's TupleHashTableData refactor (FmgrInfo -> ExprState).");
+	return NULL;
+#if 0
 	TupleHashTable hashtable;
 	Size		entrysize = sizeof(TupleHashEntryData) + additionalsize;
 	MemoryContext oldcontext;
@@ -263,6 +280,7 @@ YbBuildTupleHashTableExt(PlanState *parent,
 	MemoryContextSwitchTo(oldcontext);
 
 	return hashtable;
+#endif
 }
 
 /*
@@ -647,8 +665,14 @@ TupleHashTableHash_internal(struct tuplehash_hash *tb,
 	uint32		hashkey;
 	TupleTableSlot *slot;
 	bool		isnull;
-	ExprState **eval_exprs = NULL;
-
+	/*
+	 * YB_TODO_PG19MERGE: the keyColIdx / yb_in_keycolExprs assignments below
+	 * fed the per-column for loop further down which is now #if 0'd out
+	 * (PG commit 0f5738202b812a976e8612c85399b52d16a0abb6 replaced it with a
+	 * single ExecEvalExpr call). Wrap the dead assignments too so the
+	 * function compiles; needs revisit when the YB BNL hash logic is
+	 * reintegrated.
+	 */
 	if (tuple == NULL)
 	{
 		/* Process the current input tuple for the table */
@@ -656,8 +680,6 @@ TupleHashTableHash_internal(struct tuplehash_hash *tb,
 		hashkey = DatumGetUInt32(ExecEvalExpr(hashtable->in_hash_expr,
 											  hashtable->exprcontext,
 											  &isnull));
-		keyColIdx = hashtable->in_keyColIdx;
-		eval_exprs = hashtable->yb_in_keycolExprs;
 	}
 	else
 	{

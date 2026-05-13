@@ -951,16 +951,18 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 		HeapTuple	seqtuple = YBReadSequenceTuple(reln);
 
 		/* Create an empty buffer to initialize with the sequence data */
-		buf = ReadBuffer_common(RelationGetSmgr(reln),
+		/* YB_TODO_PG19MERGE: PG19 ReadBuffer_common signature: leading
+		 * Relation, no trailing &hit out-param; Item -> const void *. */
+		buf = ReadBuffer_common(reln, RelationGetSmgr(reln),
 								reln->rd_rel->relpersistence, forkNum,
-								blockNum, RBM_ZERO_AND_LOCK, strategy, &hit);
+								blockNum, RBM_ZERO_AND_LOCK, strategy);
 
 		/* Insert onto the page */
 		Page		dp = BufferGetPage(buf);
 
 		PageInit(dp, BLCKSZ, sizeof(*seqtuple));
 		PageSetAllVisible(dp);
-		OffsetNumber off = PageAddItemExtended(dp, (Item) (seqtuple->t_data),
+		OffsetNumber off = PageAddItemExtended(dp, (const void *) (seqtuple->t_data),
 											   seqtuple->t_len,
 											   InvalidOffsetNumber,
 											   PAI_IS_HEAP);

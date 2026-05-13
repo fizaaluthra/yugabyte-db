@@ -31,7 +31,8 @@
 #include "utils/fmgroids.h"
 
 const uint32 yb_funcs_safe_for_pushdown[] = {
-	F_RANDOM
+	/* YB_TODO_PG19MERGE: F_RANDOM renamed to F_RANDOM_ in PG19 fmgroids. */
+	F_RANDOM_
 };
 
 const uint32 yb_funcs_unsafe_for_pushdown[] = {

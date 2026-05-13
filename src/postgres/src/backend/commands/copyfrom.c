@@ -1614,14 +1614,14 @@ yb_process_more_batches:
 						}
 
 						/* And create index entries for it */
+						/* YB_TODO_PG19MERGE: PG unified the per-call bool flags into a uint32 options bitmask (EIIT_IS_UPDATE / EIIT_NO_DUPE_ERROR / EIIT_ONLY_SUMMARIZING) and reordered args; arbiterIndexes was also dropped from this site (it's CopyFrom, never has arbiters). */
 						if (resultRelInfo->ri_NumIndices > 0)
 							recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
-																   myslot,
 																   estate,
-																   false,
-																   false,
-																   NULL,
-																   NIL);
+																   0 /* options */ ,
+																   myslot,
+																   NIL /* arbiterIndexes */ ,
+																   NULL /* specConflict */ );
 					}
 					else if (resultRelInfo->ri_FdwRoutine != NULL)
 					{

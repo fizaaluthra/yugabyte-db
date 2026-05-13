@@ -1054,7 +1054,8 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		i++;
 	}
 
-	queryDesc->yb_query_stats = InstrAlloc(1, queryDesc->instrument_options, false);
+	/* YB_TODO_PG19MERGE: PG19 InstrAlloc takes a single arg (instrument_options); the old n=1 / async=false params are gone. */
+	queryDesc->yb_query_stats = InstrAlloc(queryDesc->instrument_options);
 
 	/*
 	 * Initialize the private state information for all the nodes in the query

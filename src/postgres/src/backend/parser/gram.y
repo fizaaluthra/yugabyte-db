@@ -368,6 +368,14 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <str>			opt_single_name
 %type <list>		opt_qualified_name
+/*
+ * YB_TODO_PG19MERGE: opt_class was removed by PG commit 7d158e8c (replaced by
+ * opt_qualified_name) but YB kept the opt_class production to break a
+ * shift/reduce conflict in index_elem_options. Restore its %type declaration
+ * so bison can type-check $$ / $N references. Drop along with the opt_class
+ * production once YB's index_elem_options is reworked to use opt_qualified_name.
+ */
+%type <list>		opt_class
 %type <boolean>		opt_concurrently opt_usingindex
 %type <dbehavior>	opt_drop_behavior
 %type <list>		opt_utility_option_list

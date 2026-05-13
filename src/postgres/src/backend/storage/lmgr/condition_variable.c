@@ -57,7 +57,7 @@ ConditionVariableInit(ConditionVariable *cv)
 void
 ConditionVariablePrepareToSleep(ConditionVariable *cv)
 {
-	int			pgprocno = MyProcNumber;
+	int			procNumber /* YB_TODO_PG19MERGE: pgprocno -> procNumber */ = MyProcNumber;
 
 	/*
 	 * If some other sleep is already prepared, cancel it; this is necessary
@@ -75,7 +75,7 @@ ConditionVariablePrepareToSleep(ConditionVariable *cv)
 
 	/* Add myself to the wait queue. */
 	SpinLockAcquire(&cv->mutex);
-	proclist_push_tail(&cv->wakeup, pgprocno, cvWaitLink);
+	proclist_push_tail(&cv->wakeup, procNumber /* YB_TODO_PG19MERGE: pgprocno -> procNumber */, cvWaitLink);
 	SpinLockRelease(&cv->mutex);
 }
 
@@ -272,8 +272,8 @@ YbConditionVariableCancelSleepForProc(volatile PGPROC *proc)
 		return;
 
 	SpinLockAcquire(&cv->mutex);
-	if (proclist_contains(&cv->wakeup, proc->pgprocno, cvWaitLink))
-		proclist_delete(&cv->wakeup, proc->pgprocno, cvWaitLink);
+	if (proclist_contains(&cv->wakeup, proc->vxid.procNumber /* YB_TODO_PG19MERGE: pgprocno -> vxid.procNumber */, cvWaitLink))
+		proclist_delete(&cv->wakeup, proc->vxid.procNumber /* YB_TODO_PG19MERGE: pgprocno -> vxid.procNumber */, cvWaitLink);
 	SpinLockRelease(&cv->mutex);
 	cv_sleep_target = NULL;
 }
@@ -319,7 +319,7 @@ void
 YbConditionVariableBroadcastForProc(ConditionVariable *cv,
 									volatile PGPROC *given_proc)
 {
-	int			pgprocno = given_proc->pgprocno;
+	int			procNumber /* YB_TODO_PG19MERGE: pgprocno -> procNumber */ = given_proc->vxid.procNumber /* YB_TODO_PG19MERGE: pgprocno -> vxid.procNumber */;
 	PGPROC	   *proc = NULL;
 	bool		have_sentinel = false;
 
@@ -354,14 +354,14 @@ YbConditionVariableBroadcastForProc(ConditionVariable *cv,
 	 */
 	SpinLockAcquire(&cv->mutex);
 	/* While we're here, let's assert we're not in the list. */
-	Assert(!proclist_contains(&cv->wakeup, pgprocno, cvWaitLink));
+	Assert(!proclist_contains(&cv->wakeup, procNumber /* YB_TODO_PG19MERGE: pgprocno -> procNumber */, cvWaitLink));
 
 	if (!proclist_is_empty(&cv->wakeup))
 	{
 		proc = proclist_pop_head_node(&cv->wakeup, cvWaitLink);
 		if (!proclist_is_empty(&cv->wakeup))
 		{
-			proclist_push_tail(&cv->wakeup, pgprocno, cvWaitLink);
+			proclist_push_tail(&cv->wakeup, procNumber /* YB_TODO_PG19MERGE: pgprocno -> procNumber */, cvWaitLink);
 			have_sentinel = true;
 		}
 	}
@@ -389,7 +389,7 @@ YbConditionVariableBroadcastForProc(ConditionVariable *cv,
 		SpinLockAcquire(&cv->mutex);
 		if (!proclist_is_empty(&cv->wakeup))
 			proc = proclist_pop_head_node(&cv->wakeup, cvWaitLink);
-		have_sentinel = proclist_contains(&cv->wakeup, pgprocno, cvWaitLink);
+		have_sentinel = proclist_contains(&cv->wakeup, procNumber /* YB_TODO_PG19MERGE: pgprocno -> procNumber */, cvWaitLink);
 		SpinLockRelease(&cv->mutex);
 
 		if (proc != NULL && proc != given_proc)

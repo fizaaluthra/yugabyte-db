@@ -8792,8 +8792,7 @@
   prorettype => 'void', proargtypes => 'bool', proargnames => '{is_breaking_change}',
   prosrc => 'update pg_catalog.pg_yb_catalog_version set current_version = current_version + 1, last_breaking_version = case when is_breaking_change then current_version + 1 else last_breaking_version end' },
 
-# YB_TODO_PG19MERGE PG uses 8060 below; de-duplicate
-{ oid => '8060', descr => 'fix pg_yb_catalog_version according to the input mode',
+{ oid => '9815', descr => 'fix pg_yb_catalog_version according to the input mode',
   proname => 'yb_fix_catalog_version_table', prolang => 'sql', procost => '1000',
   provolatile => 'v', proparallel => 'u',
   prorettype => 'void', proargtypes => 'bool', proargnames => '{per_database_mode}',

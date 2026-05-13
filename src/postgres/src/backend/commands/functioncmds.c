@@ -2506,7 +2506,8 @@ AlterFunctionOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 		}
 
 		/* Must be able to become new owner */
-		check_is_member_of_role(GetUserId(), newOwnerId);
+		/* YB_TODO_PG19MERGE: check_is_member_of_role renamed to check_can_set_role (PG 3d14e171e9e). */
+		check_can_set_role(GetUserId(), newOwnerId);
 
 		/* New owner must have CREATE privilege on function's schema */
 		namespaceId = proc->pronamespace;
@@ -2514,8 +2515,9 @@ AlterFunctionOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 		{
 			AclResult	aclresult;
 
-			aclresult = pg_namespace_aclcheck(namespaceId, newOwnerId,
-											  ACL_CREATE);
+			/* YB_TODO_PG19MERGE: pg_namespace_aclcheck consolidated into object_aclcheck. */
+			aclresult = object_aclcheck(NamespaceRelationId, namespaceId, newOwnerId,
+										ACL_CREATE);
 			if (aclresult != ACLCHECK_OK)
 				aclcheck_error(aclresult, OBJECT_SCHEMA,
 							   get_namespace_name(namespaceId));

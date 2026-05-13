@@ -9169,10 +9169,10 @@ static PGresult *
 YbGlobalViewReadExecScan(YbcPgGlobalViewRead yb_gvr, const char *query)
 {
 	YbcRemotePgExecResult yb_result = YBCPgGlobalViewReadExecScan(yb_gvr, query);
-	PGresult *res = YBCPgResultFromPB(yb_result.pgresult, yb_result.pgresult_size);
+	PGresult *res = libpqsrv_PQwrap(YBCPgResultFromPB(yb_result.pgresult, yb_result.pgresult_size));
 	/*
 	 * This makes sure that we continue to query other tservers even if we get error
 	 * from one tserver due to timeouts / tserver down etc.
 	 */
-	return res ? res : PQmakeEmptyPGresult(NULL, PGRES_TUPLES_OK);
+	return res ? res : libpqsrv_PQwrap(PQmakeEmptyPGresult(NULL, PGRES_TUPLES_OK));
 }

@@ -829,11 +829,15 @@ synchronize_one_slot(RemoteSlot *remote_slot, Oid remote_dbid,
 		 * cycle if the restart_lsn or catalog_xmin of the remote slot has not
 		 * caught up.
 		 */
+		/* YB_TODO_PG19MERGE: YB added trailing 5 args for plugin/snapshot/lsn-type/ordering. */
 		ReplicationSlotCreate(remote_slot->name, true, RS_TEMPORARY,
 							  remote_slot->two_phase,
-							  false,
+							  false /* repack */,
 							  remote_slot->failover,
-							  true);
+							  true /* synced */,
+							  NULL /* yb_plugin_name */, CRS_NOEXPORT_SNAPSHOT,
+							  NULL /* yb_consistent_snapshot_time */,
+							  CRS_SEQUENCE, YB_CRS_TRANSACTION);
 
 		/* For shorter lines. */
 		slot = MyReplicationSlot;

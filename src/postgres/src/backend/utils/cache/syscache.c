@@ -21,7 +21,10 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "catalog/pg_amop.h"
+#include "catalog/pg_constraint.h"
 #include "catalog/pg_db_role_setting_d.h"
+#include "catalog/pg_rewrite.h"
 #include "catalog/pg_depend_d.h"
 #include "catalog/pg_description_d.h"
 #include "catalog/pg_seclabel_d.h"
@@ -101,7 +104,12 @@ struct cachedesc
 StaticAssertDecl(lengthof(cacheinfo) == SysCacheSize,
 				 "SysCacheSize does not match syscache.c's array");
 
+/* YB_TODO_PG19MERGE: This table must be in SysCache enum order (see
+ * build/.../catalog/syscache_ids.h). PG19 added: SYSCACHEID_INVALID at 0,
+ * EXTENSIONNAME/EXTENSIONOID, and 8 PROPGRAPH* entries. Also: YBCONSTRAINTRELIDTYPIDNAME
+ * (95) precedes YBTABLEGROUPOID (96) in the enum. */
 static const char *yb_cache_index_name_table[] = {
+	/* SYSCACHEID_INVALID is -1, not in the array */
 	"pg_aggregate_fnoid_index",
 	"pg_am_name_index",
 	"pg_am_oid_index",
@@ -129,6 +137,8 @@ static const char *yb_cache_index_name_table[] = {
 	"pg_enum_typid_label_index",
 	"pg_event_trigger_evtname_index",
 	"pg_event_trigger_oid_index",
+	"pg_extension_name_index",			/* EXTENSIONNAME (PG19) */
+	"pg_extension_oid_index",			/* EXTENSIONOID (PG19) */
 	"pg_foreign_data_wrapper_name_index",
 	"pg_foreign_data_wrapper_oid_index",
 	"pg_foreign_server_name_index",
@@ -148,6 +158,14 @@ static const char *yb_cache_index_name_table[] = {
 	"pg_partitioned_table_partrelid_index",
 	"pg_proc_proname_args_nsp_index",
 	"pg_proc_oid_index",
+	"pg_propgraph_element_alias_index",		/* PROPGRAPHELALIAS (PG19) */
+	"pg_propgraph_element_label_index",		/* PROPGRAPHELEMENTLABELELEMENTLABEL (PG19) */
+	"pg_propgraph_element_oid_index",		/* PROPGRAPHELOID (PG19) */
+	"pg_propgraph_label_name_index",		/* PROPGRAPHLABELNAME (PG19) */
+	"pg_propgraph_label_oid_index",			/* PROPGRAPHLABELOID (PG19) */
+	"pg_propgraph_label_property_index",	/* PROPGRAPHLABELPROP (PG19) */
+	"pg_propgraph_property_name_index",		/* PROPGRAPHPROPNAME (PG19) */
+	"pg_propgraph_property_oid_index",		/* PROPGRAPHPROPOID (PG19) */
 	"pg_publication_pubname_index",
 	"pg_publication_namespace_oid_index",
 	"pg_publication_namespace_pnnspid_pnpubid_index",
@@ -185,14 +203,15 @@ static const char *yb_cache_index_name_table[] = {
 	"pg_type_oid_index",
 	"pg_user_mapping_oid_index",
 	"pg_user_mapping_user_server_index",
-	"pg_yb_tablegroup_oid_index",
-	"pg_constraint_conrelid_contypid_conname_index",
+	"pg_constraint_conrelid_contypid_conname_index",	/* YBCONSTRAINTRELIDTYPIDNAME (95) */
+	"pg_yb_tablegroup_oid_index",						/* YBTABLEGROUPOID (96) */
 };
 
 static_assert(SysCacheSize == sizeof(yb_cache_index_name_table) /
 			  sizeof(const char *), "Wrong catalog cache number");
 
 char	   *SysCacheName[] = {
+	/* SYSCACHEID_INVALID is -1, not in the array */
 	"AGGFNOID",
 	"AMNAME",
 	"AMOID",
@@ -220,6 +239,8 @@ char	   *SysCacheName[] = {
 	"ENUMTYPOIDNAME",
 	"EVENTTRIGGERNAME",
 	"EVENTTRIGGEROID",
+	"EXTENSIONNAME",
+	"EXTENSIONOID",
 	"FOREIGNDATAWRAPPERNAME",
 	"FOREIGNDATAWRAPPEROID",
 	"FOREIGNSERVERNAME",
@@ -239,6 +260,14 @@ char	   *SysCacheName[] = {
 	"PARTRELID",
 	"PROCNAMEARGSNSP",
 	"PROCOID",
+	"PROPGRAPHELALIAS",
+	"PROPGRAPHELEMENTLABELELEMENTLABEL",
+	"PROPGRAPHELOID",
+	"PROPGRAPHLABELNAME",
+	"PROPGRAPHLABELOID",
+	"PROPGRAPHLABELPROP",
+	"PROPGRAPHPROPNAME",
+	"PROPGRAPHPROPOID",
 	"PUBLICATIONNAME",
 	"PUBLICATIONNAMESPACE",
 	"PUBLICATIONNAMESPACEMAP",
@@ -276,8 +305,8 @@ char	   *SysCacheName[] = {
 	"TYPEOID",
 	"USERMAPPINGOID",
 	"USERMAPPINGUSERSERVER",
-	"YBTABLEGROUPOID",
-	"YBCONSTRAINTRELIDTYPIDNAME"
+	"YBCONSTRAINTRELIDTYPIDNAME",
+	"YBTABLEGROUPOID"
 };
 
 static_assert(SysCacheSize == sizeof(SysCacheName) /
@@ -345,7 +374,12 @@ static_assert(YbNumCatalogCacheTables ==
 
 
 /* Maps cache id to the table id in yb_cache_table_name_table */
+/* YB_TODO_PG19MERGE: PG19 added SYSCACHEID_INVALID at 0, EXTENSION{NAME,OID},
+ * and 8 PROPGRAPH* caches. Stub PG19-added entries with pg_class fallback
+ * (PROPGRAPH/EXTENSION aren't critical for YB; revisit if YB actually starts
+ * caching them). */
 static YbCatalogCacheTable yb_catalog_cache_tables[] = {
+	/* SYSCACHEID_INVALID is -1, not in the array */
 	YbCatalogCacheTable_pg_aggregate,
 	YbCatalogCacheTable_pg_am,
 	YbCatalogCacheTable_pg_am,
@@ -373,6 +407,8 @@ static YbCatalogCacheTable yb_catalog_cache_tables[] = {
 	YbCatalogCacheTable_pg_enum,
 	YbCatalogCacheTable_pg_event_trigger,
 	YbCatalogCacheTable_pg_event_trigger,
+	YbCatalogCacheTable_pg_class,				/* EXTENSIONNAME (stub) */
+	YbCatalogCacheTable_pg_class,				/* EXTENSIONOID (stub) */
 	YbCatalogCacheTable_pg_foreign_data_wrapper,
 	YbCatalogCacheTable_pg_foreign_data_wrapper,
 	YbCatalogCacheTable_pg_foreign_server,
@@ -392,6 +428,14 @@ static YbCatalogCacheTable yb_catalog_cache_tables[] = {
 	YbCatalogCacheTable_pg_partitioned_table,
 	YbCatalogCacheTable_pg_proc,
 	YbCatalogCacheTable_pg_proc,
+	YbCatalogCacheTable_pg_class,				/* PROPGRAPHELALIAS (stub) */
+	YbCatalogCacheTable_pg_class,				/* PROPGRAPHELEMENTLABELELEMENTLABEL (stub) */
+	YbCatalogCacheTable_pg_class,				/* PROPGRAPHELOID (stub) */
+	YbCatalogCacheTable_pg_class,				/* PROPGRAPHLABELNAME (stub) */
+	YbCatalogCacheTable_pg_class,				/* PROPGRAPHLABELOID (stub) */
+	YbCatalogCacheTable_pg_class,				/* PROPGRAPHLABELPROP (stub) */
+	YbCatalogCacheTable_pg_class,				/* PROPGRAPHPROPNAME (stub) */
+	YbCatalogCacheTable_pg_class,				/* PROPGRAPHPROPOID (stub) */
 	YbCatalogCacheTable_pg_publication,
 	YbCatalogCacheTable_pg_publication_namespace,
 	YbCatalogCacheTable_pg_publication_namespace,
@@ -429,8 +473,8 @@ static YbCatalogCacheTable yb_catalog_cache_tables[] = {
 	YbCatalogCacheTable_pg_type,
 	YbCatalogCacheTable_pg_user_mapping,
 	YbCatalogCacheTable_pg_user_mapping,
-	YbCatalogCacheTable_pg_yb_tablegroup,
-	YbCatalogCacheTable_pg_constraint,
+	YbCatalogCacheTable_pg_constraint,			/* YBCONSTRAINTRELIDTYPIDNAME */
+	YbCatalogCacheTable_pg_yb_tablegroup,		/* YBTABLEGROUPOID */
 };
 
 static_assert(SysCacheSize ==
@@ -686,8 +730,8 @@ YbPreloadCatalogCache(int cache_id, int idx_cache_id)
 
 		INSTR_TIME_SET_CURRENT(duration);
 		INSTR_TIME_SUBTRACT(duration, start);
-		elog(LOG, "YbPreloadCatalogCache: %ld entries added for "
-			 "cache id %d, index oid %d (relation %s), took %ld us",
+		elog(LOG, "YbPreloadCatalogCache: %zu entries added for "
+			 "cache id %d, index oid %d (relation %s), took " INT64_FORMAT " us",
 			 scanned, cache->id, cache->cc_indexoid, cache->cc_relname,
 			 INSTR_TIME_GET_MICROSEC(duration));
 	}
@@ -1626,8 +1670,8 @@ YbGetCatalogCacheTableNameFromCacheId(int cache_id)
 uint32
 YbSysCacheComputeHashValue(int cache_id, Datum v1, Datum v2, Datum v3, Datum v4)
 {
-	elog(LOG, "Computing hash for cache_id: %d, v1: %ld, v2: %ld, v3: %ld, v4: %ld",
-		 cache_id, v1, v2, v3, v4);
+	elog(LOG, "Computing hash for cache_id: %d, v1: " UINT64_FORMAT ", v2: " UINT64_FORMAT ", v3: " UINT64_FORMAT ", v4: " UINT64_FORMAT,
+		 cache_id, (uint64) v1, (uint64) v2, (uint64) v3, (uint64) v4);
 	CatCache   *cache = SysCache[cache_id];
 
 	return YbCatalogCacheComputeHashValue(cache, v1, v2, v3, v4);
@@ -1691,64 +1735,76 @@ YbCheckCatalogCacheIds()
 	YB_CHECK_CATALOG_CACHE_ID(ENUMTYPOIDNAME, 24);
 	YB_CHECK_CATALOG_CACHE_ID(EVENTTRIGGERNAME, 25);
 	YB_CHECK_CATALOG_CACHE_ID(EVENTTRIGGEROID, 26);
-	YB_CHECK_CATALOG_CACHE_ID(FOREIGNDATAWRAPPERNAME, 27);
-	YB_CHECK_CATALOG_CACHE_ID(FOREIGNDATAWRAPPEROID, 28);
-	YB_CHECK_CATALOG_CACHE_ID(FOREIGNSERVERNAME, 29);
-	YB_CHECK_CATALOG_CACHE_ID(FOREIGNSERVEROID, 30);
-	YB_CHECK_CATALOG_CACHE_ID(FOREIGNTABLEREL, 31);
-	YB_CHECK_CATALOG_CACHE_ID(INDEXRELID, 32);
-	YB_CHECK_CATALOG_CACHE_ID(LANGNAME, 33);
-	YB_CHECK_CATALOG_CACHE_ID(LANGOID, 34);
-	YB_CHECK_CATALOG_CACHE_ID(NAMESPACENAME, 35);
-	YB_CHECK_CATALOG_CACHE_ID(NAMESPACEOID, 36);
-	YB_CHECK_CATALOG_CACHE_ID(OPERNAMENSP, 37);
-	YB_CHECK_CATALOG_CACHE_ID(OPEROID, 38);
-	YB_CHECK_CATALOG_CACHE_ID(OPFAMILYAMNAMENSP, 39);
-	YB_CHECK_CATALOG_CACHE_ID(OPFAMILYOID, 40);
-	YB_CHECK_CATALOG_CACHE_ID(PARAMETERACLNAME, 41);
-	YB_CHECK_CATALOG_CACHE_ID(PARAMETERACLOID, 42);
-	YB_CHECK_CATALOG_CACHE_ID(PARTRELID, 43);
-	YB_CHECK_CATALOG_CACHE_ID(PROCNAMEARGSNSP, 44);
-	YB_CHECK_CATALOG_CACHE_ID(PROCOID, 45);
-	YB_CHECK_CATALOG_CACHE_ID(PUBLICATIONNAME, 46);
-	YB_CHECK_CATALOG_CACHE_ID(PUBLICATIONNAMESPACE, 47);
-	YB_CHECK_CATALOG_CACHE_ID(PUBLICATIONNAMESPACEMAP, 48);
-	YB_CHECK_CATALOG_CACHE_ID(PUBLICATIONOID, 49);
-	YB_CHECK_CATALOG_CACHE_ID(PUBLICATIONREL, 50);
-	YB_CHECK_CATALOG_CACHE_ID(PUBLICATIONRELMAP, 51);
-	YB_CHECK_CATALOG_CACHE_ID(RANGEMULTIRANGE, 52);
-	YB_CHECK_CATALOG_CACHE_ID(RANGETYPE, 53);
-	YB_CHECK_CATALOG_CACHE_ID(RELNAMENSP, 54);
-	YB_CHECK_CATALOG_CACHE_ID(RELOID, 55);
-	YB_CHECK_CATALOG_CACHE_ID(REPLORIGIDENT, 56);
-	YB_CHECK_CATALOG_CACHE_ID(REPLORIGNAME, 57);
-	YB_CHECK_CATALOG_CACHE_ID(RULERELNAME, 58);
-	YB_CHECK_CATALOG_CACHE_ID(SEQRELID, 59);
-	YB_CHECK_CATALOG_CACHE_ID(STATEXTDATASTXOID, 60);
-	YB_CHECK_CATALOG_CACHE_ID(STATEXTNAMENSP, 61);
-	YB_CHECK_CATALOG_CACHE_ID(STATEXTOID, 62);
-	YB_CHECK_CATALOG_CACHE_ID(STATRELATTINH, 63);
-	YB_CHECK_CATALOG_CACHE_ID(SUBSCRIPTIONNAME, 64);
-	YB_CHECK_CATALOG_CACHE_ID(SUBSCRIPTIONOID, 65);
-	YB_CHECK_CATALOG_CACHE_ID(SUBSCRIPTIONRELMAP, 66);
-	YB_CHECK_CATALOG_CACHE_ID(TABLESPACEOID, 67);
-	YB_CHECK_CATALOG_CACHE_ID(TRFOID, 68);
-	YB_CHECK_CATALOG_CACHE_ID(TRFTYPELANG, 69);
-	YB_CHECK_CATALOG_CACHE_ID(TSCONFIGMAP, 70);
-	YB_CHECK_CATALOG_CACHE_ID(TSCONFIGNAMENSP, 71);
-	YB_CHECK_CATALOG_CACHE_ID(TSCONFIGOID, 72);
-	YB_CHECK_CATALOG_CACHE_ID(TSDICTNAMENSP, 73);
-	YB_CHECK_CATALOG_CACHE_ID(TSDICTOID, 74);
-	YB_CHECK_CATALOG_CACHE_ID(TSPARSERNAMENSP, 75);
-	YB_CHECK_CATALOG_CACHE_ID(TSPARSEROID, 76);
-	YB_CHECK_CATALOG_CACHE_ID(TSTEMPLATENAMENSP, 77);
-	YB_CHECK_CATALOG_CACHE_ID(TSTEMPLATEOID, 78);
-	YB_CHECK_CATALOG_CACHE_ID(TYPENAMENSP, 79);
-	YB_CHECK_CATALOG_CACHE_ID(TYPEOID, 80);
-	YB_CHECK_CATALOG_CACHE_ID(USERMAPPINGOID, 81);
-	YB_CHECK_CATALOG_CACHE_ID(USERMAPPINGUSERSERVER, 82);
-	YB_CHECK_CATALOG_CACHE_ID(YBTABLEGROUPOID, 83);
-	YB_CHECK_CATALOG_CACHE_ID(YBCONSTRAINTRELIDTYPIDNAME, 84);
+	/* PG19-added: EXTENSIONNAME (27), EXTENSIONOID (28) shifted all later IDs */
+	YB_CHECK_CATALOG_CACHE_ID(EXTENSIONNAME, 27);
+	YB_CHECK_CATALOG_CACHE_ID(EXTENSIONOID, 28);
+	YB_CHECK_CATALOG_CACHE_ID(FOREIGNDATAWRAPPERNAME, 29);
+	YB_CHECK_CATALOG_CACHE_ID(FOREIGNDATAWRAPPEROID, 30);
+	YB_CHECK_CATALOG_CACHE_ID(FOREIGNSERVERNAME, 31);
+	YB_CHECK_CATALOG_CACHE_ID(FOREIGNSERVEROID, 32);
+	YB_CHECK_CATALOG_CACHE_ID(FOREIGNTABLEREL, 33);
+	YB_CHECK_CATALOG_CACHE_ID(INDEXRELID, 34);
+	YB_CHECK_CATALOG_CACHE_ID(LANGNAME, 35);
+	YB_CHECK_CATALOG_CACHE_ID(LANGOID, 36);
+	YB_CHECK_CATALOG_CACHE_ID(NAMESPACENAME, 37);
+	YB_CHECK_CATALOG_CACHE_ID(NAMESPACEOID, 38);
+	YB_CHECK_CATALOG_CACHE_ID(OPERNAMENSP, 39);
+	YB_CHECK_CATALOG_CACHE_ID(OPEROID, 40);
+	YB_CHECK_CATALOG_CACHE_ID(OPFAMILYAMNAMENSP, 41);
+	YB_CHECK_CATALOG_CACHE_ID(OPFAMILYOID, 42);
+	YB_CHECK_CATALOG_CACHE_ID(PARAMETERACLNAME, 43);
+	YB_CHECK_CATALOG_CACHE_ID(PARAMETERACLOID, 44);
+	YB_CHECK_CATALOG_CACHE_ID(PARTRELID, 45);
+	YB_CHECK_CATALOG_CACHE_ID(PROCNAMEARGSNSP, 46);
+	YB_CHECK_CATALOG_CACHE_ID(PROCOID, 47);
+	/* PG19-added: 8 PROPGRAPH* (48-55) */
+	YB_CHECK_CATALOG_CACHE_ID(PROPGRAPHELALIAS, 48);
+	YB_CHECK_CATALOG_CACHE_ID(PROPGRAPHELEMENTLABELELEMENTLABEL, 49);
+	YB_CHECK_CATALOG_CACHE_ID(PROPGRAPHELOID, 50);
+	YB_CHECK_CATALOG_CACHE_ID(PROPGRAPHLABELNAME, 51);
+	YB_CHECK_CATALOG_CACHE_ID(PROPGRAPHLABELOID, 52);
+	YB_CHECK_CATALOG_CACHE_ID(PROPGRAPHLABELPROP, 53);
+	YB_CHECK_CATALOG_CACHE_ID(PROPGRAPHPROPNAME, 54);
+	YB_CHECK_CATALOG_CACHE_ID(PROPGRAPHPROPOID, 55);
+	YB_CHECK_CATALOG_CACHE_ID(PUBLICATIONNAME, 56);
+	YB_CHECK_CATALOG_CACHE_ID(PUBLICATIONNAMESPACE, 57);
+	YB_CHECK_CATALOG_CACHE_ID(PUBLICATIONNAMESPACEMAP, 58);
+	YB_CHECK_CATALOG_CACHE_ID(PUBLICATIONOID, 59);
+	YB_CHECK_CATALOG_CACHE_ID(PUBLICATIONREL, 60);
+	YB_CHECK_CATALOG_CACHE_ID(PUBLICATIONRELMAP, 61);
+	YB_CHECK_CATALOG_CACHE_ID(RANGEMULTIRANGE, 62);
+	YB_CHECK_CATALOG_CACHE_ID(RANGETYPE, 63);
+	YB_CHECK_CATALOG_CACHE_ID(RELNAMENSP, 64);
+	YB_CHECK_CATALOG_CACHE_ID(RELOID, 65);
+	YB_CHECK_CATALOG_CACHE_ID(REPLORIGIDENT, 66);
+	YB_CHECK_CATALOG_CACHE_ID(REPLORIGNAME, 67);
+	YB_CHECK_CATALOG_CACHE_ID(RULERELNAME, 68);
+	YB_CHECK_CATALOG_CACHE_ID(SEQRELID, 69);
+	YB_CHECK_CATALOG_CACHE_ID(STATEXTDATASTXOID, 70);
+	YB_CHECK_CATALOG_CACHE_ID(STATEXTNAMENSP, 71);
+	YB_CHECK_CATALOG_CACHE_ID(STATEXTOID, 72);
+	YB_CHECK_CATALOG_CACHE_ID(STATRELATTINH, 73);
+	YB_CHECK_CATALOG_CACHE_ID(SUBSCRIPTIONNAME, 74);
+	YB_CHECK_CATALOG_CACHE_ID(SUBSCRIPTIONOID, 75);
+	YB_CHECK_CATALOG_CACHE_ID(SUBSCRIPTIONRELMAP, 76);
+	YB_CHECK_CATALOG_CACHE_ID(TABLESPACEOID, 77);
+	YB_CHECK_CATALOG_CACHE_ID(TRFOID, 78);
+	YB_CHECK_CATALOG_CACHE_ID(TRFTYPELANG, 79);
+	YB_CHECK_CATALOG_CACHE_ID(TSCONFIGMAP, 80);
+	YB_CHECK_CATALOG_CACHE_ID(TSCONFIGNAMENSP, 81);
+	YB_CHECK_CATALOG_CACHE_ID(TSCONFIGOID, 82);
+	YB_CHECK_CATALOG_CACHE_ID(TSDICTNAMENSP, 83);
+	YB_CHECK_CATALOG_CACHE_ID(TSDICTOID, 84);
+	YB_CHECK_CATALOG_CACHE_ID(TSPARSERNAMENSP, 85);
+	YB_CHECK_CATALOG_CACHE_ID(TSPARSEROID, 86);
+	YB_CHECK_CATALOG_CACHE_ID(TSTEMPLATENAMENSP, 87);
+	YB_CHECK_CATALOG_CACHE_ID(TSTEMPLATEOID, 88);
+	YB_CHECK_CATALOG_CACHE_ID(TYPENAMENSP, 89);
+	YB_CHECK_CATALOG_CACHE_ID(TYPEOID, 90);
+	YB_CHECK_CATALOG_CACHE_ID(USERMAPPINGOID, 91);
+	YB_CHECK_CATALOG_CACHE_ID(USERMAPPINGUSERSERVER, 92);
+	YB_CHECK_CATALOG_CACHE_ID(YBCONSTRAINTRELIDTYPIDNAME, 93);
+	YB_CHECK_CATALOG_CACHE_ID(YBTABLEGROUPOID, 94);
 
 	/*
 	 * If an existing ID is removed, interop isn't possible so we need to
@@ -1769,5 +1825,5 @@ YbCheckCatalogCacheIds()
 	 * but old PG backend cannot provide that message needed. In this case
 	 * interop isn't possible so we need to bump YbSharedInvalCatcacheMsgVersion.
 	 */
-	static_assert(SysCacheSize == 85, "new catalog cache id added");
+	static_assert(SysCacheSize == 95, "new catalog cache id added");
 }

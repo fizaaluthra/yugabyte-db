@@ -117,7 +117,8 @@ StaticAssertDecl(ALLOC_CHUNK_LIMIT == ALLOCSET_SEPARATE_THRESHOLD,
  * keeper block is always allocated along with the set header at the same time.
  * It is never removed from the header or replaced.
  */
-#define ASET_INITIAL_TOTAL_SIZE(SET) (((AllocSetContext *) SET)->keeper->endptr - ((char *) SET))
+/* YB_TODO_PG19MERGE: PG19 dropped the explicit keeper pointer; use KeeperBlock(). */
+#define ASET_INITIAL_TOTAL_SIZE(SET) (KeeperBlock((AllocSetContext *) SET)->endptr - ((char *) SET))
 
 typedef struct AllocBlockData *AllocBlock;	/* forward reference */
 

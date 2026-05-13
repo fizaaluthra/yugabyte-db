@@ -103,6 +103,7 @@
 #include "optimizer/paths.h"
 #include "optimizer/placeholder.h"
 #include "optimizer/plancat.h"
+#include "optimizer/planmain.h"		/* YB_TODO_PG19MERGE: create_indexscan_plan */
 #include "optimizer/restrictinfo.h"
 #include "parser/parsetree.h"
 #include "utils/lsyscache.h"
@@ -5722,7 +5723,7 @@ compute_semi_anti_join_factors(PlannerInfo *root,
 	temp_sjinfo.jointype = (jointype == JOIN_ANTI) ? JOIN_ANTI : JOIN_SEMI;
 	/* we don't bother trying to make the remaining fields valid */
 	temp_sjinfo.lhs_strict = false;
-	temp_sjinfo.delay_upper_joins = false;
+	/* YB_TODO_PG19MERGE: SpecialJoinInfo.delay_upper_joins removed in PG19. */
 	temp_sjinfo.semi_can_btree = false;
 	temp_sjinfo.semi_can_hash = false;
 	temp_sjinfo.semi_operators = NIL;
@@ -7663,9 +7664,11 @@ yb_get_docdb_result_width(Path *path, PlannerInfo *root, bool is_index_path,
 	/* TODO(#20956): Columns needed for rechecking need to be added */
 	if (bms_num_members(attrs) > 0)
 	{
+		/* YB_TODO_PG19MERGE: PG19 removed destructive bms_first_member;
+		 * use non-destructive bms_next_member iteration. */
 		int			bms_index = -1;
 
-		while ((bms_index = bms_first_member(attrs)) >= 0)
+		while ((bms_index = bms_next_member(attrs, bms_index)) >= 0)
 		{
 			/* Add 1 byte for null indicator */
 			result_width += 1;
@@ -8145,7 +8148,8 @@ yb_analyze_conditions_on_current_column(PlannerInfo *root,
 
 			int			in_expr_array_length;
 
-			in_expr_array_length = estimate_array_length(other_operand);
+			/* YB_TODO_PG19MERGE: estimate_array_length now takes PlannerInfo *root. */
+			in_expr_array_length = estimate_array_length(root, other_operand);
 			if (*strictest_in_expr_array_length > in_expr_array_length)
 			{
 				*strictest_in_expr_array_length = in_expr_array_length;

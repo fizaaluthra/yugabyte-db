@@ -2004,12 +2004,12 @@ yb_batch_fetch_conflicting_rows(int idx, ResultRelInfo *resultRelInfo,
 	lbs[0] = 1;
 	if (indnkeyatts == 1)
 	{
-		FormData_pg_attribute att = index->rd_att->attrs[0];
+		Form_pg_attribute att = TupleDescAttr(index->rd_att, 0);
 
-		elmtype = att.atttypid;
-		elmlen = att.attlen;
-		elmbyval = att.attbyval;
-		elmalign = att.attalign;
+		elmtype = att->atttypid;
+		elmlen = att->attlen;
+		elmbyval = att->attbyval;
+		elmalign = att->attalign;
 	}
 	else
 	{
@@ -2092,7 +2092,9 @@ yb_batch_fetch_conflicting_rows(int idx, ResultRelInfo *resultRelInfo,
 	existing_slot = table_slot_create(heap, NULL);
 	econtext->ecxt_scantuple = existing_slot;
 
-	index_scan = index_beginscan(heap, index, estate->es_snapshot, 1, 0);
+	/* YB_TODO_PG19MERGE: PG added IndexScanInstrumentation* and a flags arg. */
+	index_scan = index_beginscan(heap, index, estate->es_snapshot,
+								 NULL /* instrument */ , 1, 0, 0 /* flags */ );
 	index_rescan(index_scan, this_scan_key, 1, NULL, 0);
 
 	while (index_getnext_slot(index_scan, ForwardScanDirection, existing_slot))
@@ -2165,7 +2167,10 @@ yb_fetch_conflicting_index_rowids(Relation heap,
 	 *    be equal to the number of key columns in the index.
 	 */
 	int nkeys = yb_ioc_state ? 1 : IndexRelationGetNumberOfKeyAttributes(index);
-	IndexScanDesc index_only_scan = index_beginscan(heap, index, estate->es_snapshot, nkeys, 0);
+	/* YB_TODO_PG19MERGE: PG added IndexScanInstrumentation* and flags. */
+	IndexScanDesc index_only_scan = index_beginscan(heap, index, estate->es_snapshot,
+													NULL /* instrument */ ,
+													nkeys, 0, 0 /* flags */ );
 	ItemPointer tid;
 	bool row_found = false;
 

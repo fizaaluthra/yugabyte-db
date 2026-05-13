@@ -5835,9 +5835,7 @@ ybTracePath(PlannerInfo *root, Path *path, char *msg)
 		case T_GroupPath:
 			ptype = "Group";
 			break;
-		case T_UpperUniquePath:
-			ptype = "UpperUnique";
-			break;
+		/* YB_TODO_PG19MERGE: T_UpperUniquePath folded into T_UniquePath in PG19. */
 		case T_AggPath:
 			ptype = "Agg";
 			break;

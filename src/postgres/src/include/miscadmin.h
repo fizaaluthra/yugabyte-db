@@ -28,10 +28,14 @@
 #include "datatype/timestamp.h" /* for TimestampTz */
 #include "pgtime.h"				/* for pg_time_t */
 
+/*
+ * YB_TODO_PG19MERGE: YB used to `#include "storage/proc.h"` here "for MyProc"
+ * so callers that #include "miscadmin.h" got MyProc transitively. That
+ * created an include cycle with PG19's PGPROC (which now uses BackendType
+ * from this file). Removed; callers that need MyProc should include
+ * "storage/proc.h" directly. See the corresponding note in storage/spin.h.
+ */
 /* YB includes */
-#ifndef FRONTEND
-#include "storage/proc.h"		/* for MyProc */
-#endif
 #include "yb/yql/pggate/ybc_pg_typedefs.h"
 
 #define InvalidPid				(-1)
@@ -165,10 +169,22 @@ do { \
 } while(0)
 
 #else							/* YB: !FRONTEND */
+/*
+ * YB_TODO_PG19MERGE: YB's per-backend "entered critical section" tracking
+ * used to be inline in these macros via MyProc->ybEnteredCriticalSection.
+ * That forced miscadmin.h to include proc.h "for MyProc", which combined
+ * with PG19's PGPROC gaining a BackendType field (whose type lives in
+ * miscadmin.h) created an include cycle. As an interim, move the YB body
+ * into non-inline helpers in proc.c. Cost: a real function call per crit
+ * section enter/exit. Worth revisiting alongside the spinlock counter once
+ * we adopt a MyProcNumber-indexed shared array (see storage/spin.h note).
+ */
+extern void YbEnterCriticalSection(void);
+extern void YbExitCriticalSection(void);
+
 #define START_CRIT_SECTION()  \
 do { \
-	if (MyProc) \
-		MyProc->ybEnteredCriticalSection = true; \
+	YbEnterCriticalSection(); \
 	CritSectionCount++; \
 } while(0)
 
@@ -176,8 +192,8 @@ do { \
 do { \
 	Assert(CritSectionCount > 0); \
 	CritSectionCount--; \
-	if (MyProc && CritSectionCount == 0) \
-		MyProc->ybEnteredCriticalSection = false; \
+	if (CritSectionCount == 0) \
+		YbExitCriticalSection(); \
 } while(0)
 #endif							/* YB: FRONTEND */
 

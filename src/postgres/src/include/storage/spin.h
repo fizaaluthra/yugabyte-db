@@ -47,9 +47,26 @@
 
 #include "storage/s_lock.h"
 
-/* YB includes */
-#include "miscadmin.h"
-#include "storage/proc.h"
+/*
+ * YB_TODO_PG19MERGE: YB's spinlock-held counter (MyProc->ybSpinLocksAcquired)
+ * used to be bumped inline from SpinLockAcquire/Release. That required spin.h
+ * to include miscadmin.h and proc.h (for IsUnderPostmaster and MyProc), which
+ * in turn required miscadmin.h to include proc.h "for MyProc" so consumers of
+ * miscadmin.h could see MyProc. That tangle worked in PG15 but breaks in PG19
+ * because PGPROC now contains a BackendType field whose type is defined in
+ * miscadmin.h; the resulting include cycle (miscadmin.h -> proc.h -> spin.h ->
+ * miscadmin.h-guard-skipped) leaves BackendType undeclared when proc.h needs
+ * it. As an interim, move the tracking out of inline into non-inline helpers
+ * that live in proc.c (where the full headers are visible) and let spin.h
+ * shed its miscadmin.h / proc.h includes; miscadmin.h drops its YB include of
+ * proc.h. Cost: one function call per SpinLockAcquire / SpinLockRelease.
+ * Spinlocks are hot (buffer headers, ProcArrayLock fast-path, etc.), so this
+ * deserves a follow-up that restores an inline fast path - e.g. a
+ * shared-memory int array indexed by MyProcNumber, declared in a small header
+ * that spin.h can safely include.
+ */
+extern void YbSpinLockTrackAcquire(void);
+extern void YbSpinLockTrackRelease(void);
 
 static inline void
 SpinLockInit(volatile slock_t *lock)
@@ -60,8 +77,7 @@ SpinLockInit(volatile slock_t *lock)
 static inline void
 SpinLockAcquire(volatile slock_t *lock)
 {
-	if (IsUnderPostmaster && MyProc)
-		MyProc->ybSpinLocksAcquired++;
+	YbSpinLockTrackAcquire();
 	S_LOCK(lock);
 }
 
@@ -69,8 +85,7 @@ static inline void
 SpinLockRelease(volatile slock_t *lock)
 {
 	S_UNLOCK(lock);
-	if (IsUnderPostmaster && MyProc && MyProc->ybSpinLocksAcquired >= 1)
-		MyProc->ybSpinLocksAcquired--;
+	YbSpinLockTrackRelease();
 }
 
 #endif							/* SPIN_H */

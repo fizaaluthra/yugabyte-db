@@ -21,6 +21,7 @@
 #include <sys/prctl.h>
 #endif
 
+#include "common/pg_yb_common.h"
 #include "miscadmin.h"
 #include "postmaster/postmaster.h"
 #include "replication/walsender.h"

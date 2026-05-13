@@ -1253,7 +1253,10 @@ ExecInitRoutingInfo(ModifyTableState *mtstate,
 	 * for the DO NOTHING clause. When support is added for DO UPDATE, the
 	 * applicability will need to be determined on a per-partition basis.
 	 */
-	partRelInfo->ri_ybUseIndexOnlyScanForIocRead = rootRelInfo->ri_ybUseIndexOnlyScanForIocRead;
+	/* YB_TODO_PG19MERGE: PG19's ExecInitRoutingInfo no longer takes rootRelInfo; use mtstate->rootResultRelInfo */
+	if (mtstate->rootResultRelInfo)
+		partRelInfo->ri_ybUseIndexOnlyScanForIocRead =
+			mtstate->rootResultRelInfo->ri_ybUseIndexOnlyScanForIocRead;
 
 	Assert(partRelInfo->ri_BatchSize >= 1);
 

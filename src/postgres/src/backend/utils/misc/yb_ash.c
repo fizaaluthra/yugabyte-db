@@ -38,8 +38,10 @@
 #include "parser/scansup.h"
 #include "pg_yb_utils.h"
 #include "pgstat.h"
+#include "access/htup_details.h"			/* YB_TODO_PG19MERGE: heap_form_tuple */
 #include "postmaster/bgworker.h"
 #include "postmaster/interrupt.h"
+#include "utils/wait_event.h"			/* YB_TODO_PG19MERGE: pgstat_get_wait_event{,_type} */
 #include "replication/walsender.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
@@ -158,9 +160,10 @@ static bool YbAshQueryPlanPairStackPush(YbcAshQueryPlanPair qp_pair);
 static YbcAshQueryPlanPair YbAshQueryPlanPairStackPop(YbcAshQueryPlanPair expected_qp_pair);
 
 static void yb_ash_ExecutorStart(QueryDesc *queryDesc, int eflags);
+/* YB_TODO_PG19MERGE: PG19 dropped execute_once from ExecutorRun hook signature. */
 static void yb_ash_ExecutorRun(QueryDesc *queryDesc,
 							   ScanDirection direction,
-							   uint64 count, bool execute_once);
+							   uint64 count);
 static void yb_ash_ExecutorFinish(QueryDesc *queryDesc);
 static void yb_ash_ExecutorEnd(QueryDesc *queryDesc);
 static void yb_ash_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
@@ -408,9 +411,9 @@ yb_ash_ExecutorStart(QueryDesc *queryDesc, int eflags)
 }
 
 static void
-yb_ash_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count,
-				   bool execute_once)
+yb_ash_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count)
 {
+	/* YB_TODO_PG19MERGE: PG19 dropped execute_once from ExecutorRun signature. */
 	YbcAshQueryPlanPair qp_pair = {YB_ASH_INVALID_QUERY_ID, YB_ASH_DEFAULT_PLAN_ID};
 
 	if (yb_enable_ash)
@@ -420,9 +423,9 @@ yb_ash_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count,
 	PG_TRY();
 	{
 		if (prev_ExecutorRun)
-			prev_ExecutorRun(queryDesc, direction, count, execute_once);
+			prev_ExecutorRun(queryDesc, direction, count);
 		else
-			standard_ExecutorRun(queryDesc, direction, count, execute_once);
+			standard_ExecutorRun(queryDesc, direction, count);
 		--nested_level;
 	}
 	PG_CATCH();
@@ -572,7 +575,7 @@ YbAshGetConstQueryId()
 
 	if (am_walsender)
 		type = QUERY_ID_TYPE_WALSENDER;
-	else if (IsBackgroundWorker)
+	else if (AmBackgroundWorkerProcess() /* YB_TODO_PG19MERGE: IsBackgroundWorker -> AmBackgroundWorkerProcess() */)
 		type = QUERY_ID_TYPE_BACKGROUND_WORKER;
 
 	return YBCGetConstQueryId(type);
@@ -705,7 +708,7 @@ YbAshSetOneTimeMetadata()
 	/* Background workers and bootstrap processing may have null MyProcPort */
 	if (MyProcPort == NULL)
 	{
-		Assert(MyProc->isBackgroundWorker == true);
+		Assert(AmBackgroundWorkerProcess());
 		return;
 	}
 
@@ -852,15 +855,18 @@ YbAshMain(Datum main_arg)
 		int			rc;
 
 		/* Wait necessary amount of time */
+		/* YB_TODO_PG19MERGE: PG19 auto-generates wait events from wait_event_names.txt;
+		 * WAIT_EVENT_YB_ASH_MAIN needs to be added there. Use the generic MAIN slot. */
 		rc = WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-					   yb_ash_sampling_interval_ms, WAIT_EVENT_YB_ASH_MAIN);
+					   yb_ash_sampling_interval_ms, WAIT_EVENT_YB_IDLE_SLEEP /* YB_TODO_PG19MERGE: no plain WAIT_EVENT_MAIN; use YB_IDLE_SLEEP until WAIT_EVENT_YB_ASH_MAIN is added to wait_event_names.txt. */);
 		ResetLatch(MyLatch);
 
 		/* Bailout if postmaster has died */
 		if (rc & WL_POSTMASTER_DEATH)
 			proc_exit(1);
 
-		HandleMainLoopInterrupts();
+		/* YB_TODO_PG19MERGE: HandleMainLoopInterrupts -> ProcessMainLoopInterrupts (postmaster/interrupt.h). */
+		ProcessMainLoopInterrupts();
 
 		if (yb_enable_ash && yb_ash_sample_size > 0)
 		{

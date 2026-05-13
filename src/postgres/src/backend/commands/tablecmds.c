@@ -1081,7 +1081,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 			{
 				AclResult	aclresult;
 
-				aclresult = pg_database_aclcheck(Template1DbOid, GetUserId(), ACL_CREATE);
+				aclresult = object_aclcheck(DatabaseRelationId, Template1DbOid, GetUserId(), ACL_CREATE);
 
 				if (aclresult != ACLCHECK_OK)
 					aclcheck_error(aclresult, OBJECT_DATABASE,
@@ -6708,13 +6708,14 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 			 */
 			if (IsYugaByteEnabled() && tab->relkind == RELKIND_PARTITIONED_TABLE)
 			{
-				RelationSetNewRelfilenode(OldHeap,
-										  OldHeap->rd_rel->relpersistence,
-										  !tab->yb_skip_copy_split_options,
-										  NULL  /* preserved_index_split_options */ );
+				RelationSetNewRelfilenumber(OldHeap,
+											OldHeap->rd_rel->relpersistence,
+											!tab->yb_skip_copy_split_options,
+											NULL  /* preserved_index_split_options */ );
 				ReindexParams reindex_params = {0};
 
-				reindex_relation(RelationGetRelid(OldHeap), 0, &reindex_params,
+				reindex_relation(NULL /* stmt */ ,
+								 RelationGetRelid(OldHeap), 0, &reindex_params,
 								 true /* is_yb_table_rewrite */ ,
 								 !tab->yb_skip_copy_split_options,
 								 tab->changedIndexNames,
@@ -15630,6 +15631,18 @@ dropconstraint_internal(Relation rel, HeapTuple constraintTup, DropBehavior beha
 		table_close(frel, NoLock);
 	}
 
+	/*
+	 * YB_TODO_PG19MERGE: this YB block references `yb_mutable_rel`, `contype`,
+	 * `tab`, and `yb_wqueue`, which are locals/params of the outer caller
+	 * (ATExecDropConstraint), not of this function (dropconstraint_internal).
+	 * PG factored the inner constraint-drop work out into dropconstraint_internal
+	 * during PG19, but YB's PK-rewrite-on-drop branch stayed in the old
+	 * caller's namespace. Needs to be either (a) moved back into
+	 * ATExecDropConstraint, or (b) plumbed through dropconstraint_internal by
+	 * threading the relevant pointers as parameters. Stubbed out for now so
+	 * the build can proceed; this disables YB's special PK-drop handling.
+	 */
+#if 0
 	if (IsYBRelation(*yb_mutable_rel) && contype == CONSTRAINT_PRIMARY)
 	{
 		if (!yb_enable_alter_table_rewrite)
@@ -15659,6 +15672,7 @@ dropconstraint_internal(Relation rel, HeapTuple constraintTup, DropBehavior beha
 			tab->rewrite |= YB_AT_REWRITE_ALTER_PRIMARY_KEY;
 		}
 	}
+#endif
 
 	/*
 	 * Perform the actual constraint deletion
@@ -15683,8 +15697,9 @@ dropconstraint_internal(Relation rel, HeapTuple constraintTup, DropBehavior beha
 	 * routines, we have to do this one level of recursion at a time; we can't
 	 * use find_all_inheritors to do it in one pass.
 	 */
+	/* YB_TODO_PG19MERGE: was *yb_mutable_rel, which isn't in scope here; using rel (the constraint's relation). */
 	if (!is_no_inherit_constraint)
-		children = find_inheritance_children(RelationGetRelid(*yb_mutable_rel), lockmode);
+		children = find_inheritance_children(RelationGetRelid(rel), lockmode);
 	else
 		children = NIL;
 
@@ -19600,7 +19615,8 @@ MergeConstraintsIntoExisting(Relation child_rel, Relation parent_rel)
 
 	attmap = build_attrmap_by_name(RelationGetDescr(parent_rel),
 								   RelationGetDescr(child_rel),
-								   true);
+								   true /* missing_ok */ ,
+								   false /* yb_ignore_type_mismatch */ );
 
 	while (HeapTupleIsValid(parent_tuple = systable_getnext(parent_scan)))
 	{
@@ -19970,7 +19986,8 @@ RemoveInheritance(Relation child_rel, Relation parent_rel, bool expect_detached)
 	 */
 	attmap = build_attrmap_by_name(RelationGetDescr(child_rel),
 								   RelationGetDescr(parent_rel),
-								   false);
+								   false /* missing_ok */ ,
+								   false /* yb_ignore_type_mismatch */ );
 
 	catalogRelation = table_open(ConstraintRelationId, RowExclusiveLock);
 	ScanKeyInit(&key[0],
@@ -24293,7 +24310,8 @@ createTableConstraints(List **wqueue, AlteredTableInfo *tab,
 	 */
 	attmap = build_attrmap_by_name(RelationGetDescr(newRel),
 								   tupleDesc,
-								   false);
+								   false /* missing_ok */ ,
+								   false /* yb_ignore_type_mismatch */ );
 
 	/* Cycle for default values. */
 	for (parent_attno = 1; parent_attno <= tupleDesc->natts; parent_attno++)
@@ -24533,28 +24551,36 @@ createPartitionTable(List **wqueue, RangeVar *newPartName,
 				errmsg("cannot create a permanent relation as partition of temporary relation \"%s\"",
 					   RelationGetRelationName(parent_rel)));
 
-	/* Create the relation. */
+	/*
+	 * Create the relation.
+	 * YB_TODO_PG19MERGE: heap_create_with_catalog grew two extra parameters
+	 * since this YB call was written: `reloftypeid` (between reltypeid and
+	 * ownerid) and `yb_use_initdb_acl` (last). Inserting InvalidOid / false
+	 * preserves the original semantics.
+	 */
 	newRelId = heap_create_with_catalog(newPartName->relname,
 										namespaceId,
 										parent_relform->reltablespace,
-										InvalidOid,
-										InvalidOid,
-										InvalidOid,
+										InvalidOid /* reltablegroup */ ,
+										InvalidOid /* relid */ ,
+										InvalidOid /* reltypeid */ ,
+										InvalidOid /* reloftypeid */ ,
 										ownerId,
 										relamId,
 										descriptor,
 										NIL,
 										RELKIND_RELATION,
 										newPartName->relpersistence,
-										false,
-										false,
+										false /* shared_relation */ ,
+										false /* mapped_relation */ ,
 										ONCOMMIT_NOOP,
-										(Datum) 0,
-										true,
+										(Datum) 0 /* reloptions */ ,
+										true /* use_user_acl */ ,
 										allowSystemTableMods,
-										true,
-										InvalidOid,
-										NULL);
+										true /* is_internal */ ,
+										InvalidOid /* relrewrite */ ,
+										NULL /* typaddress */ ,
+										false /* yb_use_initdb_acl */ );
 
 	/*
 	 * We must bump the command counter to make the newly-created relation
@@ -25416,8 +25442,9 @@ YbATCopyStats(Oid old_relid, RangeVar *new_rel, Oid new_relid,
 		/* Create the new ext. stats object. */
 		stmt = YbGenerateClonedExtStatsStmt(new_rel, old_relid,
 											stat_ext_form->oid, attmap);
-		stmt->defnames = stringToQualifiedNameList(orig_stats_name);
-		CreateStatistics(stmt);
+		/* YB_TODO_PG19MERGE: stringToQualifiedNameList grew an `escontext` param; CreateStatistics grew `check_rights`. Pass NULL/true to keep prior behavior (raise errors, perform privilege checks). */
+		stmt->defnames = stringToQualifiedNameList(orig_stats_name, NULL /* escontext */ );
+		CreateStatistics(stmt, true /* check_rights */ );
 	}
 	systable_endscan(scan);
 	table_close(pg_statistic_ext, RowExclusiveLock);
@@ -25778,9 +25805,15 @@ YbATCopyMiscMetadata(Relation old_rel, Relation new_rel, const AttrMap *attmap)
 		else
 			nulls[Anum_pg_attribute_attacl - 1] = true;
 
-		/* Copy attstattarget value. */
-		values[Anum_pg_attribute_attstattarget - 1] =
-			old_rel_attform->attstattarget;
+		/*
+		 * YB_TODO_PG19MERGE: attstattarget moved off of FormData_pg_attribute
+		 * (BKI_FORCE_NULL since the in-memory tuple no longer carries it - see
+		 * pg_attribute.h FormExtraData_pg_attribute). Need to fetch it via
+		 * heap_getattr from the source tuple instead of `old_rel_attform->`.
+		 * For now, leave the new tuple's attstattarget NULL (matches the
+		 * default for attributes that never had an explicit target).
+		 */
+		nulls[Anum_pg_attribute_attstattarget - 1] = true;
 		replaces[Anum_pg_attribute_attstattarget - 1] = true;
 
 		new_rel_att_tuple = SearchSysCache2(ATTNUM, ObjectIdGetDatum(new_relid),
@@ -26118,10 +26151,12 @@ YbATCloneTableAndGetMappings(CreateStmt *create_stmt, const Relation old_rel,
 
 	*old2new_attmap = build_attrmap_by_name(RelationGetDescr(old_rel),
 											RelationGetDescr(*new_rel),
+											false /* missing_ok */ ,
 											ignore_type_mismatch);
 
 	*new2old_attmap = build_attrmap_by_name(RelationGetDescr(*new_rel),
 											RelationGetDescr(old_rel),
+											false /* missing_ok */ ,
 											ignore_type_mismatch);
 }
 
@@ -26221,14 +26256,26 @@ YbATCreateSimilarForeignKey(HeapTuple tuple, const char *fk_name,
 
 
 	/* Look for an index matching the column list */
-	index_oid = transformFkeyCheckAttrs(fk_rel, numkeys, confkey, index_opclasses);
+	/* YB_TODO_PG19MERGE: PG added `with_period` (FK PERIOD support) and `pk_has_without_overlaps` (out-param) to transformFkeyCheckAttrs. Pass false/NULL to preserve prior behavior. */
+	bool		yb_pk_has_without_overlaps = false;
 
-	/* Record the FK constraint in pg_constraint. */
+	index_oid = transformFkeyCheckAttrs(fk_rel, numkeys, confkey,
+										false /* with_period */ ,
+										index_opclasses,
+										&yb_pk_has_without_overlaps);
+
+	/*
+	 * Record the FK constraint in pg_constraint.
+	 * YB_TODO_PG19MERGE: CreateConstraintEntry gained `isEnforced` (after
+	 * isDeferred) and `conPeriod` (before is_internal). Pass true/false to
+	 * preserve prior behavior (constraints are enforced by default, no PERIOD).
+	 */
 	Oid			constr_oid = CreateConstraintEntry(fk_name,
 												   con_form->connamespace,
 												   CONSTRAINT_FOREIGN,
 												   con_form->condeferrable,
 												   con_form->condeferred,
+												   true /* isEnforced */ ,
 												   con_form->convalidated,
 												   con_form->conparentid,
 												   RelationGetRelid(base_rel),
@@ -26258,6 +26305,7 @@ YbATCreateSimilarForeignKey(HeapTuple tuple, const char *fk_name,
 												   true,	/* islocal */
 												   0,	/* inhcount */
 												   con_form->connoinherit,	/* conNoInherit */
+												   false /* conPeriod */ ,
 												   false);	/* is_internal */
 
 	/*
@@ -26287,7 +26335,7 @@ YbATCreateSimilarForeignKey(HeapTuple tuple, const char *fk_name,
 	 * runs on the referenced side and points to the top of the referencing
 	 * hierarchy.)
 	 */
-	createForeignKeyActionTriggers(base_rel, RelationGetRelid(fk_rel), entity,
+	createForeignKeyActionTriggers(RelationGetRelid(base_rel), RelationGetRelid(fk_rel), entity,
 								   constr_oid, index_oid, InvalidOid,
 								   InvalidOid, NULL, NULL);
 
@@ -26358,7 +26406,7 @@ YbATValidateChangeForeignKeyType(HeapTuple constraint_tuple, Relation base_rel,
 		 * altered column's name.
 		 */
 		bool		rel_column_altered = (base_rel_altered &&
-										  strcmp(baseTupDesc->attrs[conkey[i] - 1].attname.data,
+										  strcmp(TupleDescAttr(baseTupDesc, conkey[i] - 1)->attname.data,
 												 altered_column_name) == 0);
 
 		/*
@@ -26366,7 +26414,7 @@ YbATValidateChangeForeignKeyType(HeapTuple constraint_tuple, Relation base_rel,
 		 * altered column's name.
 		 */
 		bool		fk_rel_column_altered = (!base_rel_altered &&
-											 strcmp(fkTupDesc->attrs[confkey[i] - 1].attname.data,
+											 strcmp(TupleDescAttr(fkTupDesc, confkey[i] - 1)->attname.data,
 													altered_column_name) == 0);
 
 		/* If either was a match, throw an error. */
@@ -26724,7 +26772,7 @@ YbATCopyTableRowsUnchecked(Relation old_rel, Relation new_rel,
 		for (int i = 0; i < newTupDesc->natts; ++i)
 		{
 			if (has_altered_column_type &&
-				strcmp(newTupDesc->attrs[i].attname.data,
+				strcmp(TupleDescAttr(newTupDesc, i)->attname.data,
 					   altered_column_name) == 0)
 			{
 				/*
@@ -26745,7 +26793,7 @@ YbATCopyTableRowsUnchecked(Relation old_rel, Relation new_rel,
 					 * is generated by PG code and will contain fresh values
 					 * for all altered columns, so we need to filter them out.
 					 */
-					if (ex->attnum == newTupDesc->attrs[i].attnum)
+					if (ex->attnum == TupleDescAttr(newTupDesc, i)->attnum)
 					{
 						new_values[ex->attnum - 1] =
 							ExecEvalExpr(ex->exprstate,
@@ -26911,10 +26959,13 @@ YbATCopyIndexes(Relation old_rel, Oid new_relid, const AttrMap *new2old_attmap,
 		 * difficult to read.
 		 */
 		/* clang-format off */
-		idx_addr = DefineIndex(new_relid, idx_stmt,
+		/* YB_TODO_PG19MERGE: DefineIndex gained `pstate` (front) and `total_parts` (position 7). Pass NULL/-1 to preserve prior behavior. */
+		idx_addr = DefineIndex(NULL /* pstate */ ,
+							   new_relid, idx_stmt,
 							   InvalidOid,	/* no predefined OID */
 							   InvalidOid,	/* no parent index */
 							   InvalidOid,	/* no parent constraint */
+							   -1 /* total_parts */ ,
 							   false,	/* is_alter_table */
 							   false,	/* check_rights */
 							   false,	/* check_not_in_use */

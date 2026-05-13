@@ -516,7 +516,8 @@ ClientAuthentication(Port *port)
 			 * authentication type of a client, if authentication type is cert,
 			 * a FATAL packet is sent back to the Ysql Connection Manager.
 			 */
-			auth_failed(port, status,
+			/* YB_TODO_PG19MERGE: PG19 added int elevel as the 2nd auth_failed arg. */
+			auth_failed(port, FATAL, status,
 						"cert authentication is not supported with connection "
 						"manager",
 						false);
@@ -738,12 +739,14 @@ ClientAuthentication(Port *port)
 			break;
 
 		case uaYbTserverKey:
-#ifdef HAVE_UNIX_SOCKETS
+			/* YB_TODO_PG19MERGE: PG19 removed HAVE_UNIX_SOCKETS define (Unix sockets
+			 * are now universally assumed); strip the now-dead guard. */
 			Assert(IsYugaByteEnabled());
 
 			if (YbIsAuthPassthroughInProgress(port))
 			{
-				auth_failed(port, status,
+				/* YB_TODO_PG19MERGE: PG19 added int elevel as the 2nd auth_failed arg. */
+				auth_failed(port, FATAL, status,
 							"YbTserverKey authentication is not supported "
 							"in auth passthrough",
 							false);
@@ -751,9 +754,6 @@ ClientAuthentication(Port *port)
 			}
 
 			status = CheckYbTserverKeyAuth(port, &logdetail);
-#else
-			Assert(false);
-#endif
 			break;
 
 		case uaPAM:
@@ -868,7 +868,8 @@ ClientAuthentication(Port *port)
 			if (roleid != InvalidOid && status != STATUS_EOF)
 				profile_is_disabled =
 					YbMaybeIncFailedAttemptsAndDisableProfile(roleid);
-			auth_failed(port, status, logdetail, profile_is_disabled);
+			/* YB_TODO_PG19MERGE: PG19 added int elevel as the 2nd auth_failed arg. */
+			auth_failed(port, FATAL, status, logdetail, profile_is_disabled);
 		}
 		return;
 	}

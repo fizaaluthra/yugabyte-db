@@ -2119,8 +2119,9 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				Assert(list_length(rcexpr->opfamilies) == nopers);
 				Assert(list_length(rcexpr->inputcollids) == nopers);
 
+				/* YB_TODO_PG19MERGE: RowCompareExpr.rctype/ROWCOMPARE_EQ renamed to cmptype/COMPARE_EQ (unified with cmptype.h). */
 				bool		yb_is_for_row_in = (IsYugaByteEnabled() &&
-												rcexpr->rctype == ROWCOMPARE_EQ);
+												rcexpr->cmptype == COMPARE_EQ);
 
 				if (yb_is_for_row_in)
 					Assert(IsA(rcexpr->rargs, ArrayExpr));

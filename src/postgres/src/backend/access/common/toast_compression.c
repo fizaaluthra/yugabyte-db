@@ -43,7 +43,7 @@ pglz_compress_datum(const varlena *value)
 				len;
 	varlena    *tmp = NULL;
 
-	valsize = VARSIZE_ANY_EXHDR(DatumGetPointer(value));
+	valsize = VARSIZE_ANY_EXHDR(value);
 
 	/*
 	 * No point in wasting a palloc cycle if value size is outside the allowed

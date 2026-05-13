@@ -518,6 +518,25 @@ ybcinbeginscan(Relation rel, int nkeys, int norderbys)
 }
 
 /*
+ * yb_estimate_parallel_size_am
+ *
+ * Adapter that matches the PG19 amestimateparallelscan callback signature
+ * (Relation, int, int). The parallel-scan size for YB doesn't depend on the
+ * index relation or key counts (yet), so just delegate to the existing
+ * yb_estimate_parallel_size(), which is still called directly by the seq scan
+ * path in nodeYbSeqscan.c. PG commit 92fe23d93aa3bbbc40fca669cabc4a4d7975e327
+ * added the parameters as part of nbtree skip scan support.
+ */
+static Size
+yb_estimate_parallel_size_am(Relation indexRelation, int nkeys, int norderbys)
+{
+	(void) indexRelation;
+	(void) nkeys;
+	(void) norderbys;
+	return yb_estimate_parallel_size();
+}
+
+/*
  * ybcinparallel_prepare
  *
  * Prepare the YB parallel scan state to fetch the key ranges from DocDB:
@@ -533,7 +552,7 @@ ybcinparallel_prepare(IndexScanDesc scan)
 	ParallelIndexScanDesc target = scan->parallel_scan;
 	ScanDirection direction = ForwardScanDirection;
 
-	pscan = (YBParallelPartitionKeys) OffsetToPointer(target, target->ps_offset);
+	pscan = (YBParallelPartitionKeys) OffsetToPointer(target, target->ps_offset_am);
 	Relation	rel = scan->indexRelation;
 
 	/* If scan is by the PK, use the main relation instead */
@@ -743,8 +762,8 @@ static void
 ybcinbindschema(YbcPgStatement handle,
 				struct IndexInfo *indexInfo,
 				TupleDesc indexTupleDesc,
-				int16 *coloptions,
-				Oid *opclassOids,
+				const int16 *coloptions,
+				const Oid *opclassOids,
 				Datum reloptions)
 {
 	YBCBindCreateIndexColumns(handle,
@@ -803,7 +822,7 @@ ybcinhandler(PG_FUNCTION_ARGS)
 	amroutine->ammarkpos = NULL;	/* TODO: support mark/restore pos with
 									 * ordering */
 	amroutine->amrestrpos = NULL;
-	amroutine->amestimateparallelscan = yb_estimate_parallel_size;
+	amroutine->amestimateparallelscan = yb_estimate_parallel_size_am;
 	amroutine->aminitparallelscan = yb_init_partition_key_data;
 	amroutine->amparallelrescan = ybcinparallelrescan;
 	amroutine->yb_amisforybrelation = true;

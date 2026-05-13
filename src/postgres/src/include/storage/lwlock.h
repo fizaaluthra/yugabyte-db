@@ -169,17 +169,6 @@ typedef enum BuiltinTrancheIds
 #undef PG_LWLOCK
 #undef PG_LWLOCKTRANCHE
 
-	/*
-	 * YB_TODO_PG19MERGE: these YB tranches should be moved to lwlocklist.h
-	 * and corresponding entries added to wait_event_names.txt under the
-	 * WaitEventLWLock section (the generator cross-checks both files).
-	 */
-	LWTRANCHE_YB_ASH_CIRCULAR_BUFFER,
-	LWTRANCHE_YB_ASH_METADATA,
-	LWTRANCHE_YB_QUERY_DIAGNOSTICS,
-	LWTRANCHE_YB_QUERY_DIAGNOSTICS_CIRCULAR_BUFFER,
-	LWTRANCHE_YB_TERMINATED_QUERIES,
-
 	LWTRANCHE_FIRST_USER_DEFINED,
 }			BuiltinTrancheIds;
 

@@ -25,6 +25,10 @@
 
 #include "postgres.h"
 
+/* YB_TODO_PG19MERGE: PG19 collapsed ReorderBufferTupleBuf into HeapTuple.
+ * ReorderBufferGetChange -> ReorderBufferAllocChange; ReorderBufferGetTupleBuf -> ReorderBufferAllocTupleBuf (returns HeapTuple, takes raw t_len).
+ * Mechanical rewrites below; YB virtual WAL decoder logic should be re-audited. */
+
 #include <inttypes.h>
 
 #include "access/xact.h"
@@ -144,9 +148,9 @@ static void
 YBDecodeInsert(LogicalDecodingContext *ctx, XLogReaderState *record)
 {
 	const YbVirtualWalRecord *yb_record = record->yb_virtual_wal_record;
-	ReorderBufferChange *change = ReorderBufferGetChange(ctx->reorder);
+	ReorderBufferChange *change = ReorderBufferAllocChange(ctx->reorder);
 	HeapTuple	tuple;
-	ReorderBufferTupleBuf *tuple_buf;
+	HeapTuple tuple_buf;
 
 	Assert(ctx->reader->ReadRecPtr == yb_record->lsn);
 
@@ -170,8 +174,8 @@ YBDecodeInsert(LogicalDecodingContext *ctx, XLogReaderState *record)
 	 */
 	tuple = YBGetHeapTuplesForRecord(yb_record);
 	tuple_buf =
-		ReorderBufferGetTupleBuf(ctx->reorder, tuple->t_len + HEAPTUPLESIZE);
-	yb_heap_copytuple_with_tuple(tuple, &tuple_buf->tuple);
+		ReorderBufferAllocTupleBuf(ctx->reorder, tuple->t_len);
+	yb_heap_copytuple_with_tuple(tuple, tuple_buf);
 	pfree(tuple);
 
 	change->data.tp.newtuple = tuple_buf;
@@ -195,14 +199,14 @@ static void
 YBDecodeUpdate(LogicalDecodingContext *ctx, XLogReaderState *record)
 {
 	const YbVirtualWalRecord *yb_record = record->yb_virtual_wal_record;
-	ReorderBufferChange *change = ReorderBufferGetChange(ctx->reorder);
+	ReorderBufferChange *change = ReorderBufferAllocChange(ctx->reorder);
 	Relation	relation;
 	TupleDesc	tupdesc;
 	int			nattrs;
 	HeapTuple	after_op_tuple;
 	HeapTuple	before_op_tuple;
-	ReorderBufferTupleBuf *after_op_tuple_buf;
-	ReorderBufferTupleBuf *before_op_tuple_buf;
+	HeapTuple after_op_tuple_buf;
+	HeapTuple before_op_tuple_buf;
 	bool	   *before_op_is_omitted = NULL;
 	bool	   *after_op_is_omitted = NULL;
 	bool		should_handle_omitted_case;
@@ -290,13 +294,12 @@ YBDecodeUpdate(LogicalDecodingContext *ctx, XLogReaderState *record)
 	after_op_tuple =
 		heap_form_tuple(tupdesc, after_op_datums, after_op_is_nulls);
 	after_op_tuple_buf =
-		ReorderBufferGetTupleBuf(ctx->reorder,
-								 after_op_tuple->t_len + HEAPTUPLESIZE);
-	yb_heap_copytuple_with_tuple(after_op_tuple, &after_op_tuple_buf->tuple);
+		ReorderBufferAllocTupleBuf(ctx->reorder,
+								 after_op_tuple->t_len);
+	yb_heap_copytuple_with_tuple(after_op_tuple, after_op_tuple_buf);
 	pfree(after_op_tuple);
-	after_op_tuple_buf->yb_is_omitted = after_op_is_omitted;
-	after_op_tuple_buf->yb_is_omitted_size =
-		(should_handle_omitted_case) ? nattrs : 0;
+	/* YB_TODO_PG19MERGE: yb_is_omitted re-homed on HeapTupleData */ after_op_tuple_buf->yb_is_omitted = after_op_is_omitted;
+	/* YB_TODO_PG19MERGE: yb_is_omitted re-homed on HeapTupleData */ after_op_tuple_buf->yb_is_omitted_size = (should_handle_omitted_case) ? nattrs : 0;
 
 	/*
 	 * In YB, the primary key updates are sent as DELETE + INSERT. So the only
@@ -309,14 +312,13 @@ YBDecodeUpdate(LogicalDecodingContext *ctx, XLogReaderState *record)
 		before_op_tuple =
 			heap_form_tuple(tupdesc, before_op_datums, before_op_is_nulls);
 		before_op_tuple_buf =
-			ReorderBufferGetTupleBuf(ctx->reorder,
-									 before_op_tuple->t_len + HEAPTUPLESIZE);
+			ReorderBufferAllocTupleBuf(ctx->reorder,
+									 before_op_tuple->t_len);
 		yb_heap_copytuple_with_tuple(before_op_tuple,
-									 &before_op_tuple_buf->tuple);
+									 before_op_tuple_buf);
 		pfree(before_op_tuple);
-		before_op_tuple_buf->yb_is_omitted = before_op_is_omitted;
-		before_op_tuple_buf->yb_is_omitted_size =
-			(should_handle_omitted_case) ? nattrs : 0;
+		/* YB_TODO_PG19MERGE: yb_is_omitted re-homed on HeapTupleData */ before_op_tuple_buf->yb_is_omitted = before_op_is_omitted;
+		/* YB_TODO_PG19MERGE: yb_is_omitted re-homed on HeapTupleData */ before_op_tuple_buf->yb_is_omitted_size = (should_handle_omitted_case) ? nattrs : 0;
 	}
 	else
 	{
@@ -325,12 +327,12 @@ YBDecodeUpdate(LogicalDecodingContext *ctx, XLogReaderState *record)
 			pfree(before_op_is_omitted);
 	}
 
-	if (log_min_messages <= DEBUG2)
+	if (log_min_messages[MyBackendType] <= DEBUG2)
 	{
 		const char *new_tuple_string;
 
 		new_tuple_string =
-			YbHeapTupleToStringWithIsOmitted(&after_op_tuple_buf->tuple,
+			YbHeapTupleToStringWithIsOmitted(after_op_tuple_buf,
 											 tupdesc,
 											 after_op_is_omitted);
 
@@ -339,7 +341,7 @@ YBDecodeUpdate(LogicalDecodingContext *ctx, XLogReaderState *record)
 			const char *old_tuple_string;
 
 			old_tuple_string =
-				YbHeapTupleToStringWithIsOmitted(&before_op_tuple_buf->tuple,
+				YbHeapTupleToStringWithIsOmitted(before_op_tuple_buf,
 												 tupdesc,
 												 before_op_is_omitted);
 			elog(DEBUG2,
@@ -373,9 +375,9 @@ static void
 YBDecodeDelete(LogicalDecodingContext *ctx, XLogReaderState *record)
 {
 	const YbVirtualWalRecord *yb_record = record->yb_virtual_wal_record;
-	ReorderBufferChange *change = ReorderBufferGetChange(ctx->reorder);
+	ReorderBufferChange *change = ReorderBufferAllocChange(ctx->reorder);
 	HeapTuple	tuple;
-	ReorderBufferTupleBuf *tuple_buf;
+	HeapTuple tuple_buf;
 
 	Assert(ctx->reader->ReadRecPtr == yb_record->lsn);
 
@@ -388,8 +390,8 @@ YBDecodeDelete(LogicalDecodingContext *ctx, XLogReaderState *record)
 	/* See the comment in YBDecodeInsert on why we create tuples twice. */
 	tuple = YBGetHeapTuplesForRecord(yb_record);
 	tuple_buf =
-		ReorderBufferGetTupleBuf(ctx->reorder, tuple->t_len + HEAPTUPLESIZE);
-	yb_heap_copytuple_with_tuple(tuple, &tuple_buf->tuple);
+		ReorderBufferAllocTupleBuf(ctx->reorder, tuple->t_len);
+	yb_heap_copytuple_with_tuple(tuple, tuple_buf);
 	pfree(tuple);
 
 	change->data.tp.newtuple = NULL;
@@ -424,16 +426,16 @@ YBDecodeCommit(LogicalDecodingContext *ctx, XLogReaderState *record)
 		 * subtransactions.
 		 */
 		elog(DEBUG1,
-			 "YBDecodeCommit: Ignoring txn %d with commit_lsn = %lu as "
-			 "yb_start_decoding_at = %lu.",
+			 "YBDecodeCommit: Ignoring txn %d with commit_lsn = " UINT64_FORMAT " as "
+			 "yb_start_decoding_at = " UINT64_FORMAT ".",
 			 yb_record->xid, commit_lsn, ctx->yb_start_decoding_at);
 		ReorderBufferForget(ctx->reorder, yb_record->xid, commit_lsn);
 		return;
 	}
 
 	elog(DEBUG1,
-		 "Going to stream transaction: %d with commit_lsn: %lu and "
-		 "end_lsn: %lu",
+		 "Going to stream transaction: %d with commit_lsn: " UINT64_FORMAT " and "
+		 "end_lsn: " UINT64_FORMAT "",
 		 yb_record->xid, commit_lsn, end_lsn);
 
 	ReorderBufferCommit(ctx->reorder, yb_record->xid, commit_lsn, end_lsn,
@@ -441,8 +443,8 @@ YBDecodeCommit(LogicalDecodingContext *ctx, XLogReaderState *record)
 						origin_lsn);
 
 	elog(DEBUG1,
-		 "Successfully streamed transaction: %d with commit_lsn: %lu and "
-		 "end_lsn: %lu",
+		 "Successfully streamed transaction: %d with commit_lsn: " UINT64_FORMAT " and "
+		 "end_lsn: " UINT64_FORMAT "",
 		 yb_record->xid, commit_lsn, end_lsn);
 }
 
@@ -498,7 +500,7 @@ YBGetHeapTuplesForRecord(const YbVirtualWalRecord *yb_record)
 	}
 
 	tuple = heap_form_tuple(tupdesc, datums, is_nulls);
-	if (log_min_messages <= DEBUG2)
+	if (log_min_messages[MyBackendType] <= DEBUG2)
 	{
 		const char *tuple_string = YbHeapTupleToStringWithIsOmitted(tuple,
 																	tupdesc,
@@ -530,10 +532,10 @@ YBFindAttributeIndexInDescriptor(TupleDesc tupdesc, const char *column_name)
 
 	for (attr_idx = 0; attr_idx < tupdesc->natts; attr_idx++)
 	{
-		if (tupdesc->attrs[attr_idx].attisdropped)
+		if (TupleDescAttr(tupdesc, attr_idx)->attisdropped)
 			continue;
 
-		if (!strcmp(tupdesc->attrs[attr_idx].attname.data, column_name))
+		if (!strcmp(TupleDescAttr(tupdesc, attr_idx)->attname.data, column_name))
 			return attr_idx;
 	}
 
@@ -618,16 +620,16 @@ YBLogTupleDescIfRequested(const YbVirtualWalRecord *yb_record,
 						  TupleDesc tupdesc)
 {
 	/* Log tuple descriptor for DEBUG2 onwards. */
-	if (log_min_messages <= DEBUG2)
+	if (log_min_messages[MyBackendType] <= DEBUG2)
 	{
 		elog(DEBUG2, "Printing tuple descriptor for relation %d\n",
 			 yb_record->table_oid);
 		for (int attr_idx = 0; attr_idx < tupdesc->natts; attr_idx++)
 		{
 			elog(DEBUG2, "Col %d: name = %s, dropped = %d, type = %d\n",
-				 attr_idx, tupdesc->attrs[attr_idx].attname.data,
-				 tupdesc->attrs[attr_idx].attisdropped,
-				 tupdesc->attrs[attr_idx].atttypid);
+				 attr_idx, TupleDescAttr(tupdesc, attr_idx)->attname.data,
+				 TupleDescAttr(tupdesc, attr_idx)->attisdropped,
+				 TupleDescAttr(tupdesc, attr_idx)->atttypid);
 		}
 	}
 }

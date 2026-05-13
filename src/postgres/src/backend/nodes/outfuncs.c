@@ -790,7 +790,32 @@ _outYbBatchedNestLoop(StringInfo str, const YbBatchedNestLoop *node)
 {
 	WRITE_NODE_TYPE("YBBATCHEDNESTLOOP");
 
-	_outJoinPlanInfo(str, (const Join *) node);
+	/* YB_TODO_PG19MERGE: PG19 removed _outJoinPlanInfo; gen_node_support.pl
+	 * now inlines parent-class fields. Mirror _outNestLoop here. */
+	WRITE_INT_FIELD(nl.join.plan.disabled_nodes);
+	WRITE_FLOAT_FIELD(nl.join.plan.startup_cost);
+	WRITE_FLOAT_FIELD(nl.join.plan.total_cost);
+	WRITE_FLOAT_FIELD(nl.join.plan.plan_rows);
+	WRITE_INT_FIELD(nl.join.plan.plan_width);
+	WRITE_BOOL_FIELD(nl.join.plan.parallel_aware);
+	WRITE_BOOL_FIELD(nl.join.plan.parallel_safe);
+	WRITE_BOOL_FIELD(nl.join.plan.async_capable);
+	WRITE_INT_FIELD(nl.join.plan.plan_node_id);
+	WRITE_NODE_FIELD(nl.join.plan.targetlist);
+	WRITE_NODE_FIELD(nl.join.plan.qual);
+	WRITE_NODE_FIELD(nl.join.plan.lefttree);
+	WRITE_NODE_FIELD(nl.join.plan.righttree);
+	WRITE_NODE_FIELD(nl.join.plan.initPlan);
+	WRITE_BITMAPSET_FIELD(nl.join.plan.extParam);
+	WRITE_BITMAPSET_FIELD(nl.join.plan.allParam);
+	WRITE_STRING_FIELD(nl.join.plan.ybHintAlias);
+	WRITE_UINT_FIELD(nl.join.plan.ybUniqueId);
+	WRITE_STRING_FIELD(nl.join.plan.ybInheritedHintAlias);
+	WRITE_BOOL_FIELD(nl.join.plan.ybIsHinted);
+	WRITE_BOOL_FIELD(nl.join.plan.ybHasHintedUid);
+	WRITE_ENUM_FIELD(nl.join.jointype, JoinType);
+	WRITE_BOOL_FIELD(nl.join.inner_unique);
+	WRITE_NODE_FIELD(nl.join.joinqual);
 	WRITE_NODE_FIELD(nl.nestParams);
 	WRITE_INT_FIELD(num_hashClauseInfos);
 	appendStringInfoString(str, " :hashOps");

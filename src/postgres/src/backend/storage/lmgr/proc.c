@@ -2178,3 +2178,53 @@ BecomeLockGroupMember(PGPROC *leader, int pid)
 
 	return ok;
 }
+
+/*
+ * YB_TODO_PG19MERGE: non-inline helpers for the YB spinlock-held counter.
+ *
+ * These used to live inline in storage/spin.h, but PG19's PGPROC gained a
+ * BackendType field whose type is in miscadmin.h, which combined with YB's
+ * `#include "storage/proc.h"` in miscadmin.h ("for MyProc") created an
+ * include cycle. Moved here so spin.h no longer has to pull in proc.h /
+ * miscadmin.h. Cost: a real function call per SpinLockAcquire /
+ * SpinLockRelease (spinlocks are hot - buffer headers, ProcArrayLock fast
+ * path, etc.). Worth revisiting with a shared-memory int array indexed by
+ * MyProcNumber, declared in a header that spin.h can safely include, so we
+ * can restore the inline fast path.
+ */
+void
+YbSpinLockTrackAcquire(void)
+{
+	if (IsUnderPostmaster && MyProc)
+		MyProc->ybSpinLocksAcquired++;
+}
+
+void
+YbSpinLockTrackRelease(void)
+{
+	if (IsUnderPostmaster && MyProc && MyProc->ybSpinLocksAcquired >= 1)
+		MyProc->ybSpinLocksAcquired--;
+}
+
+/*
+ * YB_TODO_PG19MERGE: companion helpers for the START_CRIT_SECTION /
+ * END_CRIT_SECTION macros in miscadmin.h. Same motivation as
+ * YbSpinLockTrack{Acquire,Release} above - the YB body that touches
+ * MyProc->ybEnteredCriticalSection used to be inline in the macros, which
+ * forced miscadmin.h to pull in proc.h and created an include cycle once
+ * PG19's PGPROC gained a BackendType field. Moved off the macros so
+ * miscadmin.h no longer needs proc.h. Same perf cost / same long-term fix.
+ */
+void
+YbEnterCriticalSection(void)
+{
+	if (MyProc)
+		MyProc->ybEnteredCriticalSection = true;
+}
+
+void
+YbExitCriticalSection(void)
+{
+	if (MyProc)
+		MyProc->ybEnteredCriticalSection = false;
+}

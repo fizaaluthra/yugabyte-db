@@ -1924,9 +1924,10 @@ pg_bindtextdomain(const char *domain)
 void
 YbSetUserContext(const Oid roleid, const bool is_superuser, const char *rname)
 {
+	/* YB_TODO_PG19MERGE: PG19 removed AuthenticatedUserIsSuperuser;
+	 * the superuser status is now derived via has_privs_of_role / role_is_superuser. */
 	/* change the auth user */
 	AuthenticatedUserId = roleid;
-	AuthenticatedUserIsSuperuser = is_superuser;
 
 	SetSessionUserId(roleid, is_superuser);
 

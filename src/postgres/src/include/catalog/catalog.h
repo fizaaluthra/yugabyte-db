@@ -29,7 +29,13 @@
  * If you increment it, make sure you didn't forget to add a new SQL migration
  * (see pg_yb_migration.dat and src/yb/yql/pgwrapper/ysql_migrations/README.md)
  */
-#define YB_LAST_USED_OID 8113
+/*
+ * YB_TODO_PG19MERGE: PG19 added GRAPHIDOID = 8113 (PROPGRAPH support), which
+ * collided with the previous value of YB_LAST_USED_OID (8113). YB's actual
+ * highest-used OID is already 8762; this sentinel was stale. Bumped past
+ * current YB OID usage. Reassess proper value during merge review.
+ */
+#define YB_LAST_USED_OID 8800
 
 extern bool IsSystemRelation(Relation relation);
 extern bool IsToastRelation(Relation relation);

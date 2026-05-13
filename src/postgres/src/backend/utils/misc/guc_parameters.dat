@@ -1974,7 +1974,6 @@
   boot_val => '100',
   min => '1',
   max => 'MAX_BACKENDS',
-  check_hook => 'check_maxconnections',
   show_hook => 'yb_show_maxconnections', # YB
 },
 

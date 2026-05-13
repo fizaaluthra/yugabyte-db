@@ -1009,7 +1009,8 @@ EventTriggerOnLogin(void)
 				 * that avoids possible waiting on the row-level lock. Second,
 				 * that avoids dealing with TOAST.
 				 */
-				systable_inplace_update_finish(state, tuple);
+				systable_inplace_update_finish(state, tuple,
+											   false /* yb_shared_update */ );
 			}
 			else
 				systable_inplace_update_cancel(state);

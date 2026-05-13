@@ -483,6 +483,9 @@ static bool StartBackgroundWorker(RegisteredBgWorker *rw);
 static void InitPostmasterDeathWatchHandle(void);
 
 /* YB declarations */
+/* YB_TODO_PG19MERGE: definition + only caller currently #if 0'd pending port
+ * of PG19's PMChild-slot reap logic; silence unused warning. */
+pg_attribute_unused()
 static bool CleanupKilledProcess(PGPROC *proc);
 
 #ifdef WIN32
@@ -1770,8 +1773,10 @@ ServerLoop(void)
 	ConfigurePostmasterWaitSet(true);
 	last_lockfile_recheck_time = last_touch_time = time(NULL);
 
+	/* YB_TODO_PG19MERGE: only caller is currently under #if 0; silence
+	 * unused-variable while the STDIN-close detection port lands. */
 #ifdef __APPLE__
-	bool		yb_enabled = YBIsEnabledInPostgresEnvVar();
+	pg_attribute_unused() bool yb_enabled = YBIsEnabledInPostgresEnvVar();
 #endif
 
 #ifdef __linux__
@@ -3111,7 +3116,7 @@ process_pm_child_exit(void)
 			 * ReportBackgroundWorkerExit seems like it should do the trick, there's complexity
 			 * caused by latches.
 			 */
-			if (proc->isBackgroundWorker)
+			if (proc->backendType == B_BG_WORKER)
 			{
 				YbCrashInUnmanageableState = true;
 				ereport(WARNING,

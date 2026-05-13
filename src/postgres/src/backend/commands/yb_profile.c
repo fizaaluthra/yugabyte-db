@@ -86,7 +86,8 @@ IsProfileHandlingRequired(UserAuth auth_method)
 		case uaBSD:
 		case uaLDAP:
 		case uaCert:
-		case uaRADIUS:
+		case uaOAuth:
+		/* YB_TODO_PG19MERGE: uaRADIUS removed by PG commit a1643d40b30 ("Remove RADIUS support."). */
 		case uaYbJWT:
 			return true;
 	}

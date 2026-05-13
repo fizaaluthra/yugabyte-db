@@ -210,7 +210,7 @@ tuplesort_begin_heap(TupleDesc tupDesc,
 	MemoryContext oldcontext;
 	int			i;
 
-	state->yb_sort_type = HEAP_SORT;
+	base->yb_sort_type = HEAP_SORT;
 
 	oldcontext = MemoryContextSwitchTo(base->maincontext);
 
@@ -286,7 +286,7 @@ tuplesort_begin_cluster(TupleDesc tupDesc,
 	TuplesortClusterArg *arg;
 	int			i;
 
-	state->yb_sort_type = CLUSTER_SORT;
+	base->yb_sort_type = CLUSTER_SORT;
 
 	Assert(indexRel->rd_rel->relam == BTREE_AM_OID ||
 		   indexRel->rd_rel->relam == LSM_AM_OID);
@@ -398,7 +398,7 @@ tuplesort_begin_index_btree(Relation heapRel,
 	MemoryContext oldcontext;
 	int			i;
 
-	state->yb_sort_type = INDEX_SORT;
+	base->yb_sort_type = INDEX_SORT;
 
 	oldcontext = MemoryContextSwitchTo(base->maincontext);
 	arg = palloc_object(TuplesortIndexBTreeArg);
@@ -481,7 +481,7 @@ tuplesort_begin_index_hash(Relation heapRel,
 	MemoryContext oldcontext;
 	TuplesortIndexHashArg *arg;
 
-	state->yb_sort_type = INDEX_SORT;
+	base->yb_sort_type = INDEX_SORT;
 
 	oldcontext = MemoryContextSwitchTo(base->maincontext);
 	arg = palloc_object(TuplesortIndexHashArg);
@@ -532,7 +532,7 @@ tuplesort_begin_index_gist(Relation heapRel,
 	TuplesortIndexBTreeArg *arg;
 	int			i;
 
-	state->yb_sort_type = INDEX_SORT;
+	base->yb_sort_type = INDEX_SORT;
 
 	oldcontext = MemoryContextSwitchTo(base->maincontext);
 	arg = palloc_object(TuplesortIndexBTreeArg);
@@ -709,7 +709,7 @@ tuplesort_begin_datum(Oid datumType, Oid sortOperator, Oid sortCollation,
 	int16		typlen;
 	bool		typbyval;
 
-	state->yb_sort_type = DATUM_SORT;
+	base->yb_sort_type = DATUM_SORT;
 
 	oldcontext = MemoryContextSwitchTo(base->maincontext);
 	arg = palloc_object(TuplesortDatumArg);

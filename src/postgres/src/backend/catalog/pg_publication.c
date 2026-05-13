@@ -20,6 +20,7 @@
 #include "access/tableam.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
+#include "catalog/index.h"			/* for YBRelationHasPrimaryKey */
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/objectaddress.h"
@@ -53,9 +54,6 @@ typedef struct
 } published_rel;
 
 static Datum yb_pg_relation_is_publishable(PG_FUNCTION_ARGS, Oid relid);
-
-static void publication_translate_columns(Relation targetrel, List *columns,
-										  int *natts, AttrNumber **attrs);
 
 /*
  * Check if relation can be in given publication and throws appropriate
@@ -1833,12 +1831,14 @@ yb_pg_get_publications_tables(List *publications, bool *yb_is_pub_all_tables)
 		bool		has_alltables = pub->alltables;
 
 		if (has_alltables)
-			pub_tables = GetAllTablesPublicationRelations(pub->pubviaroot);
+			pub_tables = GetAllPublicationRelations(pub->oid,
+													RELKIND_RELATION,
+													pub->pubviaroot);
 		else
-			pub_tables = GetPublicationRelations(pub->oid,
-												 pub->pubviaroot ?
-												 PUBLICATION_PART_ROOT :
-												 PUBLICATION_PART_LEAF);
+			pub_tables = GetIncludedPublicationRelations(pub->oid,
+														 pub->pubviaroot ?
+														 PUBLICATION_PART_ROOT :
+														 PUBLICATION_PART_LEAF);
 
 		foreach(lc_tables, pub_tables)
 		{

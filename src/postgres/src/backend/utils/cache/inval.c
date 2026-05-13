@@ -1391,7 +1391,7 @@ YbGetSubGroupInvalMessages(SharedInvalidationMessage **msgs, int subgroup)
 	}
 
 	nummsgs = NumMessagesInSubGroup(&transInvalInfo->PriorCmdInvalidMsgs, subgroup) +
-		NumMessagesInSubGroup(&transInvalInfo->CurrentCmdInvalidMsgs, subgroup);
+		NumMessagesInSubGroup(&transInvalInfo->ii.CurrentCmdInvalidMsgs /* YB_TODO_PG19MERGE: CurrentCmdInvalidMsgs moved into nested .ii */, subgroup);
 
 	if (msgs == NULL)
 		return nummsgs;
@@ -1407,7 +1407,7 @@ YbGetSubGroupInvalMessages(SharedInvalidationMessage **msgs, int subgroup)
 										msgs,
 										n * sizeof(SharedInvalidationMessage)),
 								 nmsgs += n));
-	ProcessMessageSubGroupMulti(&transInvalInfo->CurrentCmdInvalidMsgs,
+	ProcessMessageSubGroupMulti(&transInvalInfo->ii.CurrentCmdInvalidMsgs /* YB_TODO_PG19MERGE: CurrentCmdInvalidMsgs moved into nested .ii */,
 								subgroup,
 								(memcpy(msgarray + nmsgs,
 										msgs,
@@ -1464,9 +1464,10 @@ YbLogInvalidationMessages(const SharedInvalidationMessage *msgs, int nmsgs)
 						 msgs[i].sm.yb_sender_pid,
 						 msgs[i].sm.backend_hi,
 						 msgs[i].sm.backend_lo,
-						 msgs[i].sm.rnode.spcNode,
-						 msgs[i].sm.rnode.dbNode,
-						 msgs[i].sm.rnode.relNode);
+						 /* YB_TODO_PG19MERGE: rnode -> rlocator; spcNode/dbNode/relNode -> spcOid/dbOid/relNumber */
+						 msgs[i].sm.rlocator.spcOid,
+						 msgs[i].sm.rlocator.dbOid,
+						 msgs[i].sm.rlocator.relNumber);
 					break;
 				case SHAREDINVALRELMAP_ID:	/* -4 */
 					elog(DEBUG1, "msgs[%d]: id=%d yb_version=%d yb_sender_pid=%d dbId=%u\n",
@@ -1648,7 +1649,7 @@ AtEOXact_Inval(bool isCommit)
 		if (IsYugaByteEnabled())
 		{
 			AppendInvalidationMessages(&transInvalInfo->PriorCmdInvalidMsgs,
-									   &transInvalInfo->CurrentCmdInvalidMsgs);
+									   &transInvalInfo->ii.CurrentCmdInvalidMsgs /* YB_TODO_PG19MERGE: CurrentCmdInvalidMsgs moved into nested .ii */);
 		}
 		ProcessInvalidationMessages(&transInvalInfo->PriorCmdInvalidMsgs,
 									LocalExecuteInvalidationMessage);
@@ -2465,13 +2466,15 @@ YbCheckSharedInvalMessages()
 	static_assert(sizeof(((SharedInvalSmgrMsg *) 0)->yb_sender_pid) == 4, "size mismatch");
 	static_assert(sizeof(((SharedInvalSmgrMsg *) 0)->backend_hi) == 1, "size mismatch");
 	static_assert(sizeof(((SharedInvalSmgrMsg *) 0)->backend_lo) == 2, "size mismatch");
-	static_assert(sizeof(((SharedInvalSmgrMsg *) 0)->rnode) == 12, "size mismatch");
+	/* YB_TODO_PG19MERGE: rnode -> rlocator */
+	static_assert(sizeof(((SharedInvalSmgrMsg *) 0)->rlocator) == 12, "size mismatch");
 	static_assert(offsetof(SharedInvalSmgrMsg, id) == 0, "offset mismatch");
 	static_assert(offsetof(SharedInvalSmgrMsg, yb_version) == 1, "offset mismatch");
 	static_assert(offsetof(SharedInvalSmgrMsg, yb_sender_pid) == 4, "offset mismatch");
 	static_assert(offsetof(SharedInvalSmgrMsg, backend_hi) == 8, "offset mismatch");
 	static_assert(offsetof(SharedInvalSmgrMsg, backend_lo) == 10, "offset mismatch");
-	static_assert(offsetof(SharedInvalSmgrMsg, rnode) == 12, "offset mismatch");
+	/* YB_TODO_PG19MERGE: rnode -> rlocator */
+	static_assert(offsetof(SharedInvalSmgrMsg, rlocator) == 12, "offset mismatch");
 
 	static_assert(sizeof(SharedInvalRelmapMsg) == 12, "size mismatch");
 	static_assert(sizeof(((SharedInvalRelmapMsg *) 0)->id) == 1, "size mismatch");

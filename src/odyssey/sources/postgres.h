@@ -17,6 +17,7 @@
 #define pg_hton32(x) htobe32(x)
 
 #define pg_attribute_noreturn() _NORETURN
+#define pg_nodiscard
 
 #define HIGHBIT (0x80)
 #define IS_HIGHBIT_SET(ch) ((unsigned char)(ch)&HIGHBIT)

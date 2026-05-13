@@ -654,14 +654,14 @@ YbGetExecNodeSpanName(PlanState *node)
 		case T_ExprContext:
 		case T_ProjectionInfo:
 		case T_JunkFilter:
-		case T_OnConflictSetState:
+		/* YB_TODO_PG19MERGE: T_OnConflictSetState renamed to T_OnConflictActionState in PG19 */
 		case T_MergeActionState:
 		case T_ResultRelInfo:
 		case T_EState:
 		case T_TupleTableSlot:
 
 		/* plan nodes (plannodes.h) */
-		case T_Plan:
+		/* YB_TODO_PG19MERGE: T_Plan/T_Scan/T_Join abstract bases removed in PG19 */
 		case T_Result:
 		case T_ProjectSet:
 		case T_ModifyTable:
@@ -670,7 +670,6 @@ YbGetExecNodeSpanName(PlanState *node)
 		case T_RecursiveUnion:
 		case T_BitmapAnd:
 		case T_BitmapOr:
-		case T_Scan:
 		case T_SeqScan:
 		case T_SampleScan:
 		case T_IndexScan:
@@ -690,7 +689,6 @@ YbGetExecNodeSpanName(PlanState *node)
 		case T_WorkTableScan:
 		case T_ForeignScan:
 		case T_CustomScan:
-		case T_Join:
 		case T_NestLoop:
 		case T_MergeJoin:
 		case T_HashJoin:
@@ -717,7 +715,7 @@ YbGetExecNodeSpanName(PlanState *node)
 		case T_PlanInvalItem:
 
 		/* base plan state types */
-		case T_PlanState:
+		/* YB_TODO_PG19MERGE: T_PlanState abstract base removed in PG19 */
 		case T_ScanState:
 		case T_JoinState:
 
@@ -809,6 +807,7 @@ YbGetExecNodeSpanName(PlanState *node)
 		case T_MaterialPath:
 		case T_MemoizePath:
 		case T_UniquePath:
+		/* YB_TODO_PG19MERGE: T_UpperUniquePath merged into T_UniquePath in PG19 */
 		case T_GatherPath:
 		case T_GatherMergePath:
 		case T_ProjectionPath:
@@ -816,7 +815,6 @@ YbGetExecNodeSpanName(PlanState *node)
 		case T_SortPath:
 		case T_IncrementalSortPath:
 		case T_GroupPath:
-		case T_UpperUniquePath:
 		case T_AggPath:
 		case T_GroupingSetsPath:
 		case T_MinMaxAggPath:
@@ -829,7 +827,7 @@ YbGetExecNodeSpanName(PlanState *node)
 		case T_EquivalenceClass:
 		case T_EquivalenceMember:
 		case T_PathKey:
-		case T_PathKeyInfo:
+		/* YB_TODO_PG19MERGE: T_PathKeyInfo removed in PG19 */
 		case T_PathTarget:
 		case T_RestrictInfo:
 		case T_IndexClause:
@@ -884,7 +882,7 @@ YbGetExecNodeSpanName(PlanState *node)
 		case T_GrantRoleStmt:
 		case T_AlterDefaultPrivilegesStmt:
 		case T_ClosePortalStmt:
-		case T_ClusterStmt:
+		/* YB_TODO_PG19MERGE: T_ClusterStmt removed in PG19 */
 		case T_CopyStmt:
 		case T_CreateStmt:
 		case T_DefineStmt:
@@ -1095,6 +1093,11 @@ YbGetExecNodeSpanName(PlanState *node)
 		case T_YbMergeScanInfo:
 		case T_YbMergeScanSaopColInfo:
 		case T_YbSortInfo:
+		/* YB_TODO_PG19MERGE: PG19 adds many new node tags (T_WindowFuncRunCondition,
+		 * T_MergeSupportFunc, T_JsonFormat, etc.). Add a default to silence
+		 * -Wswitch; the explicit case list above documents what this dispatcher
+		 * intends to ignore. */
+		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("unrecognized node type: %d", (int) nodeTag(node))));

@@ -41,6 +41,7 @@
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_database.h"		/* for DatabaseRelationId */
 #include "catalog/objectaccess.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_tablespace.h"
@@ -108,7 +109,7 @@ CreateTableGroup(YbCreateTableGroupStmt *stmt)
 		 * Check that user has create privs on the database to allow creation
 		 * of a new tablegroup.
 		 */
-		aclresult = pg_database_aclcheck(MyDatabaseId, GetUserId(), ACL_CREATE);
+		aclresult = object_aclcheck(DatabaseRelationId, MyDatabaseId, GetUserId(), ACL_CREATE);
 		if (aclresult != ACLCHECK_OK)
 			aclcheck_error(aclresult, OBJECT_DATABASE,
 						   get_database_name(MyDatabaseId));
@@ -571,7 +572,8 @@ AlterTablegroupOwner(const char *grpname, Oid newOwnerId)
 			aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_YBTABLEGROUP, grpname);
 
 		/* Must be able to become new owner */
-		check_is_member_of_role(GetUserId(), newOwnerId);
+		/* YB_TODO_PG19MERGE: check_is_member_of_role renamed to check_can_set_role (PG 3d14e171e9e2236139e8976f3309a588bcc8683b "Add a SET option to the GRANT command"). */
+		check_can_set_role(GetUserId(), newOwnerId);
 
 		memset(repl_null, false, sizeof(repl_null));
 		memset(repl_repl, false, sizeof(repl_repl));

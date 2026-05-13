@@ -54,7 +54,7 @@
 #define YSQL_METRIC_PREFIX "yb_ysqlserver_"
 #define YSQL_LATENCY_METRIC_PREFIX "handler_latency_yb_ysqlserver_SQLProcessor_"
 
-#define NumBackendStatSlots (MaxBackends + NUM_AUXPROCTYPES)
+#define NumBackendStatSlots (MaxBackends + NUM_AUXILIARY_PROCS)
 
 PG_MODULE_MAGIC;
 
@@ -161,7 +161,19 @@ typedef enum YbStatementType
 	CatCacheIdMisses_82,
 	CatCacheIdMisses_83,
 	CatCacheIdMisses_84,
-	CatCacheIdMisses_End = CatCacheIdMisses_84,
+	CatCacheIdMisses_85,
+	CatCacheIdMisses_86,
+	CatCacheIdMisses_87,
+	CatCacheIdMisses_88,
+	CatCacheIdMisses_89,
+	CatCacheIdMisses_90,
+	CatCacheIdMisses_91,
+	CatCacheIdMisses_92,
+	CatCacheIdMisses_93,
+	CatCacheIdMisses_94,
+	/* YB_TODO_PG19MERGE: PG19 grew SysCacheSize to 95 (added EXTENSIONNAME/OID
+	 * and 8 PROPGRAPH catcaches). Extend this list if SysCacheSize grows further. */
+	CatCacheIdMisses_End = CatCacheIdMisses_94,
 	CatCacheTableMisses_Start,
 	CatCacheTableMisses_0 = CatCacheTableMisses_Start,
 	CatCacheTableMisses_1,
@@ -339,7 +351,7 @@ static Size ybpgm_memsize(void);
 static bool isTopLevelStatement(void);
 static void ybpgm_ExecutorStart(QueryDesc *queryDesc, int eflags);
 static void ybpgm_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction,
-							  uint64 count, bool execute_once);
+							  uint64 count);
 static void ybpgm_ExecutorFinish(QueryDesc *queryDesc);
 static void ybpgm_ExecutorEnd(QueryDesc *queryDesc);
 static void ybpgm_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
@@ -733,6 +745,9 @@ pullRpczEntries(void)
 				case STATE_DISABLED:
 					strcpy(rpcz[i].backend_status, "disabled");
 					break;
+				case STATE_STARTING:
+					strcpy(rpcz[i].backend_status, "starting");
+					break;
 				case STATE_UNDEFINED:
 					strcpy(rpcz[i].backend_status, "");
 					break;
@@ -1078,11 +1093,6 @@ ybpgm_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	 *    the nested PORTAL for now.
 	 * 3- ExecutorEnd()
 	 */
-	if (prev_ExecutorStart)
-		prev_ExecutorStart(queryDesc, eflags);
-	else
-		standard_ExecutorStart(queryDesc, eflags);
-
 	/*
 	 * PORTAL run can be nested inside another PORTAL, and we only run metric
 	 * routines for the top level portal statement. The current design of
@@ -1091,31 +1101,30 @@ ybpgm_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	 * For now, as a workaround, "queryDesc" attribute is used as an indicator
 	 * for logging metric. Whenever "time value" is not null, it is logged at
 	 * the end of a portal run.
-	 * - When starting, we allocate "queryDesc->totaltime".
-	 * - When ending, we check for "queryDesc->totaltime". If not null, its
-	 *   metric is log.
+	 *
+	 * In PG19 the executor allocates queryDesc->query_instr automatically based
+	 * on queryDesc->query_instr_options; extensions request it BEFORE
+	 * standard_ExecutorStart instead of allocating after.
 	 */
-	if (isTopLevelStatement() && !queryDesc->totaltime)
-	{
-		MemoryContext oldcxt;
+	if (isTopLevelStatement())
+		queryDesc->query_instr_options |= INSTRUMENT_TIMER;
 
-		oldcxt = MemoryContextSwitchTo(queryDesc->estate->es_query_cxt);
-		queryDesc->totaltime = InstrAlloc(1, INSTRUMENT_TIMER, false);
-		MemoryContextSwitchTo(oldcxt);
-	}
+	if (prev_ExecutorStart)
+		prev_ExecutorStart(queryDesc, eflags);
+	else
+		standard_ExecutorStart(queryDesc, eflags);
 }
 
 static void
-ybpgm_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count,
-				  bool execute_once)
+ybpgm_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count)
 {
 	IncStatementNestingLevel();
 	PG_TRY();
 	{
 		if (prev_ExecutorRun)
-			prev_ExecutorRun(queryDesc, direction, count, execute_once);
+			prev_ExecutorRun(queryDesc, direction, count);
 		else
-			standard_ExecutorRun(queryDesc, direction, count, execute_once);
+			standard_ExecutorRun(queryDesc, direction, count);
 		DecStatementNestingLevel();
 	}
 	PG_CATCH();
@@ -1179,14 +1188,13 @@ ybpgm_ExecutorEnd(QueryDesc *queryDesc)
 	 *   For example, CURSOR execution can have many nested portal and nested
 	 *   statement. The metric for all of the nested items are not processed.
 	 * - However, it's difficult to know the starting and ending point of a
-	 *   statement, we check for not null "queryDesc->totaltime".
+	 *   statement, we check for not null "queryDesc->query_instr".
 	 * - The design for this metric module for using global state variables is
 	 *   very flawed, so we use this not-null check for now.
 	 */
-	if (isTopLevelStatement() && queryDesc->totaltime)
+	if (isTopLevelStatement() && queryDesc->query_instr)
 	{
-		InstrEndLoop(queryDesc->totaltime);
-		const uint64_t time = (uint64_t) (queryDesc->totaltime->total * 1000000.0);
+		const uint64_t time = (uint64_t) INSTR_TIME_GET_MICROSEC(queryDesc->query_instr->total);
 		const uint64 rows_count = queryDesc->estate->es_processed;
 
 		ybpgm_Store(type, time, rows_count);

@@ -238,7 +238,8 @@ EnumValuesCreate(Oid enumTypeOid, List *vals)
 		if (slotCount == nslots)
 		{
 			CatalogTuplesMultiInsertWithInfo(pg_enum, slot, slotCount,
-											 indstate);
+											 indstate,
+											 false /* yb_shared_insert */ );
 			slotCount = 0;
 		}
 
@@ -248,7 +249,8 @@ EnumValuesCreate(Oid enumTypeOid, List *vals)
 	/* Insert any tuples left in the buffer */
 	if (slotCount > 0)
 		CatalogTuplesMultiInsertWithInfo(pg_enum, slot, slotCount,
-										 indstate);
+										 indstate,
+										 false /* yb_shared_insert */ );
 
 	/* clean up */
 	pfree(oids);

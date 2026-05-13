@@ -92,8 +92,9 @@ YbBitmapTableNext(YbBitmapTableScanState *node)
 			 */
 			TupleDesc	tupdesc = CreateTemplateTupleDesc(list_length(node->aggrefs));
 
+			/* YB_TODO_PG19MERGE: PG added uint16 flags arg. */
 			ExecInitScanTupleSlot(node->ss.ps.state, &node->ss, tupdesc,
-								  &TTSOpsVirtual);
+								  &TTSOpsVirtual, 0 /* flags */ );
 
 			/* Refresh the local pointer. */
 			slot = node->ss.ss_ScanTupleSlot;
@@ -402,17 +403,8 @@ ExecEndYbBitmapTableScan(YbBitmapTableScanState *node)
 	 */
 	tsdesc = node->ss.ss_currentScanDesc;
 
-	/*
-	 * Free the exprcontext
-	 */
-	ExecFreeExprContext(&node->ss.ps);
-
-	/*
-	 * clear out tuple table slots
-	 */
-	if (node->ss.ps.ps_ResultTupleSlot)
-		ExecClearTuple(node->ss.ps.ps_ResultTupleSlot);
-	ExecClearTuple(node->ss.ss_ScanTupleSlot);
+	/* YB_TODO_PG19MERGE: PG19 removed ExecFreeExprContext; per-node end
+	 * routines no longer free their exprcontext or clear tuple tables. */
 
 	/*
 	 * close down subplans
@@ -500,7 +492,7 @@ ExecInitYbBitmapTableScan(YbBitmapTableScan *node, EState *estate, int eflags)
 	 */
 	ExecInitScanTupleSlot(estate, &scanstate->ss,
 						  RelationGetDescr(currentRelation),
-						  &TTSOpsVirtual);
+						  &TTSOpsVirtual, 0 /* flags */ );
 
 	/*
 	 * Initialize result type and projection.

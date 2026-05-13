@@ -23,6 +23,7 @@
 
 #include "postgres.h"
 
+#include "access/attmap.h"			/* for build_attrmap_by_name */
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
@@ -674,6 +675,7 @@ YBCCreateTable(CreateStmt *stmt, char *tableName, char relkind, TupleDesc desc,
 			Oid			constraintOid;
 
 			attmap = build_attrmap_by_name(RelationGetDescr(rel), RelationGetDescr(parentRel),
+										   false /* missing_ok */ ,
 										   false /* yb_ignore_type_mismatch */ );
 			idxstmt = generateClonedIndexStmt(NULL, idxRel, attmap, &constraintOid);
 
@@ -1118,7 +1120,7 @@ static void
 CreateIndexHandleSplitOptions(YbcPgStatement handle,
 							  TupleDesc desc,
 							  YbOptSplit *split_options,
-							  int16 *coloptions,
+							  const int16 *coloptions,
 							  int numIndexKeyAttrs)
 {
 	/* Address both types of split options */
@@ -1160,7 +1162,7 @@ void
 YBCBindCreateIndexColumns(YbcPgStatement handle,
 						  IndexInfo *indexInfo,
 						  TupleDesc indexTupleDesc,
-						  int16 *coloptions,
+						  const int16 *coloptions,
 						  int numIndexKeyAttrs)
 {
 	for (int i = 0; i < indexTupleDesc->natts; i++)
@@ -1212,7 +1214,7 @@ void
 YBCCreateIndex(const char *indexName,
 			   IndexInfo *indexInfo,
 			   TupleDesc indexTupleDesc,
-			   int16 *coloptions,
+			   const int16 *coloptions,
 			   Datum reloptions,
 			   Oid indexId,
 			   Relation rel,
@@ -1224,7 +1226,7 @@ YBCCreateIndex(const char *indexName,
 			   Oid tablespaceId,
 			   Oid indexRelfileNodeId,
 			   Oid oldRelfileNodeId,
-			   Oid *opclassOids)
+			   const Oid *opclassOids)
 {
 	Oid			namespaceId = RelationGetNamespace(rel);
 	char	   *db_name = get_database_name(YBCGetDatabaseOid(rel));
@@ -1260,8 +1262,8 @@ YBCCreateIndex(const char *indexName,
 									   oldRelfileNodeId,
 									   &handle));
 
-	IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(indexInfo->ii_Am,
-														true);
+	const IndexAmRoutine *amroutine = GetIndexAmRoutineByAmId(indexInfo->ii_Am,
+															  true);
 
 	Assert(amroutine != NULL && amroutine->yb_ambindschema != NULL);
 	amroutine->yb_ambindschema(handle, indexInfo, indexTupleDesc, coloptions,
@@ -1315,29 +1317,38 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 		 * This function was invoked on a child partition table to reflect
 		 * the effects of Alter on its parent.
 		 */
-		switch (cmd->subtype)
+		/*
+		 * YB_TODO_PG19MERGE: PG commit 840ff5f451cd9a391d237fc60894fea7ad82a189
+		 * ("Get rid of recursion-marker values in enum AlterTableType") removed
+		 * the AT_*Recurse enum variants in favor of a `recurse` flag on
+		 * AlterTableCmd. Mechanical translation: the old check "subtype is one
+		 * of the AT_*Recurse variants" becomes "cmd->recurse is true on one of
+		 * those non-recurse subtypes". AT_DropExpression had no _Recurse
+		 * variant historically; preserve that case unchanged. Verify the YB
+		 * partition-recursion logic still does the right thing with the new
+		 * flag (initdb / FK / partition / inheritance paths in particular).
+		 */
+		if (!(cmd->subtype == AT_DropExpression ||
+			  (cmd->recurse &&
+			   (cmd->subtype == AT_AddColumn ||
+				cmd->subtype == AT_DropColumn ||
+				cmd->subtype == AT_AddConstraint ||
+				cmd->subtype == AT_DropConstraint ||
+				cmd->subtype == AT_ValidateConstraint))))
 		{
-			case AT_AddColumnRecurse:
-			case AT_DropColumnRecurse:
-			case AT_AddConstraintRecurse:
-			case AT_DropConstraintRecurse:
-			case AT_ValidateConstraintRecurse:
-			case AT_DropExpression:
-				break;
-			default:
-				/*
-				 * This is not an alter command on a partitioned table that
-				 * needs to trickle down to its child partitions. Nothing to
-				 * do.
-				 */
-				return handles;
+			/*
+			 * This is not an alter command on a partitioned table that
+			 * needs to trickle down to its child partitions. Nothing to
+			 * do.
+			 */
+			return handles;
 		}
 	}
 	switch (cmd->subtype)
 	{
 		case AT_AddColumn:
 		case AT_AddColumnToView:
-		case AT_AddColumnRecurse:
+			/* YB_TODO_PG19MERGE: AT_AddColumnRecurse removed (840ff5f451c); now signalled by cmd->recurse. */
 			{
 				ColumnDef  *colDef = (ColumnDef *) cmd->def;
 				Oid			typeOid;
@@ -1445,7 +1456,7 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 			}
 
 		case AT_DropColumn:
-		case AT_DropColumnRecurse:
+			/* YB_TODO_PG19MERGE: AT_DropColumnRecurse removed (840ff5f451c); now signalled by cmd->recurse. */
 			{
 				HeapTuple	tuple = SearchSysCacheAttName(relationId, cmd->name);
 
@@ -1492,10 +1503,14 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 
 		case AT_AddIndex:
 		case AT_AddConstraint:
-		case AT_AddConstraintRecurse:
 		case AT_AlterColumnType:
 		case AT_DropConstraint:
-		case AT_DropConstraintRecurse:
+			/*
+			 * YB_TODO_PG19MERGE: AT_AddConstraintRecurse / AT_DropConstraintRecurse /
+			 * AT_ValidateConstraintRecurse removed (PG commit 840ff5f451c); now
+			 * signalled by cmd->recurse. The bare AT_* cases above subsume the
+			 * old _Recurse cases here.
+			 */
 		case AT_DropOids:
 		case AT_EnableTrig:
 		case AT_EnableAlwaysTrig:
@@ -1522,7 +1537,6 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 		case AT_DetachPartition:
 		case AT_SetTableSpace:
 		case AT_ValidateConstraint:
-		case AT_ValidateConstraintRecurse:
 		case AT_DropExpression:
 			{
 				Assert(cmd->subtype != AT_DropConstraint);
@@ -1625,7 +1639,8 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 				 * For add foreign key case, assigning the primary key table
 				 * as dependent relation.
 				 */
-				else if (cmd->subtype == AT_AddConstraintRecurse &&
+				/* YB_TODO_PG19MERGE: AT_AddConstraintRecurse -> AT_AddConstraint+cmd->recurse (PG 840ff5f451c). */
+				else if (cmd->subtype == AT_AddConstraint && cmd->recurse &&
 						 ((Constraint *) cmd->def)->contype == CONSTR_FOREIGN)
 				{
 					dependent_rels = lappend(dependent_rels,
@@ -1640,7 +1655,9 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 				 * dependent relation is the same as the parent. For inheritance, foreign key
 				 * constraints do not recurse down to children.
 				 */
-				else if (cmd->subtype == AT_DropConstraintRecurse && !isPartitionOfAlteredTable)
+				/* YB_TODO_PG19MERGE: AT_DropConstraintRecurse -> AT_DropConstraint+cmd->recurse (PG 840ff5f451c). */
+				else if (cmd->subtype == AT_DropConstraint && cmd->recurse &&
+						 !isPartitionOfAlteredTable)
 				{
 					Oid			constraint_oid = get_relation_constraint_oid(relationId,
 																			 cmd->name,
@@ -1713,8 +1730,9 @@ YBCPrepareAlterTableCmd(AlterTableCmd *cmd, Relation rel, List *handles,
 				 * switch block. But, for now, only apply it to ALTER TABLE ...
 				 * ADD PRIMARY KEY/UNIQUE USING INDEX.
 				 */
+				/* YB_TODO_PG19MERGE: AT_AddConstraintRecurse -> AT_AddConstraint+cmd->recurse (PG 840ff5f451c). */
 				if (YBCIsInitDbModeEnvVarSet() &&
-					cmd->subtype == AT_AddConstraintRecurse &&
+					cmd->subtype == AT_AddConstraint && cmd->recurse &&
 					(((Constraint *) cmd->def)->contype == CONSTR_UNIQUE ||
 					 ((Constraint *) cmd->def)->contype ==
 					 CONSTR_PRIMARY) &&

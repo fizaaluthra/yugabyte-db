@@ -38,6 +38,7 @@
 #include "replication/walsender.h"
 #include "storage/fd.h"
 #include "utils/acl.h"
+#include "utils/builtins.h"
 #include "utils/conffiles.h"
 #include "utils/guc.h"
 #include "utils/memutils.h"
@@ -1007,8 +1008,9 @@ yb_tokenize_line(const char *filename,
 	{
 		List	   *current_field;
 
+		/* YB_TODO_PG19MERGE: PG19 next_field_expand takes a depth arg between elevel and err_msg. */
 		current_field = next_field_expand(filename, &lineptr,
-										  elevel, &err_msg);
+										  elevel, 0 /* depth */, &err_msg);
 		/* add field to line, unless we are at EOL or comment start */
 		if (current_field != NIL)
 			current_line = lappend(current_line, current_field);
@@ -2756,12 +2758,15 @@ load_hba(void)
 	tokenize_auth_file(HbaFileName, file, &hba_lines, LOG, 0);
 
 	/* YB: Add hardcoded hba config lines in front of user-defined ones. */
+	/* YB_TODO_PG19MERGE: PG19 made tokenize_auth_file own its line-memory-context
+	 * internally; the previous YB code switched into a `linecxt` exposed by the
+	 * old tokenize_auth_file. Now there's no externally-visible per-file context,
+	 * so we let yb_tokenize_hardcoded allocate in the caller's current memory
+	 * context (matches how tokenize_auth_file leaves its output reachable). */
 	List	   *hba_lines_hardcoded = NIL;
 
-	oldcxt = MemoryContextSwitchTo(linecxt);
 	yb_tokenize_hardcoded(&hba_lines_hardcoded, LOG);
 	hba_lines = list_concat(hba_lines_hardcoded, hba_lines);
-	MemoryContextSwitchTo(oldcxt);
 
 	/* Now parse all the lines */
 	Assert(PostmasterContext);
@@ -3238,7 +3243,7 @@ load_ident(MemoryContext yb_ident_context)
 }
 
 static inline bool
-yb_set_hba_tserver_key(hbaPort *port)
+yb_set_hba_tserver_key(Port *port) /* YB_TODO_PG19MERGE: hbaPort renamed to Port */
 {
 	if (!IsYugaByteEnabled())
 		return false;

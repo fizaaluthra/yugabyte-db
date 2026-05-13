@@ -372,7 +372,9 @@ SlabContextCreate(MemoryContext parent,
 						   name)));
 	}
 
-	YbPgMemAddConsumption(headerSize);
+	/* YB_TODO_PG19MERGE: PG19 dropped the explicit headerSize local; use
+	 * the Slab_CONTEXT_HDRSZ(chunksPerBlock) used for the malloc above. */
+	YbPgMemAddConsumption(Slab_CONTEXT_HDRSZ(chunksPerBlock));
 
 	/*
 	 * Avoid writing code that can fail between here and MemoryContextCreate;
@@ -516,7 +518,8 @@ SlabDelete(MemoryContext context)
 	/* Destroy the vpool -- see notes in aset.c */
 	VALGRIND_DESTROY_MEMPOOL(context);
 
-	size_t		freed_sz = ((SlabContext *) context)->headerSize;
+	/* YB_TODO_PG19MERGE: SlabContext no longer stores headerSize; recompute. */
+	size_t		freed_sz = Slab_CONTEXT_HDRSZ(((SlabContext *) context)->chunksPerBlock);
 
 	/* And free the context header */
 	free(context);

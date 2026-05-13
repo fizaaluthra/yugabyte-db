@@ -33,7 +33,7 @@
 #include "jit/jit.h"
 #include "storage/s_lock.h"
 #include "utils/guc.h"
-#include "utils/queryjumble.h"
+#include "nodes/queryjumble.h"		/* YB_TODO_PG19MERGE: queryjumble.h moved from utils/ to nodes/ */
 #include "utils/timestamp.h"
 
 #define YB_QD_MAX_BIND_VARS_LEN 2048

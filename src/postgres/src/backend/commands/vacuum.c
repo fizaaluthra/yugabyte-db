@@ -503,17 +503,27 @@ vacuum(List *relations, const VacuumParams *params, BufferAccessStrategy bstrate
 	const char *stmttype;
 	volatile bool in_outer_xact,
 				use_own_xacts;
+	/*
+	 * YB_TODO_PG19MERGE: VacuumParams is now passed as `const VacuumParams *`,
+	 * so we can't mutate `params->options` in place. The YB downgrade path
+	 * (VACUUM-no-op, keep ANALYZE) needs a writable copy that lives for the
+	 * rest of the function; hoist it to function scope so a reassignment of
+	 * `params` to point at it remains valid below.
+	 */
+	VacuumParams yb_writable_params;
 
 	/*
 	 * VACUUM currently not supported for Yugabyte.
 	 */
-	if (IsYugabyteEnabled() && params->options & VACOPT_VACUUM)
+	if (IsYugaByteEnabled() && params->options & VACOPT_VACUUM)
 	{
 		ereport(NOTICE,
 				(errmsg("VACUUM is a no-op statement since YugabyteDB performs garbage collection of dead tuples automatically")));
 		if (params->options & VACOPT_ANALYZE)
 		{
-			params->options &= ~VACOPT_VACUUM;
+			yb_writable_params = *params;
+			yb_writable_params.options &= ~VACOPT_VACUUM;
+			params = &yb_writable_params;
 		}
 		else
 		{

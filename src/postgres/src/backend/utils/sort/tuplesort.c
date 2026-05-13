@@ -188,7 +188,8 @@ struct Tuplesortstate
 {
 	TuplesortPublic base;
 	TupSortStatus status;		/* enumerated value as shown above */
-	int			yb_sort_type;	/* YB: sort-type code for distributed tracing */
+	/* YB_TODO_PG19MERGE: yb_sort_type hoisted to TuplesortPublic (base.yb_sort_type)
+	 * so tuplesortvariants.c can write it through the public handle. */
 	bool		bounded;		/* did caller specify a maximum number of
 								 * tuples to return? */
 	bool		boundUsed;		/* true if we made use of a bounded heap */
@@ -594,7 +595,7 @@ tuplesort_begin_common(int workMem, SortCoordinate coordinate, int sortopt)
 	state->base.sortopt = sortopt;
 	state->base.tuples = true;
 	state->abbrevNext = 10;
-	state->yb_sort_type = YB_SORT_UNINITIALIZED;
+	state->base.yb_sort_type = YB_SORT_UNINITIALIZED;
 
 	/*
 	 * workMem is forced to be at least 64KB, the current minimum valid value
@@ -1359,7 +1360,7 @@ tuplesort_performsort(Tuplesortstate *state)
 	}
 
 	if (YBCIsDistTraceActive())
-		YBCDistTraceSetCurrSpanAttrStr("sort.type", yb_sort_type_name(state->yb_sort_type));
+		YBCDistTraceSetCurrSpanAttrStr("sort.type", yb_sort_type_name(state->base.yb_sort_type));
 
 	MemoryContextSwitchTo(oldcontext);
 }

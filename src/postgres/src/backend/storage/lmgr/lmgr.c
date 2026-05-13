@@ -437,7 +437,8 @@ LockRelationIdForSession(LockRelId *relid, LOCKMODE lockmode)
 			elog(FATAL, "unexpected active session lock on relid %d, dbid: %d",
 				 relid->relId, relid->dbId);
 		}
-		if (!LockHeldByMe(&tag, lockmode))
+		/* YB_TODO_PG19MERGE: PG19 added bool orstronger arg. */
+		if (!LockHeldByMe(&tag, lockmode, false /* orstronger */))
 		{
 			elog(FATAL, "expected active txn lock on relid %d, dbid: %d",
 				 relid->relId, relid->dbId);

@@ -197,7 +197,33 @@ _copyYbBatchedNestLoop(const YbBatchedNestLoop *from)
 {
 	YbBatchedNestLoop *newnode = makeNode(YbBatchedNestLoop);
 
-	CopyJoinFields((const Join *) from, (Join *) newnode);
+	/* YB_TODO_PG19MERGE: PG19 removed the CopyJoinFields/CopyPlanFields helpers;
+	 * gen_node_support.pl now inlines the parent-class field copies directly into
+	 * each generated _copyXxx (see _copyNestLoop). Mirror that here. */
+	COPY_SCALAR_FIELD(nl.join.plan.disabled_nodes);
+	COPY_SCALAR_FIELD(nl.join.plan.startup_cost);
+	COPY_SCALAR_FIELD(nl.join.plan.total_cost);
+	COPY_SCALAR_FIELD(nl.join.plan.plan_rows);
+	COPY_SCALAR_FIELD(nl.join.plan.plan_width);
+	COPY_SCALAR_FIELD(nl.join.plan.parallel_aware);
+	COPY_SCALAR_FIELD(nl.join.plan.parallel_safe);
+	COPY_SCALAR_FIELD(nl.join.plan.async_capable);
+	COPY_SCALAR_FIELD(nl.join.plan.plan_node_id);
+	COPY_NODE_FIELD(nl.join.plan.targetlist);
+	COPY_NODE_FIELD(nl.join.plan.qual);
+	COPY_NODE_FIELD(nl.join.plan.lefttree);
+	COPY_NODE_FIELD(nl.join.plan.righttree);
+	COPY_NODE_FIELD(nl.join.plan.initPlan);
+	COPY_BITMAPSET_FIELD(nl.join.plan.extParam);
+	COPY_BITMAPSET_FIELD(nl.join.plan.allParam);
+	COPY_STRING_FIELD(nl.join.plan.ybHintAlias);
+	COPY_SCALAR_FIELD(nl.join.plan.ybUniqueId);
+	COPY_STRING_FIELD(nl.join.plan.ybInheritedHintAlias);
+	COPY_SCALAR_FIELD(nl.join.plan.ybIsHinted);
+	COPY_SCALAR_FIELD(nl.join.plan.ybHasHintedUid);
+	COPY_SCALAR_FIELD(nl.join.jointype);
+	COPY_SCALAR_FIELD(nl.join.inner_unique);
+	COPY_NODE_FIELD(nl.join.joinqual);
 	COPY_NODE_FIELD(nl.nestParams);
 	COPY_SCALAR_FIELD(num_hashClauseInfos);
 	if (from->num_hashClauseInfos > 0)

@@ -3040,7 +3040,7 @@ typedef struct Constraint
  * ----------
  */
 
-typedef enum
+typedef enum YbSplitType
 {
 	NUM_TABLETS = 0,
 	SPLIT_POINTS = 1
@@ -4368,7 +4368,7 @@ typedef struct YbBackfillInfo
 {
 	NodeTag		type;
 	const char *bfinstr;		/* Backfill instruction */
-	uint64_t	read_time;		/* Read time for backfill */
+	uint64		read_time;		/* Read time for backfill */
 	YbRowBounds *row_bounds;	/* Rows to backfill */
 } YbBackfillInfo;
 

@@ -184,4 +184,7 @@ extern void assign_synchronized_standby_slots(const char *newval, void *extra);
 extern bool check_log_min_messages(char **newval, void **extra, GucSource source);
 extern void assign_log_min_messages(const char *newval, void *extra);
 
+/* YB-added show hooks referenced from guc_parameters.dat */
+extern const char *yb_show_maxconnections(void);
+
 #endif							/* GUC_HOOKS_H */

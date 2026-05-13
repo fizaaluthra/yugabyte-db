@@ -628,8 +628,32 @@ _readYbBatchedNestLoop(void)
 {
 	READ_LOCALS(YbBatchedNestLoop);
 
-	ReadCommonJoin(&local_node->nl.join);
-
+	/* YB_TODO_PG19MERGE: PG19 removed ReadCommonJoin; gen_node_support.pl
+	 * now inlines parent-class field reads. Mirror _readNestLoop here. */
+	READ_INT_FIELD(nl.join.plan.disabled_nodes);
+	READ_FLOAT_FIELD(nl.join.plan.startup_cost);
+	READ_FLOAT_FIELD(nl.join.plan.total_cost);
+	READ_FLOAT_FIELD(nl.join.plan.plan_rows);
+	READ_INT_FIELD(nl.join.plan.plan_width);
+	READ_BOOL_FIELD(nl.join.plan.parallel_aware);
+	READ_BOOL_FIELD(nl.join.plan.parallel_safe);
+	READ_BOOL_FIELD(nl.join.plan.async_capable);
+	READ_INT_FIELD(nl.join.plan.plan_node_id);
+	READ_NODE_FIELD(nl.join.plan.targetlist);
+	READ_NODE_FIELD(nl.join.plan.qual);
+	READ_NODE_FIELD(nl.join.plan.lefttree);
+	READ_NODE_FIELD(nl.join.plan.righttree);
+	READ_NODE_FIELD(nl.join.plan.initPlan);
+	READ_BITMAPSET_FIELD(nl.join.plan.extParam);
+	READ_BITMAPSET_FIELD(nl.join.plan.allParam);
+	READ_STRING_FIELD(nl.join.plan.ybHintAlias);
+	READ_UINT_FIELD(nl.join.plan.ybUniqueId);
+	READ_STRING_FIELD(nl.join.plan.ybInheritedHintAlias);
+	READ_BOOL_FIELD(nl.join.plan.ybIsHinted);
+	READ_BOOL_FIELD(nl.join.plan.ybHasHintedUid);
+	READ_ENUM_FIELD(nl.join.jointype, JoinType);
+	READ_BOOL_FIELD(nl.join.inner_unique);
+	READ_NODE_FIELD(nl.join.joinqual);
 	READ_NODE_FIELD(nl.nestParams);
 	READ_INT_FIELD(num_hashClauseInfos);
 	local_node->hashClauseInfos =

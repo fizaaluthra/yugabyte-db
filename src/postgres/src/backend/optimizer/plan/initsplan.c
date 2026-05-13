@@ -4410,15 +4410,21 @@ check_batchable(PlannerInfo *root, RestrictInfo *restrictinfo)
 											   (Expr *) bexpr,
 											   opexpr->opcollid,
 											   opexpr->inputcollid);
+		/* YB_TODO_PG19MERGE: PG19 reshaped make_restrictinfo:
+		 *  dropped outerjoin_delayed (no longer a separate concept),
+		 *  added has_clone/is_clone (PG OJ-aware optimization),
+		 *  renamed nullable_relids -> incompatible_relids,
+		 *  and reordered. RestrictInfo.outerjoin_delayed/nullable_relids fields also gone. */
 		RestrictInfo *batched = make_restrictinfo(root,
 												  batched_op,
 												  restrictinfo->is_pushed_down,
-												  restrictinfo->outerjoin_delayed,
+												  restrictinfo->has_clone,
+												  restrictinfo->is_clone,
 												  false,
 												  restrictinfo->security_level,
 												  restrictinfo->required_relids,
-												  restrictinfo->outer_relids,
-												  restrictinfo->nullable_relids);
+												  restrictinfo->incompatible_relids,
+												  restrictinfo->outer_relids);
 
 		restrictinfo->yb_batched_rinfo =
 			lappend(restrictinfo->yb_batched_rinfo, batched);
@@ -4525,7 +4531,10 @@ yb_substitute_ec_members_mutator(Node *node, void *context)
 
 			if (ec_member != NULL)
 			{
-				ctx->nullable_relids = bms_union(ctx->nullable_relids, ec_member->em_nullable_relids);
+				/* YB_TODO_PG19MERGE: PG19 dropped EquivalenceMember.em_nullable_relids
+				 * (nullable-by-outer-join tracking is now intrinsic to OJ planning).
+				 * Closest replacement: em_relids gives all relids the EM references. */
+				ctx->nullable_relids = bms_union(ctx->nullable_relids, ec_member->em_relids);
 				return (Node *) ec_member->em_expr;
 			}
 
@@ -4591,15 +4600,17 @@ yb_get_clause_restrictinfo(PlannerInfo *root, OpExpr *clause, Relids nullable_re
 	bool		outerjoin_delayed = !bms_is_empty(nullable_relids);
 	bool		is_pushed_down = (bms_num_members(clause_relids) == 1 && !outerjoin_delayed);
 
+	/* YB_TODO_PG19MERGE: see make_restrictinfo signature shift above. */
 	RestrictInfo *rinfo = make_restrictinfo(root,
 											(Expr *) clause,
 											is_pushed_down,
-											outerjoin_delayed,
+											false /* has_clone */,
+											false /* is_clone */,
 											false,
 											root->qual_security_level,
 											clause_relids,
-											NULL,
-											nullable_relids);
+											nullable_relids /* incompatible_relids */,
+											NULL /* outer_relids */);
 
 	check_mergejoinable(rinfo);
 	check_batchable(root, rinfo);

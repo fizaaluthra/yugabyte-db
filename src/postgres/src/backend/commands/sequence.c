@@ -218,7 +218,7 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 												  seqoid,
 												  YbGetCatalogCacheVersion(),
 												  YBIsDBCatalogVersionMode(),
-												  seqdataform.last_value,
+												  last_value,
 												  false /* is_called */ ));
 	}
 	else
@@ -2033,7 +2033,8 @@ init_params(ParseState *pstate, List *options, bool for_identity,
 	}
 
 	Datum		cacheOptionOrLastCache = Int64GetDatumFast(seqform->seqcache);
-	Datum		cacheFlag = Int64GetDatumFast(*YBCGetGFlags()->ysql_sequence_cache_minval);
+	int64		ysql_seq_cache_minval = *YBCGetGFlags()->ysql_sequence_cache_minval;
+	Datum		cacheFlag = Int64GetDatumFast(ysql_seq_cache_minval);
 	Datum		computedCacheValue = (cacheOptionOrLastCache > cacheFlag) ? cacheOptionOrLastCache : cacheFlag;
 
 	if (cache_value != NULL && cacheOptionOrLastCache < cacheFlag)

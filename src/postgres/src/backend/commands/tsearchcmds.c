@@ -1122,7 +1122,8 @@ DefineTSConfiguration(List *names, List *parameters, ObjectAddress *copied)
 			if (slot_stored_count == max_slots)
 			{
 				CatalogTuplesMultiInsertWithInfo(mapRel, slot, slot_stored_count,
-												 indstate);
+												 indstate,
+												 false /* yb_shared_insert */ );
 				slot_stored_count = 0;
 			}
 		}
@@ -1130,7 +1131,8 @@ DefineTSConfiguration(List *names, List *parameters, ObjectAddress *copied)
 		/* Insert any tuples left in the buffer */
 		if (slot_stored_count > 0)
 			CatalogTuplesMultiInsertWithInfo(mapRel, slot, slot_stored_count,
-											 indstate);
+											 indstate,
+											 false /* yb_shared_insert */ );
 
 		for (int i = 0; i < slot_init_count; i++)
 			ExecDropSingleTupleTableSlot(slot[i]);
@@ -1515,7 +1517,8 @@ MakeConfigurationMapping(AlterTSConfigurationStmt *stmt,
 				if (slotCount == nslots)
 				{
 					CatalogTuplesMultiInsertWithInfo(relMap, slot, slotCount,
-													 indstate);
+													 indstate,
+													 false /* yb_shared_insert */ );
 					slotCount = 0;
 				}
 			}
@@ -1524,7 +1527,8 @@ MakeConfigurationMapping(AlterTSConfigurationStmt *stmt,
 		/* Insert any tuples left in the buffer */
 		if (slotCount > 0)
 			CatalogTuplesMultiInsertWithInfo(relMap, slot, slotCount,
-											 indstate);
+											 indstate,
+											 false /* yb_shared_insert */ );
 
 		for (i = 0; i < nslots; i++)
 			ExecDropSingleTupleTableSlot(slot[i]);

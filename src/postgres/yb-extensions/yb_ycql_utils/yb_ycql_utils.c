@@ -85,8 +85,7 @@ ycql_stat_statements(PG_FUNCTION_ARGS)
 		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
 	}
 
-	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
+	/* clean up and return the tuplestore (tuplestore_donestoring was removed in PG19) */
 	if (stat_list)
 	{
 		pfree(stat_list);

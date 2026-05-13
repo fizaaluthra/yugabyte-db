@@ -1509,8 +1509,10 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 								   scanvalue);	/* constant */
 		}
 		/* YB-modified condition */
+		/* YB_TODO_PG19MERGE: PG19 renamed RowCompareExpr.rctype -> cmptype and
+		 * dropped ROWCOMPARE_* in favor of COMPARE_* (access/cmptype.h). */
 		else if (IsA(clause, RowCompareExpr) &&
-				 castNode(RowCompareExpr, clause)->rctype != ROWCOMPARE_EQ)
+				 castNode(RowCompareExpr, clause)->cmptype != COMPARE_EQ)
 		{
 			/* (indexkey, indexkey, ...) op (expression, expression, ...) */
 			RowCompareExpr *rc = (RowCompareExpr *) clause;
@@ -1851,7 +1853,8 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 										   &op_lefttype,
 										   &op_righttype);
 
-				if (op_strategy != rcexpr->rctype)
+				/* YB_TODO_PG19MERGE: rctype -> cmptype */
+				if (op_strategy != rcexpr->cmptype)
 					elog(ERROR, "RowCompare index qualification contains wrong operator");
 
 				opfuncid = get_opfamily_proc(opfamily,
@@ -1968,8 +1971,9 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 			 * YB: we only support = operator for now, and it shouldn't be
 			 * possible to get here with something else.
 			 */
-			Assert(rcexpr->rctype == BTEqualStrategyNumber);
-			this_scan_key->sk_strategy = rcexpr->rctype;
+			/* YB_TODO_PG19MERGE: rctype -> cmptype; COMPARE_EQ corresponds to BTEqualStrategyNumber. */
+			Assert(rcexpr->cmptype == COMPARE_EQ);
+			this_scan_key->sk_strategy = rcexpr->cmptype;
 			/* sk_subtype, sk_collation, sk_func not used in a header */
 			this_scan_key->sk_argument = PointerGetDatum(first_sub_key);
 			/*
@@ -2309,5 +2313,5 @@ yb_agg_pushdown_init_scan_slot(IndexScanState *node)
 	 */
 	TupleDesc	tupdesc = CreateTemplateTupleDesc(list_length(node->yb_iss_aggrefs));
 
-	ExecInitScanTupleSlot(node->ss.ps.state, &node->ss, tupdesc, &TTSOpsVirtual);
+	ExecInitScanTupleSlot(node->ss.ps.state, &node->ss, tupdesc, &TTSOpsVirtual, 0 /* flags */);
 }

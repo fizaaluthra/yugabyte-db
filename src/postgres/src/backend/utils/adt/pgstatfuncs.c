@@ -475,7 +475,7 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 		/* 1-based index */
 		for (curr_backend = 1; curr_backend <= num_backends; ++curr_backend)
 		{
-			const PgBackendStatus *beentry = pgstat_fetch_stat_beentry(curr_backend);
+			const PgBackendStatus *beentry = pgstat_get_beentry_by_proc_number((curr_backend) - 1);
 
 			if (!beentry)
 				break;
@@ -844,7 +844,7 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 
 			if (info->is_not_null)
 			{
-				values[YB_BACKEND_XID_COL] = UUIDPGetDatum(&info->txn_id);
+				values[YB_BACKEND_XID_COL] = UUIDPGetDatum((const pg_uuid_t *) &info->txn_id);
 				nulls[YB_BACKEND_XID_COL] = false;
 			}
 		}
@@ -1183,7 +1183,7 @@ yb_pg_stat_get_backend_catalog_version(PG_FUNCTION_ARGS)
 	int32		beid = PG_GETARG_INT32(0);
 	PgBackendStatus *beentry;
 
-	if ((beentry = pgstat_fetch_stat_beentry(beid)) == NULL)
+	if ((beentry = pgstat_get_beentry_by_proc_number((beid) - 1)) == NULL)
 		PG_RETURN_NULL();
 
 	if (beentry->yb_st_catalog_version.has_version)
@@ -1212,7 +1212,7 @@ yb_pg_stat_get_backend_local_catalog_version(PG_FUNCTION_ARGS)
 	for (i = 1; i <= num_backends; i++)
 	{
 		PgBackendStatus *beentry;
-		LocalPgBackendStatus *local_beentry = pgstat_fetch_stat_local_beentry(i);
+		LocalPgBackendStatus *local_beentry = pgstat_get_local_beentry_by_index((i) - 1);
 
 		if (!local_beentry)
 			continue;
@@ -2591,7 +2591,7 @@ yb_pg_stat_get_backend_allocated_mem_bytes(PG_FUNCTION_ARGS)
 	int64		result;
 	PgBackendStatus *beentry;
 
-	if ((beentry = pgstat_fetch_stat_beentry(beid)) == NULL)
+	if ((beentry = pgstat_get_beentry_by_proc_number((beid) - 1)) == NULL)
 		PG_RETURN_NULL();
 
 	result = beentry->yb_st_allocated_mem_bytes;
@@ -2610,7 +2610,7 @@ yb_pg_stat_get_backend_rss_mem_bytes(PG_FUNCTION_ARGS)
 	int64		result;
 	LocalPgBackendStatus *local_beentry;
 
-	if ((local_beentry = pgstat_fetch_stat_local_beentry(beid)) == NULL)
+	if ((local_beentry = pgstat_get_local_beentry_by_index((beid) - 1)) == NULL)
 		PG_RETURN_NULL();
 
 	result = local_beentry->yb_backend_rss_mem_bytes;
@@ -2629,7 +2629,7 @@ yb_pg_stat_get_backend_pss_mem_bytes(PG_FUNCTION_ARGS)
 	int64		result;
 	LocalPgBackendStatus *local_beentry;
 
-	if ((local_beentry = pgstat_fetch_stat_local_beentry(beid)) == NULL)
+	if ((local_beentry = pgstat_get_local_beentry_by_index((beid) - 1)) == NULL)
 		PG_RETURN_NULL();
 
 	result = local_beentry->yb_backend_pss_mem_bytes;
@@ -2656,7 +2656,7 @@ yb_pg_stat_retrieve_concurrent_index_progress()
 		PgBackendStatus *beentry;
 		LocalPgBackendStatus *local_beentry;
 
-		local_beentry = pgstat_fetch_stat_local_beentry(curr_backend);
+		local_beentry = pgstat_get_local_beentry_by_index((curr_backend) - 1);
 
 		if (!local_beentry)
 			continue;

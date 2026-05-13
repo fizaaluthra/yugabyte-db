@@ -217,6 +217,10 @@ typedef struct
 	bool		tuples;			/* Can SortTuple.tuple ever be set? */
 
 	void	   *arg;			/* Specific information for the sort variant */
+
+	/* YB_TODO_PG19MERGE: PG19 made Tuplesortstate opaque to tuplesortvariants.c;
+	 * hoist yb_sort_type to TuplesortPublic so the variants can stamp it directly. */
+	int			yb_sort_type;
 } TuplesortPublic;
 
 /* Sort parallel code from state for sort__start probes */

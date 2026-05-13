@@ -184,7 +184,7 @@ Boot_YBIndex:
 					stmt->excludeOpNames = NIL;
 					stmt->idxcomment = NULL;
 					stmt->indexOid = $5;
-					stmt->oldNode = InvalidOid;
+					stmt->oldNumber = InvalidRelFileNumber;
 					stmt->unique = true;
 					stmt->primary = true;
 					stmt->isconstraint = false;
@@ -451,7 +451,7 @@ Boot_DeclarePrimaryIndexStmt:
 					stmt->excludeOpNames = NIL;
 					stmt->idxcomment = NULL;
 					stmt->indexOid = InvalidOid;
-					stmt->oldNode = InvalidOid;
+					stmt->oldNumber = InvalidRelFileNumber;
 					stmt->unique = true;
 					stmt->primary = true;
 					stmt->isconstraint = false;
@@ -465,11 +465,13 @@ Boot_DeclarePrimaryIndexStmt:
 					relationId = RangeVarGetRelid(stmt->relation, NoLock,
 												  false);
 
-					DefineIndex(relationId,
+					DefineIndex(NULL,
+								relationId,
 								stmt,
 								$5,
 								InvalidOid,
 								InvalidOid,
+								-1,
 								false,
 								false,
 								false,

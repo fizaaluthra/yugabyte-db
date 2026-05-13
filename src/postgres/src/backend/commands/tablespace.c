@@ -1652,7 +1652,7 @@ yb_get_tablespace_options(Datum **options, int *num_options, Oid spc_oid)
 								Anum_pg_tablespace_spcoptions, &isnull);
 		if (!isnull)
 		{
-			Assert(PointerIsValid(DatumGetPointer(datum)));
+			Assert(DatumGetPointer(datum) != NULL);
 			ArrayType  *array = DatumGetArrayTypeP(datum);
 
 			deconstruct_array(array, TEXTOID, -1, false, 'i',

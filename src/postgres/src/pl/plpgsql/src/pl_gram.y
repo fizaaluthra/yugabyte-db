@@ -4270,6 +4270,11 @@ make_case(int location, PLpgSQL_expr *t_expr,
 
 static void
 ybc_not_support(int pos, const char *feature, int issue) {
+	/* YB_TODO_PG19MERGE: parser_errposition needs yyscanner in scope (PG19
+	 * made the scanner fully reentrant). This helper isn't a yacc rule, so
+	 * it doesn't have yyscanner in scope. Dropped the error-position info
+	 * for now; threading yyscanner through callers would be invasive. */
+	(void) pos;
 	static int restricted = -1;
 	if (restricted == -1)
 	{
@@ -4288,8 +4293,7 @@ ybc_not_support(int pos, const char *feature, int issue) {
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("%s not supported yet", feature),
 				 errhint("See https://github.com/yugabyte/yugabyte-db/issues/%d. "
-						 "React with thumbs up to raise its priority", issue),
-				 parser_errposition(pos)));
+						 "React with thumbs up to raise its priority", issue)));
 	}
 	else
 	{
@@ -4297,7 +4301,6 @@ ybc_not_support(int pos, const char *feature, int issue) {
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("%s not supported yet", feature),
 				 errhint("Please report the issue on "
-						 "https://github.com/YugaByte/yugabyte-db/issues"),
-				 parser_errposition(pos)));
+						 "https://github.com/YugaByte/yugabyte-db/issues")));
 	}
 }

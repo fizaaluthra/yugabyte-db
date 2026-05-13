@@ -585,7 +585,7 @@ YbReplicationSlotCreateForDB(const char *name, bool two_phase,
 {
 	int32_t		max_clock_skew;
 
-	Assert(ReplicationSlotValidateName(name, ERROR));
+	Assert(ReplicationSlotValidateName(name, false, ERROR));
 
 	/* TODO(#24025): This must be removed once we support two_phase. */
 	if (two_phase)
@@ -754,7 +754,8 @@ retry:
 		s->data.database = yb_replication_slot->database_oid;
 		s->data.persistency = RS_PERSISTENT;
 		strcpy(s->data.yb_stream_id, yb_replication_slot->stream_id);
-		s->active_pid = MyProcPid;
+		/* YB_TODO_PG19MERGE: PG19 replaced active_pid with active_proc (ProcNumber). */
+		s->active_proc = MyProcNumber;
 
 		SpinLockInit(&s->mutex);
 		LWLockInitialize(&s->io_in_progress_lock,
@@ -1098,14 +1099,14 @@ void
 ReplicationSlotCleanup(bool synced_only)
 {
 	Assert(MyReplicationSlot == NULL);
-	ReplicationSlotCleanupForProc(MyProc);
+	ReplicationSlotCleanupForProc(MyProc, synced_only);
 }
 
 /*
  * Cleanup all temporary slots created in current session.
  */
 void
-ReplicationSlotCleanupForProc(PGPROC *proc)
+ReplicationSlotCleanupForProc(PGPROC *proc, bool synced_only)
 {
 	int			i;
 	bool		found_valid_logicalslot;

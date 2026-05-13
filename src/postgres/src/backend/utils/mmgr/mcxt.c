@@ -2170,7 +2170,8 @@ GetCurrentYbMemctx()
 {
 	MemoryContext context = CurrentMemoryContext;
 
-	AssertArg(MemoryContextIsValid(context));
+	/* YB_TODO_PG19MERGE: AssertArg removed in PG19; plain Assert. */
+	Assert(MemoryContextIsValid(context));
 	AssertNotInCriticalSection(context);
 
 	if (context->yb_memctx == NULL)

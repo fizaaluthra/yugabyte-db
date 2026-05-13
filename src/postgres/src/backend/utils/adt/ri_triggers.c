@@ -30,6 +30,7 @@
 #include "access/sysattr.h"
 #include "access/table.h"
 #include "access/tableam.h"
+#include "access/tupconvert.h"
 #include "access/xact.h"
 #include "catalog/index.h"
 #include "catalog/pg_collation.h"
@@ -449,7 +450,7 @@ YbFindReferencedPartition(EState *estate, const RI_ConstraintInfo *riinfo,
 	 *  2. partition key of PK is a subset of all its unique indexes.
 	 */
 	TupleTableSlot *pkslot = MakeTupleTableSlot(RelationGetDescr(pk_root_rel),
-												&TTSOpsVirtual);
+												&TTSOpsVirtual, 0);
 
 	YbFillPKFromFKSlot(riinfo, fkslot, pkslot);
 
@@ -799,6 +800,7 @@ RI_FKey_check(TriggerData *trigdata)
 			{
 				ri_BuildQueryKey(&qkey, riinfo, RI_PLAN_CHECK_LOOKUPPK);
 				ri_ReportViolation(riinfo, pk_rel, fk_rel, newslot, NULL, qkey.constr_queryno,
+								   false /* is_restrict */,
 								   false /* partgone */ );
 			}
 			table_close(pk_rel, RowShareLock);

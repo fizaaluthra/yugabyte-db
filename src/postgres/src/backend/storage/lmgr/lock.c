@@ -3287,7 +3287,8 @@ GetLockConflicts(const LOCKTAG *locktag, LOCKMODE lockmode, int *countp)
 		 */
 		vxids = (VirtualTransactionId *)
 			palloc0(sizeof(VirtualTransactionId));
-		vxids[0].backendId = InvalidBackendId;
+		/* YB_TODO_PG19MERGE: backendId -> procNumber; InvalidBackendId -> INVALID_PROC_NUMBER. */
+		vxids[0].procNumber = INVALID_PROC_NUMBER;
 		vxids[0].localTransactionId = InvalidLocalTransactionId;
 		return vxids;
 	}

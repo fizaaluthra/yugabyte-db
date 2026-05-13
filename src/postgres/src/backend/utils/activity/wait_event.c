@@ -584,7 +584,7 @@ yb_get_wait_event_aux_desc(uint32 wait_event_info)
 	{
 		case PG_WAIT_LWLOCK:
 		case PG_WAIT_LOCK:
-		case PG_WAIT_BUFFER_PIN:
+		case PG_WAIT_BUFFER:
 		case PG_WAIT_ACTIVITY:
 		case PG_WAIT_CLIENT:
 		case PG_WAIT_EXTENSION:
@@ -635,7 +635,7 @@ yb_get_wait_event_desc(uint32 wait_event_info)
 		case PG_WAIT_IO:
 			desc = yb_get_wait_io_desc(wait_event_info);
 			break;
-		case PG_WAIT_BUFFER_PIN:
+		case PG_WAIT_BUFFER:
 		case PG_WAIT_EXTENSION:
 			break;
 		default:
@@ -672,6 +672,13 @@ yb_get_wait_activity_desc(WaitEventActivity w)
 		case WAIT_EVENT_WAL_WRITER_MAIN:
 		case WAIT_EVENT_YB_IDLE_SLEEP:
 		case WAIT_EVENT_YB_ACTIVITY_END:
+		/* PG19-added Activity wait events */
+		case WAIT_EVENT_CHECKPOINTER_SHUTDOWN:
+		case WAIT_EVENT_IO_WORKER_MAIN:
+		case WAIT_EVENT_LOGICAL_PARALLEL_APPLY_MAIN:
+		case WAIT_EVENT_REPLICATION_SLOTSYNC_MAIN:
+		case WAIT_EVENT_WAL_SUMMARIZER_WAL:
+		case WAIT_EVENT_REPLICATION_SLOTSYNC_SHUTDOWN:
 			break;
 			/* no default case, so that compiler will warn */
 	}
@@ -690,11 +697,16 @@ yb_get_wait_client_desc(WaitEventClient w)
 		case WAIT_EVENT_CLIENT_WRITE:
 		case WAIT_EVENT_GSS_OPEN_SERVER:
 		case WAIT_EVENT_SSL_OPEN_SERVER:
-		case WAIT_EVENT_WAL_SENDER_WAIT_WAL:
+		case WAIT_EVENT_WAL_SENDER_WAIT_FOR_WAL:
 		case WAIT_EVENT_LIBPQWALRECEIVER_CONNECT:
 		case WAIT_EVENT_LIBPQWALRECEIVER_RECEIVE:
 		case WAIT_EVENT_WAL_SENDER_WRITE_DATA:
 		case WAIT_EVENT_YB_CLIENT_END:
+		/* PG19-added Client wait events */
+		case WAIT_EVENT_WAIT_FOR_STANDBY_CONFIRMATION:
+		case WAIT_EVENT_WAIT_FOR_WAL_FLUSH:
+		case WAIT_EVENT_WAIT_FOR_WAL_REPLAY:
+		case WAIT_EVENT_WAIT_FOR_WAL_WRITE:
 			break;
 			/* no default case, so that compiler will warn */
 	}
@@ -718,10 +730,14 @@ yb_get_wait_ipc_desc(WaitEventIPC w)
 		case WAIT_EVENT_BUFFER_IO:
 		case WAIT_EVENT_CHECKPOINT_DONE:
 		case WAIT_EVENT_CHECKPOINT_START:
-		case WAIT_EVENT_MQ_INTERNAL:
-		case WAIT_EVENT_MQ_PUT_MESSAGE:
-		case WAIT_EVENT_MQ_RECEIVE:
-		case WAIT_EVENT_MQ_SEND:
+		/* YB_TODO_PG19MERGE: WAIT_EVENT_MQ_INTERNAL removed in PG19 */
+		/* case WAIT_EVENT_MQ_INTERNAL: */
+		/* YB_TODO_PG19MERGE: WAIT_EVENT_MQ_PUT_MESSAGE removed in PG19 */
+		/* case WAIT_EVENT_MQ_PUT_MESSAGE: */
+		/* YB_TODO_PG19MERGE: WAIT_EVENT_MQ_RECEIVE removed in PG19 */
+		/* case WAIT_EVENT_MQ_RECEIVE: */
+		/* YB_TODO_PG19MERGE: WAIT_EVENT_MQ_SEND removed in PG19 */
+		/* case WAIT_EVENT_MQ_SEND: */
 		case WAIT_EVENT_PARALLEL_FINISH:
 		case WAIT_EVENT_PROCARRAY_GROUP_UPDATE:
 		case WAIT_EVENT_PROC_SIGNAL_BARRIER:
@@ -739,12 +755,12 @@ yb_get_wait_ipc_desc(WaitEventIPC w)
 		case WAIT_EVENT_HASH_BUILD_ELECT:
 		case WAIT_EVENT_HASH_BUILD_HASH_INNER:
 		case WAIT_EVENT_HASH_BUILD_HASH_OUTER:
-		case WAIT_EVENT_HASH_GROW_BATCHES_ALLOCATE:
+		case WAIT_EVENT_HASH_GROW_BATCHES_REALLOCATE:
 		case WAIT_EVENT_HASH_GROW_BATCHES_DECIDE:
 		case WAIT_EVENT_HASH_GROW_BATCHES_ELECT:
 		case WAIT_EVENT_HASH_GROW_BATCHES_FINISH:
 		case WAIT_EVENT_HASH_GROW_BATCHES_REPARTITION:
-		case WAIT_EVENT_HASH_GROW_BUCKETS_ALLOCATE:
+		case WAIT_EVENT_HASH_GROW_BUCKETS_REALLOCATE:
 		case WAIT_EVENT_HASH_GROW_BUCKETS_ELECT:
 		case WAIT_EVENT_HASH_GROW_BUCKETS_REINSERT:
 		case WAIT_EVENT_LOGICAL_SYNC_DATA:
@@ -764,6 +780,20 @@ yb_get_wait_ipc_desc(WaitEventIPC w)
 		case WAIT_EVENT_WAL_RECEIVER_WAIT_START:
 		case WAIT_EVENT_XACT_GROUP_UPDATE:
 		case WAIT_EVENT_YB_IPC_END:
+		/* PG19-added IPC wait events */
+		case WAIT_EVENT_CHECKPOINT_DELAY_COMPLETE:
+		case WAIT_EVENT_CHECKPOINT_DELAY_START:
+		case WAIT_EVENT_CHECKSUM_ENABLE_STARTCONDITION:
+		case WAIT_EVENT_CHECKSUM_ENABLE_TEMPTABLE_WAIT:
+		case WAIT_EVENT_LOGICAL_APPLY_SEND_DATA:
+		case WAIT_EVENT_LOGICAL_PARALLEL_APPLY_STATE_CHANGE:
+		case WAIT_EVENT_MESSAGE_QUEUE_INTERNAL:
+		case WAIT_EVENT_MESSAGE_QUEUE_PUT_MESSAGE:
+		case WAIT_EVENT_MESSAGE_QUEUE_RECEIVE:
+		case WAIT_EVENT_MESSAGE_QUEUE_SEND:
+		case WAIT_EVENT_MULTIXACT_CREATION:
+		case WAIT_EVENT_REPACK_WORKER_EXPORT:
+		case WAIT_EVENT_WAL_SUMMARY_READY:
 			break;
 			/* no default case, so that compiler will warn */
 	}
@@ -790,6 +820,10 @@ yb_get_wait_timeout_desc(WaitEventTimeout w)
 		case WAIT_EVENT_VACUUM_DELAY:
 		case WAIT_EVENT_VACUUM_TRUNCATE:
 		case WAIT_EVENT_YB_TIMEOUT_END:
+		/* PG19-added Timeout wait events */
+		case WAIT_EVENT_COMMIT_DELAY:
+		case WAIT_EVENT_SPIN_DELAY:
+		case WAIT_EVENT_WAL_SUMMARIZER_ERROR:
 			break;
 			/* no default case, so that compiler will warn */
 	}
@@ -834,7 +868,7 @@ yb_get_wait_io_desc(WaitEventIO w)
 		case WAIT_EVENT_LOGICAL_REWRITE_SYNC:
 		case WAIT_EVENT_LOGICAL_REWRITE_TRUNCATE:
 		case WAIT_EVENT_LOGICAL_REWRITE_WRITE:
-		case WAIT_EVENT_RELATION_MAP_SYNC:
+		case WAIT_EVENT_RELATION_MAP_READ:
 		case WAIT_EVENT_RELATION_MAP_WRITE:
 		case WAIT_EVENT_SLRU_READ:
 		case WAIT_EVENT_SLRU_SYNC:
@@ -857,7 +891,7 @@ yb_get_wait_io_desc(WaitEventIO w)
 		case WAIT_EVENT_DATA_FILE_SYNC:
 		case WAIT_EVENT_DATA_FILE_TRUNCATE:
 		case WAIT_EVENT_DATA_FILE_WRITE:
-		case WAIT_EVENT_RELATION_MAP_READ:
+		/* WAIT_EVENT_RELATION_MAP_SYNC removed in PG19 (merged into _READ above) */
 		case WAIT_EVENT_REORDER_BUFFER_READ:
 		case WAIT_EVENT_REORDER_BUFFER_WRITE:
 		case WAIT_EVENT_REORDER_LOGICAL_MAPPING_READ:
@@ -885,6 +919,18 @@ yb_get_wait_io_desc(WaitEventIO w)
 		case WAIT_EVENT_SLRU_FLUSH_SYNC:
 		case WAIT_EVENT_VERSION_FILE_SYNC:
 		case WAIT_EVENT_YB_IO_END:
+		/* PG19-added IO wait events */
+		case WAIT_EVENT_AIO_IO_COMPLETION:
+		case WAIT_EVENT_AIO_IO_URING_EXECUTION:
+		case WAIT_EVENT_AIO_IO_URING_SUBMIT:
+		case WAIT_EVENT_COPY_FILE_COPY:
+		case WAIT_EVENT_COPY_FROM_READ:
+		case WAIT_EVENT_COPY_TO_WRITE:
+		case WAIT_EVENT_DSM_ALLOCATE:
+		/* WAIT_EVENT_DSM_FILL_ZERO_WRITE already listed earlier */
+		case WAIT_EVENT_RELATION_MAP_REPLACE:
+		case WAIT_EVENT_WAL_SUMMARY_READ:
+		case WAIT_EVENT_WAL_SUMMARY_WRITE:
 			break;
 			/* no default case, so that compiler will warn */
 	}
@@ -910,6 +956,7 @@ yb_get_wait_lock_desc(LockTagType lock_tag)
 		case LOCKTAG_OBJECT:
 		case LOCKTAG_USERLOCK:
 		case LOCKTAG_ADVISORY:
+		case LOCKTAG_APPLY_TRANSACTION:		/* PG19-added */
 			break;
 			/* no default case, so that compiler will warn */
 	}
@@ -951,10 +998,10 @@ yb_get_wait_lwlock_desc(BuiltinTrancheIds tranche_id)
 		case LWTRANCHE_COMMITTS_BUFFER:
 		case LWTRANCHE_NOTIFY_BUFFER:
 		case LWTRANCHE_SERIAL_BUFFER:
-		case LWTRANCHE_BUFFER_CONTENT:
+		case LWTRANCHE_BUFFER_MAPPING:
 		case LWTRANCHE_REPLICATION_ORIGIN_STATE:
 		case LWTRANCHE_REPLICATION_SLOT_IO:
-		case LWTRANCHE_BUFFER_MAPPING:
+		/* LWTRANCHE_BUFFER_CONTENT removed in PG19 (merged into _BUFFER_MAPPING above) */
 		case LWTRANCHE_LOCK_MANAGER:
 		case LWTRANCHE_PREDICATE_LOCK_MANAGER:
 		case LWTRANCHE_PARALLEL_HASH_JOIN:
@@ -967,6 +1014,24 @@ yb_get_wait_lwlock_desc(BuiltinTrancheIds tranche_id)
 		case LWTRANCHE_PARALLEL_APPEND:
 		case LWTRANCHE_PER_XACT_PREDICATE_LIST:
 		case LWTRANCHE_FIRST_USER_DEFINED:
+		/* PG19-added tranches */
+		case LWTRANCHE_INVALID:
+		case LWTRANCHE_NOTIFY_CHANNEL_HASH:
+		case LWTRANCHE_PARALLEL_BTREE_SCAN:
+		case LWTRANCHE_LAUNCHER_DSA:
+		case LWTRANCHE_LAUNCHER_HASH:
+		case LWTRANCHE_DSM_REGISTRY_DSA:
+		case LWTRANCHE_DSM_REGISTRY_HASH:
+		case LWTRANCHE_COMMITTS_SLRU:
+		case LWTRANCHE_MULTIXACTOFFSET_SLRU:
+		case LWTRANCHE_MULTIXACTMEMBER_SLRU:
+		case LWTRANCHE_NOTIFY_SLRU:
+		case LWTRANCHE_SERIAL_SLRU:
+		case LWTRANCHE_SUBTRANS_SLRU:
+		case LWTRANCHE_XACT_SLRU:
+		case LWTRANCHE_PARALLEL_VACUUM_DSA:
+		case LWTRANCHE_AIO_URING_COMPLETION:
+		case LWTRANCHE_SHMEM_INDEX:
 			break;
 			/* no default case, so that compiler will warn */
 	}
@@ -1065,7 +1130,7 @@ yb_wait_event_desc(PG_FUNCTION_ARGS)
 	yb_insert_pg_events(PG_WAIT_EXTENSION, tupdesc, tupstore);
 
 	/* for buffer pin */
-	yb_insert_pg_events(PG_WAIT_BUFFER_PIN, tupdesc, tupstore);
+	yb_insert_pg_events(PG_WAIT_BUFFER, tupdesc, tupstore);
 
 	/* description related to activity */
 	for (i = WAIT_EVENT_ARCHIVER_MAIN; i < WAIT_EVENT_YB_ACTIVITY_END; ++i)
@@ -1101,7 +1166,6 @@ yb_wait_event_desc(PG_FUNCTION_ARGS)
 	}
 
 	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
 
 	return (Datum) 0;
 }

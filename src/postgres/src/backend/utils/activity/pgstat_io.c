@@ -379,6 +379,13 @@ pgstat_tracks_io_bktype(BackendType bktype)
 		case B_WAL_SUMMARIZER:
 		case B_WAL_WRITER:
 			return true;
+
+		case YB_YSQL_CONN_MGR:
+		case YB_YSQL_CONN_MGR_WAL_SENDER:
+		case YB_AUTO_ANALYZE_BACKEND:
+		case YB_INDEX_BACKFILL_DDL:
+		case YB_MATVIEW_REFRESH_DDL:
+			return false;
 	}
 
 	return false;

@@ -855,7 +855,8 @@ YbExplainRpcRequestEvent(YbExplainState *yb_es, YbPgEventMetrics metric,
 
 	buf = psprintf("sum: %.*f, count: %.*f",
 				   ndigits, value->sum / nloops, ndigits, value->count / nloops);
-	ExplainProperty(label, NULL, buf, false, es);
+	/* YB_TODO_PG19MERGE: ExplainProperty is static in explain_format.c; use the public text wrapper. */
+	ExplainPropertyText(label, buf, es);
 	pfree(buf);
 }
 
@@ -1549,6 +1550,20 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		 * YB: Fetch stats collected at the query level (ie. not corresponding
 		 * to any execution node)
 		 */
+		/*
+		 * YB_TODO_PG19MERGE: PG commit 5a79e78501f7da45ad8fd9da42a4e3a4e2c0648a
+		 * ("instrumentation: Separate per-node logic from other uses") split
+		 * the old Instrumentation struct into a slim Instrumentation (the
+		 * basic timer/buffer/wal accumulators) and a per-node NodeInstrumentation
+		 * which carries the extra fields including YB's yb_instr. The YB-added
+		 * QueryDesc.yb_query_stats is typed `Instrumentation *` (filled via
+		 * InstrAlloc) but the YB query-level stats handoff below expected the
+		 * old non-split form where yb_instr lived directly on Instrumentation.
+		 * Stubbed out until the YB query-level instrumentation path is
+		 * reworked to either (a) maintain a separate per-query YbInstrumentation,
+		 * or (b) move yb_query_stats to NodeInstrumentation*.
+		 */
+#if 0
 		if (es->rpc)
 		{
 			YbInstrumentation *yb_instr = &queryDesc->yb_query_stats->yb_instr;
@@ -1556,6 +1571,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			YbUpdateSessionStats(yb_instr);
 			YbAggregateExplainableRPCRequestStat(es, yb_instr);
 		}
+#endif
 
 		/* We can't run ExecutorEnd 'till we're done printing the stats... */
 		totaltime += elapsed_time(&starttime);

@@ -747,11 +747,13 @@ yb_get_batched_index_paths(PlannerInfo *root, RelOptInfo *rel,
 
 	if (!bms_is_empty(batchedrelids))
 	{
+		/* YB_TODO_PG19MERGE: PG19 added a trailing SpecialJoinInfo *sjinfo. */
 		pclauses = generate_join_implied_equalities(root,
 													bms_union(batchedrelids,
 															  index->rel->relids),
 													batchedrelids,
-													rel);
+													rel,
+													NULL /* sjinfo */);
 
 		/*
 		 * Anything in joininfo that can be pushed down to this scan
@@ -842,13 +844,13 @@ yb_get_batched_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	 * clauses for index columns after the first (so that we produce ordered
 	 * paths if possible).
 	 */
+	/* YB_TODO_PG19MERGE: PG19 dropped the trailing skip_lower_saop out-param. */
 	indexpaths = build_index_paths(root, rel,
 								   index, clauses,
 								   NIL /* yb_bitmap_idx_pushdowns */ ,
 								   index->predOK,
 								   ST_ANYSCAN,
-								   &skip_nonnative_saop,
-								   &skip_lower_saop);
+								   &skip_nonnative_saop);
 
 	/*
 	 * If we skipped any lower-order ScalarArrayOpExprs on an index with an AM
@@ -857,14 +859,14 @@ yb_get_batched_index_paths(PlannerInfo *root, RelOptInfo *rel,
 	 */
 	if (skip_lower_saop)
 	{
+		/* YB_TODO_PG19MERGE: PG19 dropped the trailing skip_lower_saop out-param. */
 		indexpaths = list_concat(indexpaths,
 								 build_index_paths(root, rel,
 												   index, clauses,
 												   NIL /* yb_bitmap_idx_pushdowns */ ,
 												   index->predOK,
 												   ST_ANYSCAN,
-												   &skip_nonnative_saop,
-												   NULL));
+												   &skip_nonnative_saop));
 	}
 
 	/*
@@ -890,7 +892,7 @@ yb_get_batched_index_paths(PlannerInfo *root, RelOptInfo *rel,
 		}
 
 		if (((index->amhasgetbitmap || index->yb_amhasgetbitmap) &&
-			 !IsA(ipath, UpperUniquePath)) &&
+			 !IsA(ipath, UniquePath) /* YB_TODO_PG19MERGE */) &&
 			(ipath->path.pathkeys == NIL ||
 			 ipath->indexselectivity < 1.0))
 			*bitindexpaths = lappend(*bitindexpaths, ipath);
@@ -1122,7 +1124,7 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 			add_path(rel, (Path *) ipath);
 
 		if (((index->amhasgetbitmap || index->yb_amhasgetbitmap) &&
-			 !IsA(ipath, UpperUniquePath)) &&
+			 !IsA(ipath, UniquePath) /* YB_TODO_PG19MERGE */) &&
 			(ipath->path.pathkeys == NIL ||
 			 ipath->indexselectivity < 1.0))
 			*bitindexpaths = lappend(*bitindexpaths, ipath);
@@ -1147,7 +1149,10 @@ get_index_paths(PlannerInfo *root, RelOptInfo *rel,
 
 /*
  * Return TRUE if yb_hash_code() is LHS input, FALSE otherwise.
+ * YB_TODO_PG19MERGE: only caller is currently under #if 0 pending PG19
+ * saop-skip-lower restructuring; keep the helper but silence the unused warning.
  */
+pg_attribute_unused()
 static bool
 yb_hash_code_on_left(ScalarArrayOpExpr *saop)
 {
@@ -2544,7 +2549,7 @@ choose_bitmap_and(PlannerInfo *root, RelOptInfo *rel, List *paths)
 		Path	   *ipath = (Path *) lfirst(l);
 
 		/* YB: TODO(#21039): Support Distinct Bitmap Scans */
-		if (IsA(ipath, UpperUniquePath))
+		if (IsA(ipath, UniquePath) /* YB_TODO_PG19MERGE */)
 			continue;
 
 		pathinfo = classify_index_clause_usage(ipath, &clauselist);
@@ -5553,11 +5558,13 @@ yb_can_pushdown_distinct(PlannerInfo *root, IndexOptInfo *index)
 		otherrels = bms_difference(root->all_baserels, index->rel->relids);
 
 	/* Collect join clauses and implied join clauses. */
+	/* YB_TODO_PG19MERGE: PG19 added a trailing SpecialJoinInfo *sjinfo. */
 	joininfo = list_concat(list_copy(index->rel->joininfo),
 						   generate_join_implied_equalities(root,
 															bms_union(index->rel->relids, otherrels),
 															otherrels,
-															index->rel));
+															index->rel,
+															NULL /* sjinfo */));
 
 	clause_list = NIL;
 	foreach(lc, joininfo)

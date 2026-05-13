@@ -654,7 +654,8 @@ CatCacheRemoveCTup(CatCache *cache, CatCTup *ct)
 		cache->yb_cc_size_bytes -=
 			sizeof(CatCTup) + MAXIMUM_ALIGNOF + ct->tuple.t_len;
 		if (need_to_free_ybctid)
-			cache->yb_cc_size_bytes -= VARSIZE(HEAPTUPLE_YBCTID(&ct->tuple));
+			/* YB_TODO_PG19MERGE: PG19 VARSIZE takes const void *, not Datum. */
+			cache->yb_cc_size_bytes -= VARSIZE(DatumGetPointer(HEAPTUPLE_YBCTID(&ct->tuple)));
 	}
 #endif
 
@@ -1629,7 +1630,20 @@ SetCatCacheList(CatCache *cache,
 	}
 	Assert(i == nmembers);
 
-	dlist_push_head(&cache->cc_lists, &cl->cache_elem);
+	/* YB_TODO_PG19MERGE: PG19 replaced cc_lists with a hashed cc_lbucket[].
+	 * Allocate lazily and push into the correct bucket. */
+	if (cache->cc_lbucket == NULL)
+	{
+		int			nbuckets = 16;
+
+		cache->cc_lbucket = (dlist_head *)
+			MemoryContextAllocZero(CacheMemoryContext,
+								   nbuckets * sizeof(dlist_head));
+		cache->cc_nlbuckets = nbuckets;
+	}
+	dlist_push_head(&cache->cc_lbucket[HASH_INDEX(lHashValue, cache->cc_nlbuckets)],
+					&cl->cache_elem);
+	cache->cc_nlist++;
 }
 
 /*
@@ -2486,7 +2500,20 @@ YbBuildCatCacheListFromPreloadedCache(CatCache *cache, int nkeys,
 	}
 	Assert(i == nmembers);
 
-	dlist_push_head(&cache->cc_lists, &cl->cache_elem);
+	/* YB_TODO_PG19MERGE: PG19 replaced cc_lists with a hashed cc_lbucket[].
+	 * Allocate lazily and push into the correct bucket. */
+	if (cache->cc_lbucket == NULL)
+	{
+		int			nbuckets = 16;
+
+		cache->cc_lbucket = (dlist_head *)
+			MemoryContextAllocZero(CacheMemoryContext,
+								   nbuckets * sizeof(dlist_head));
+		cache->cc_nlbuckets = nbuckets;
+	}
+	dlist_push_head(&cache->cc_lbucket[HASH_INDEX(lHashValue, cache->cc_nlbuckets)],
+					&cl->cache_elem);
+	cache->cc_nlist++;
 
 	cl->refcount++;
 	ResourceOwnerEnlarge(CurrentResourceOwner);
@@ -3079,7 +3106,8 @@ CatalogCacheCreateEntry(CatCache *cache, HeapTuple ntp, Datum *arguments,
 										HEAPTUPLE_YBCTID(&ct->tuple));
 
 		if (allocated_ybctid)
-			cache->yb_cc_size_bytes += VARSIZE(HEAPTUPLE_YBCTID(&ct->tuple));
+			/* YB_TODO_PG19MERGE: PG19 VARSIZE takes const void *, not Datum. */
+			cache->yb_cc_size_bytes += VARSIZE(DatumGetPointer(HEAPTUPLE_YBCTID(&ct->tuple)));
 #endif
 		ct->tuple.t_tableOid = dtp->t_tableOid;
 		ct->tuple.t_data = (HeapTupleHeader)
@@ -3327,7 +3355,8 @@ RelationHasCachedLists(Relation relation)
 	{
 		CatCache   *ccp = slist_container(CatCache, cc_next, iter.cur);
 
-		if (ccp->cc_reloid == reloid && !dlist_is_empty(&ccp->cc_lists))
+		/* YB_TODO_PG19MERGE: cc_lists -> cc_lbucket[]; check via cc_nlist counter. */
+		if (ccp->cc_reloid == reloid && ccp->cc_nlist > 0)
 			return true;
 	}
 
@@ -3463,9 +3492,10 @@ YbProcessLogCatcacheStatsInterrupt(void)
 Datum
 yb_log_catcache_stats(PG_FUNCTION_ARGS)
 {
+	/* YB_TODO_PG19MERGE: BackendId/backendId -> ProcNumber/vxid.procNumber. */
 	int			pid = PG_GETARG_INT32(0);
 	PGPROC	   *proc;
-	BackendId	backendId = InvalidBackendId;
+	ProcNumber	backendId = INVALID_PROC_NUMBER;
 
 	proc = BackendPidGetProc(pid);
 
@@ -3478,7 +3508,7 @@ yb_log_catcache_stats(PG_FUNCTION_ARGS)
 	 * have a valid backend id.
 	 */
 	if (proc != NULL)
-		backendId = proc->backendId;
+		backendId = proc->vxid.procNumber;
 	else
 		proc = AuxiliaryPidGetProc(pid);
 

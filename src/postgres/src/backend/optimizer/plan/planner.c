@@ -22,6 +22,7 @@
 #include "access/parallel.h"
 #include "access/sysattr.h"
 #include "access/table.h"
+#include "access/xact.h"			/* YB_TODO_PG19MERGE: IsolationIsSerializable */
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_proc.h"
@@ -5433,6 +5434,7 @@ create_final_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	bool		allow_hash;
 
 	List	   *yb_distinct_paths;
+	ListCell   *lc;				/* YB_TODO_PG19MERGE: PG19 removed the implicit lc declaration. */
 
 	/* YB: Figure out paths that are already distinct. */
 	yb_distinct_paths = NIL;
@@ -10883,7 +10885,7 @@ ybPlanIdWalker(YbJumbleState *jstate, Plan *plan, bool isRoot)
 	YbJumbleList(jstate, plan->targetlist, !isRoot);
 
 	if (yb_enable_planner_trace)
-		elog(DEBUG1, "jumble after target list node %d : %lu", plan->plan_node_id, YbHashJumbleState(jstate));
+		elog(DEBUG1, "jumble after target list node %d : " UINT64_FORMAT, plan->plan_node_id, YbHashJumbleState(jstate));
 
 	/*
 	 * Hash the quals of the node. Treat the hash symmetrically.
@@ -10891,7 +10893,7 @@ ybPlanIdWalker(YbJumbleState *jstate, Plan *plan, bool isRoot)
 	YbJumbleList(jstate, plan->qual, true /* symmetric */ );
 
 	if (yb_enable_planner_trace)
-		elog(DEBUG1, "jumble after qual list node %d : %lu", plan->plan_node_id, YbHashJumbleState(jstate));
+		elog(DEBUG1, "jumble after qual list node %d : " UINT64_FORMAT, plan->plan_node_id, YbHashJumbleState(jstate));
 
 	/*
 	 * Set the node's target and qual lists to NULL so the jumble code does not
@@ -10907,7 +10909,7 @@ ybPlanIdWalker(YbJumbleState *jstate, Plan *plan, bool isRoot)
 	YbJumbleNode(jstate, (Node *) plan);
 
 	if (yb_enable_planner_trace)
-		elog(DEBUG1, "jumble after node %d : %lu", plan->plan_node_id, YbHashJumbleState(jstate));
+		elog(DEBUG1, "jumble after node %d : " UINT64_FORMAT, plan->plan_node_id, YbHashJumbleState(jstate));
 
 	/* Restore the target and qual lists. */
 	plan->targetlist = jstate->ybTargetList;
@@ -11233,7 +11235,7 @@ ybCalculatePlanId(PlannedStmt *plannedStmt)
 	YbJumbleRangeTableList(jstate, sortedRtable);
 
 	if (yb_enable_planner_trace)
-		elog(DEBUG1, "jumble after range table list : %lu", YbHashJumbleState(jstate));
+		elog(DEBUG1, "jumble after range table list : " UINT64_FORMAT, YbHashJumbleState(jstate));
 
 	/* Store the plan id on the planned statement. */
 	plannedStmt->ybPlanId = YbHashJumbleState(jstate);

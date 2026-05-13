@@ -17804,7 +17804,8 @@ dumpTablegroup(Archive *fout, const YbTablegroupInfo *tginfo)
 
 	if (tginfo->dobj.dump & DUMP_COMPONENT_ACL)
 		dumpACL(fout, tginfo->dobj.dumpId, InvalidDumpId, "TABLEGROUP",
-				tginfo->dobj.name, NULL, NULL, tginfo->rolname, &tginfo->dacl);
+				tginfo->dobj.name, NULL, NULL, NULL /* tag */,
+				tginfo->rolname, &tginfo->dacl);
 
 	destroyPQExpBuffer(q);
 	destroyPQExpBuffer(delq);

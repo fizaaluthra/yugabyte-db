@@ -67,6 +67,12 @@ typedef struct HeapTupleData
 	Datum		t_ybctid;		/* virtual column ybctid */
 #define FIELDNO_HEAPTUPLEDATA_DATA 4
 	HeapTupleHeader t_data;		/* -> tuple header and data */
+	/* YB_TODO_PG19MERGE: PG19 removed the ReorderBufferTupleBuf wrapper that
+	 * used to carry YB's "is_omitted" sidecar; re-home those bits on the
+	 * HeapTuple itself so YB virtual WAL decoding compiles. The PG19
+	 * reorderbuffer now holds HeapTuple directly. */
+	bool	   *yb_is_omitted;
+	int			yb_is_omitted_size;
 } HeapTupleData;
 
 typedef HeapTupleData *HeapTuple;

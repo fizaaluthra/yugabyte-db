@@ -182,7 +182,13 @@ yb_free_dummy_baserel_index(Relation relation)
 	Assert(relation->rd_indam);
 	Assert(relation->rd_opfamily);
 	pfree(relation->rd_index);
-	pfree(relation->rd_indam);
+	/*
+	 * YB_TODO_PG19MERGE: PG19 (commit bc6374cd76abb2e6a48c4b57c0b5a7baa5babd67
+	 * "Change IndexAmRoutines to be statically-allocated structs") made
+	 * IndexAmRoutine pointers point to static storage, so GetIndexAmRoutine*
+	 * no longer palloc's and the result must not be pfree'd. Drop the pfree
+	 * for rd_indam.
+	 */
 	pfree(relation->rd_opfamily);
 	relation->rd_index = NULL;
 	relation->rd_indam = NULL;

@@ -38,6 +38,7 @@
 #include "optimizer/subselect.h"
 #include "optimizer/tlist.h"
 #include "parser/parse_clause.h"
+#include "parser/parse_relation.h"	/* YB_TODO_PG19MERGE: getRTEPermissionInfo */
 #include "parser/parsetree.h"
 #include "partitioning/partprune.h"
 #include "tcop/tcopprot.h"
@@ -1040,7 +1041,9 @@ yb_zip_batched_exprs(PlannerInfo *root, List *b_exprs, bool should_sort)
 			inputcollids =
 				lappend_oid(inputcollids, opexpr->inputcollid);
 			opnos = lappend_oid(opnos, opexpr->opno);
-			OpBtreeInterpretation *btreeinterp = linitial(get_op_btree_interpretation(opexpr->opno));
+			/* YB_TODO_PG19MERGE: OpBtreeInterpretation/get_op_btree_interpretation renamed
+			 * to OpIndexInterpretation/get_op_index_interpretation (lsyscache.h). */
+			OpIndexInterpretation *btreeinterp = linitial(get_op_index_interpretation(opexpr->opno));
 
 			opfamilies = lappend_oid(opfamilies, btreeinterp->opfamily_id);
 
@@ -1070,7 +1073,8 @@ yb_zip_batched_exprs(PlannerInfo *root, List *b_exprs, bool should_sort)
 
 		zipped->largs = leftop->args;
 		zipped->rargs = (Node *) right_batched_expr;
-		zipped->rctype = ROWCOMPARE_EQ;
+		/* YB_TODO_PG19MERGE: rctype -> cmptype, ROWCOMPARE_EQ -> COMPARE_EQ. */
+		zipped->cmptype = COMPARE_EQ;
 		zipped->opfamilies = opfamilies;
 		zipped->opnos = opnos;
 		zipped->inputcollids = inputcollids;
@@ -3112,7 +3116,13 @@ yb_fetch_subpaths(ModifyTablePath *path, IndexPath **index_path,
 	/*
 	 * If subpath is an AppendPath with a single child, get that child path.
 	 */
-	subpath = get_singleton_append_subpath(subpath);
+	/* YB_TODO_PG19MERGE: get_singleton_append_subpath gained a 2nd arg
+	 * collecting hidden child-append relids; pass a throwaway list. */
+	{
+		List	   *unused_child_relids = NIL;
+
+		subpath = get_singleton_append_subpath(subpath, &unused_child_relids);
+	}
 
 	/*
 	 * The index path is the subpath of the projection for UPDATE, whereas
@@ -3850,7 +3860,12 @@ create_modifytable_plan(PlannerInfo *root, ModifyTablePath *best_path)
 											 NULL));
 	if (yb_is_single_row_update_or_delete)
 	{
-		subplan = (Plan *) make_result(result_tlist, NULL, NULL);
+		/* YB_TODO_PG19MERGE: PG19 removed make_result; the static helper
+		 * make_one_row_result is its closest equivalent (it takes the rel for
+		 * relids/result_type classification). The previous YB code passed NULL
+		 * for the subplan slot; pass best_path's rel instead. */
+		subplan = (Plan *) make_one_row_result(result_tlist, NULL,
+											   best_path->path.parent);
 		copy_generic_path_info(subplan, best_path->subpath);
 	}
 	else
@@ -3941,12 +3956,18 @@ create_modifytable_plan(PlannerInfo *root, ModifyTablePath *best_path)
 		 */
 		if (rel->rd_rel->relkind == RELKIND_RELATION)
 		{
+			/* YB_TODO_PG19MERGE: PG19 moved updatedCols from RangeTblEntry to
+			 * RTEPermissionInfo (reached via getRTEPermissionInfo). */
+			RTEPermissionInfo *perminfo =
+				getRTEPermissionInfo(root->parse->rteperminfos, rte);
+			Bitmapset  *src_updated_cols = perminfo ? perminfo->updatedCols : NULL;
+
 			updatedCols =
 				bms_add_members(get_dependent_generated_columns(root, rt_index,
-																rte->updatedCols,
+																src_updated_cols,
 																NULL /* yb_generated_cols_source */ ,
 																NULL /* yb_relation */ ),
-								rte->updatedCols);
+								src_updated_cols);
 			plan->yb_update_affected_entities =
 				YbComputeAffectedEntitiesForRelation(plan, rel, updatedCols);
 			bms_free(updatedCols);
@@ -6816,7 +6837,8 @@ replace_nestloop_params_mutator(Node *node, PlannerInfo *root)
 	{
 		RowCompareExpr *rcexpr = (RowCompareExpr *) node;
 
-		if (rcexpr->rctype == ROWCOMPARE_EQ)
+		/* YB_TODO_PG19MERGE: rctype -> cmptype, ROWCOMPARE_EQ -> COMPARE_EQ. */
+		if (rcexpr->cmptype == COMPARE_EQ)
 		{
 			RowCompareExpr *rcexpr_new = copyObject(rcexpr);
 			ArrayExpr  *arrexpr = makeNode(ArrayExpr);

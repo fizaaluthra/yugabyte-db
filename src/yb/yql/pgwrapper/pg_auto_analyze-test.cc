@@ -1220,7 +1220,7 @@ TEST_F(PgAutoAnalyzeTest, PerTableCooldown) {
 
       std::chrono::microseconds expected_cooldown = min_analyze_interval;
       for (size_t i = 0; i < info.analyze_history.size(); i++) {
-        LOG(INFO) << "Analyze " << i << " at " << expected_cooldown;
+        LOG(INFO) << "Analyze " << i << " at " << expected_cooldown.count() << "us";
         ASSERT_EQ(info.analyze_history[i].cooldown, expected_cooldown);
         expected_cooldown =
             std::chrono::duration_cast<std::chrono::microseconds>(expected_cooldown * scale_factor);

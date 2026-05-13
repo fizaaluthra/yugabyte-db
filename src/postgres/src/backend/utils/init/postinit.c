@@ -98,6 +98,7 @@
 #include "commands/dbcommands.h"
 #include "utils/yb_inheritscache.h"
 #include "yb/yql/pggate/ybc_gflags.h"
+#include "yb_ash.h"				/* YB_TODO_PG19MERGE: yb_enable_ash, YbAsh* */
 
 /* has this backend called EmitConnectionWarnings()? */
 static bool ConnectionWarningsEmitted;
@@ -367,7 +368,7 @@ YbLogAuthPassthroughConnReceived(struct Port *port)
 	 * Conn Mgr does not provide the port number, so we only log the host.
 	 */
 
-	if (Log_connections)
+	if (log_connections /* YB_TODO_PG19MERGE: Log_connections -> log_connections (uint32 bitmask now) */)
 		ereport(LOG,
 				(errmsg("connection received (Auth Passthrough): host=%s",
 						port->remote_host)));
@@ -389,7 +390,7 @@ YbLogAuthPassthroughConnAuthenticated(Port *port)
 	 * log that SSL is enabled on the CM-client side. Similarly, GSS is not
 	 * supported with Connection Manager, so we don't log that either.
 	 */
-	if (Log_connections)
+	if (log_connections /* YB_TODO_PG19MERGE: Log_connections -> log_connections (uint32 bitmask now) */)
 	{
 		StringInfoData logmsg;
 
@@ -509,7 +510,7 @@ YbCheckMyDatabase(const char *name, bool am_superuser,
 		 * and save a few cycles.)
 		 */
 		if (!am_superuser && !override_allow_connections &&
-			pg_database_aclcheck(db_oid, GetUserId(), ACL_CONNECT) !=
+			object_aclcheck(DatabaseRelationId, db_oid, GetUserId(), ACL_CONNECT) !=
 			ACLCHECK_OK)
 		{
 			ereport(YbHandleAuthPassthroughFailureAndGetElevel(),
@@ -673,17 +674,13 @@ CheckMyDatabase(const char *name, bool am_superuser, bool override_allow_connect
 						   " which is not recognized by setlocale().", ctype),
 				 errhint("Recreate the database with another locale or install the missing locale.")));
 
-	/* YbPresetDatabaseCollation may have already populated default_locale */
+	/* YB_TODO_PG19MERGE: PG19 made default_locale a file-static inside pg_locale.c
+	 * (no longer extern); the YB "reset before init_database_collation" path needs
+	 * to be rewritten against the new locale-init API. Skip for now; the reset is
+	 * only needed because YbPresetDatabaseCollation may pre-populate it. */
 	if (IsYugaByteEnabled())
 	{
-		if (default_locale.info.icu.locale)
-			pfree((void *) default_locale.info.icu.locale);
-		if (default_locale.info.icu.ucol)
-			ucol_close(default_locale.info.icu.ucol);
-		default_locale = (struct pg_locale_struct)
-		{
-			0
-		};
+		/* intentionally empty */
 	}
 
 	init_database_collation();
@@ -972,8 +969,11 @@ InitPostgres(const char *in_dbname, Oid dboid,
 			 uint32 flags,
 			 char *out_dbname)
 {
-	YbInitPostgres(in_dbname, dboid, username, useroid, load_session_libraries,
-				   override_allow_connections, out_dbname, NULL);
+	/* YB_TODO_PG19MERGE: PG19 unified the bool args into a uint32 flags bitmask. */
+	YbInitPostgres(in_dbname, dboid, username, useroid,
+				   (flags & INIT_PG_LOAD_SESSION_LIBS) != 0,
+				   (flags & INIT_PG_OVERRIDE_ALLOW_CONNS) != 0,
+				   out_dbname, NULL);
 }
 
 static void
@@ -1257,8 +1257,10 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 		}
 		else
 		{
+			/* YB_TODO_PG19MERGE: YbInitPostgres/InitPostgresImpl don't yet plumb the
+			 * INIT_PG_OVERRIDE_ROLE_LOGIN flag through; pass false for parity with PG18. */
 			InitializeSessionUserId(username, useroid,
-									(flags & INIT_PG_OVERRIDE_ROLE_LOGIN) != 0);
+									false /* override_role_login */);
 			am_superuser = superuser();
 		}
 	}
@@ -1641,9 +1643,10 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 	 * database-access infrastructure is up.  (Also, it wants to know if the
 	 * user is a superuser, so the above stuff has to happen first.)
 	 */
+	/* YB_TODO_PG19MERGE: flags bitmask not threaded through InitPostgresImpl;
+	 * use the existing override_allow_connections bool parameter. */
 	if (!bootstrap)
-		CheckMyDatabase(dbname, am_superuser,
-						(flags & INIT_PG_OVERRIDE_ALLOW_CONNS) != 0);
+		CheckMyDatabase(dbname, am_superuser, override_allow_connections);
 
 	/*
 	 * YB: We are done with the authentication. Now we can send the db oid to
@@ -1719,7 +1722,8 @@ InitPostgresImpl(const char *in_dbname, Oid dboid,
 	 * during the initial transaction in case anything that requires database
 	 * access needs to be done.
 	 */
-	if ((flags & INIT_PG_LOAD_SESSION_LIBS) != 0)
+	/* YB_TODO_PG19MERGE: use existing load_session_libraries bool. */
+	if (load_session_libraries)
 		process_session_preload_libraries();
 
 	/* fill in the remainder of this entry in the PgBackendStatus array */
@@ -1781,7 +1785,6 @@ YbInitPostgres(const char *in_dbname, Oid dboid,
 static void
 YbPresetDatabaseCollation(HeapTuple tuple)
 {
-	Form_pg_database dbform = (Form_pg_database) GETSTRUCT(tuple);
 	Datum		datum;
 	bool		isnull;
 	char	   *collate;
@@ -1797,17 +1800,10 @@ YbPresetDatabaseCollation(HeapTuple tuple)
 						   " which is not recognized by setlocale().", collate),
 				 errhint("Recreate the database with another locale or install the missing locale.")));
 	elog(DEBUG1, "LC_COLLATE of %u is set to %s", MyDatabaseId, collate);
-	if (dbform->datlocprovider == COLLPROVIDER_ICU)
-	{
-		datum = SysCacheGetAttr(DATABASEOID, tuple, Anum_pg_database_daticulocale, &isnull);
-		Assert(!isnull);
-		char	   *iculocale = TextDatumGetCString(datum);
-
-		make_icu_collator(iculocale, &default_locale);
-		elog(DEBUG1, "iculocale of %u is set to %s", MyDatabaseId, iculocale);
-	}
-	default_locale.provider = dbform->datlocprovider;
-	default_locale.deterministic = true;
+	/* YB_TODO_PG19MERGE: PG19 renamed daticulocale -> datlocale and made
+	 * default_locale + make_icu_collator file-private in pg_locale.c. The
+	 * YB "preset the database collation early for prefetching" path needs to
+	 * be reworked against the new init_database_collation/pg_newlocale_* API. */
 	yb_default_collation_resolved = true;
 }
 

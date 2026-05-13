@@ -37,6 +37,7 @@
 #include "catalog/pg_type.h"
 #include "commands/async.h"
 #include "commands/event_trigger.h"
+#include "commands/explain.h"		/* YB_TODO_PG19MERGE: YbExplainCommitStats */
 #include "commands/explain_state.h"
 #include "commands/prepare.h"
 #include "commands/repack.h"
@@ -62,6 +63,7 @@
 #include "replication/slotsync.h"
 #include "replication/slot.h"
 #include "replication/walsender.h"
+#include "replication/walsender_private.h"		/* YB_TODO_PG19MERGE: replication_scanner_* now take yyscan_t */
 #include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
@@ -105,6 +107,8 @@
 #include "yb/yql/pggate/ybc_dist_trace.h"
 #include "yb/yql/pggate/ybc_gflags.h"
 #include "yb/yql/pggate/ybc_pggate.h"
+#include "executor/executor.h"		/* YB_TODO_PG19MERGE: yb_refresh_stats_before_exec */
+#include "yb_ash.h"					/* YB_TODO_PG19MERGE: yb_enable_ash, YbAsh*Metadata */
 #include "yb_tcmalloc_utils.h"
 #include "yb_ysql_conn_mgr_helper.h"
 #include <arpa/inet.h>
@@ -4955,7 +4959,8 @@ YBPrepareCacheRefreshIfNeeded(ErrorData *edata,
 		if (MyReplicationSlot != NULL)
 			ReplicationSlotRelease();
 
-		ReplicationSlotCleanup();
+		/* YB_TODO_PG19MERGE: PG19 added bool synced_only. */
+		ReplicationSlotCleanup(false /* synced_only */);
 
 		if (doing_extended_query_message)
 			ignore_till_sync = true;
@@ -5048,20 +5053,21 @@ yb_parse_query_silently(const char *query_string)
 {
 	List	   *parsetree_list;
 
-	int			prev_log_min_messages = log_min_messages;
+	/* YB_TODO_PG19MERGE: log_min_messages is now an array indexed by MyBackendType. */
+	int			prev_log_min_messages = log_min_messages[MyBackendType];
 	int			prev_client_min_messages = client_min_messages;
 
 	PG_TRY();
 	{
-		log_min_messages = ERROR;
+		log_min_messages[MyBackendType] = ERROR;
 		client_min_messages = ERROR;
 		parsetree_list = pg_parse_query(query_string);
-		log_min_messages = prev_log_min_messages;
+		log_min_messages[MyBackendType] = prev_log_min_messages;
 		client_min_messages = prev_client_min_messages;
 	}
 	PG_CATCH();
 	{
-		log_min_messages = prev_log_min_messages;
+		log_min_messages[MyBackendType] = prev_log_min_messages;
 		client_min_messages = prev_client_min_messages;
 		PG_RE_THROW();
 	}
@@ -5119,11 +5125,21 @@ yb_is_dml_command(const char *query_string)
 	 * commands which have a different grammar (repl_gram.y) and will always
 	 * lead to a syntax error.
 	 */
-	replication_scanner_init(query_string);
-	if (replication_scanner_is_replication_command())
+	/* YB_TODO_PG19MERGE: replication_scanner_* now take a yyscanner handle. */
 	{
-		replication_scanner_finish();
-		return false;
+		yyscan_t scanner;
+
+		replication_scanner_init(query_string, &scanner);
+		if (!replication_scanner_is_replication_command(scanner))
+		{
+			/* not a replication command */
+		}
+		else
+		{
+			replication_scanner_finish(scanner);
+			return false;
+		}
+		replication_scanner_finish(scanner);
 	}
 
 	CommandTag	command_tag = YbParseCommandTag(query_string);
@@ -5552,7 +5568,7 @@ yb_collect_portal_restart_data(const char *portal_name)
 static void
 yb_clear_portal_before_restart(Portal portal)
 {
-	Assert(PointerIsValid(portal));
+	Assert(((portal) != NULL) /* YB_TODO_PG19MERGE: PointerIsValid removed */);
 	Assert(portal->status == PORTAL_FAILED);
 	if (yb_debug_log_internal_restarts)
 		elog(LOG, "Restarting portal %s for retry", portal->name);
@@ -5568,7 +5584,7 @@ yb_clear_portal_before_restart(Portal portal)
 	 * Note: in most paths of control, this will have been done already in
 	 * MarkPortalDone or MarkPortalFailed.  We're just making sure.
 	 */
-	if (PointerIsValid(portal->cleanup))
+	if (((portal->cleanup) != NULL) /* YB_TODO_PG19MERGE: PointerIsValid removed */)
 	{
 		portal->cleanup(portal);
 		portal->cleanup = NULL;
@@ -5665,7 +5681,7 @@ yb_clear_portal_before_restart(Portal portal)
 static void
 yb_restart_portal_after_clear(Portal portal)
 {
-	Assert(PointerIsValid(portal));
+	Assert(((portal) != NULL) /* YB_TODO_PG19MERGE: PointerIsValid removed */);
 
 	/* create a resource owner for the portal */
 	portal->resowner = ResourceOwnerCreate(CurTransactionResourceOwner,
@@ -5741,9 +5757,10 @@ yb_maybe_sleep_on_txn_conflict(int attempt)
 	 * read/ write rpc which faced a kConflict error is unblocked only when all
 	 * conflicting transactions have ended (either committed or aborted).
 	 */
-	pgstat_report_wait_start(WAIT_EVENT_YB_TXN_CONFLICT_BACKOFF);
+	/* YB_TODO_PG19MERGE: PG19 auto-generates wait events from wait_event_names.txt;
+	 * WAIT_EVENT_YB_TXN_CONFLICT_BACKOFF needs to be added to that generator input.
+	 * Stub by skipping the wait-event tagging for now. */
 	pg_usleep(yb_get_sleep_usecs_on_txn_conflict(attempt));
-	pgstat_report_wait_end();
 }
 
 static void
@@ -7582,7 +7599,8 @@ PostgresMain(const char *dbname, const char *username)
 					char	   *db_name = MyProcPort->database_name;
 					char	   *user_name = MyProcPort->user_name;
 					char	   *host = MyProcPort->remote_host;
-					const char *authn_id = MyProcPort->authn_id;
+					/* YB_TODO_PG19MERGE: authn_id moved from Port to ClientConnectionInfo (MyClientConnectionInfo). */
+					const char *authn_id = MyClientConnectionInfo.authn_id;
 					sa_family_t conn_type = MyProcPort->raddr.addr.ss_family;
 					List	   *guc_options = MyProcPort->guc_options;
 					char	   *cmdline_options = MyProcPort->cmdline_options;
@@ -7598,7 +7616,8 @@ PostgresMain(const char *dbname, const char *username)
 					 * This will be set when authenticating and needs to be
 					 * NULL before that
 					 */
-					MyProcPort->authn_id = NULL;
+					/* YB_TODO_PG19MERGE: authn_id moved to MyClientConnectionInfo. */
+					MyClientConnectionInfo.authn_id = NULL;
 
 					/*
 					 * HARD Code connection type between client and
@@ -7685,7 +7704,8 @@ PostgresMain(const char *dbname, const char *username)
 					inet_pton(AF_INET, MyProcPort->remote_host,
 							  &(ip_address_1->sin_addr));
 
-					MyProcPort->authn_id = authn_id;
+					/* YB_TODO_PG19MERGE: authn_id moved to MyClientConnectionInfo. */
+					MyClientConnectionInfo.authn_id = authn_id;
 
 
 					/*

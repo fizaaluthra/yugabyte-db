@@ -1499,7 +1499,11 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 
 			uint64_t	yb_consistent_snapshot_time;
 
+			/* YB_TODO_PG19MERGE: PG19 added repack/failover/synced flags between
+			 * two_phase and the YB plugin args. */
 			ReplicationSlotCreate(cmd->slotname, true, RS_PERSISTENT, two_phase,
+								  false /* repack */, false /* failover */,
+								  false /* synced */,
 								  cmd->plugin, snapshot_action,
 								  &yb_consistent_snapshot_time, lsn_type,
 								  yb_ordering_mode);

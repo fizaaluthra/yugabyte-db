@@ -956,7 +956,7 @@ DefineIndex(ParseState *pstate,
 		{
 			AclResult	aclresult;
 
-			aclresult = pg_database_aclcheck(Template1DbOid, GetUserId(), ACL_CREATE);
+			aclresult = object_aclcheck(DatabaseRelationId, Template1DbOid, GetUserId(), ACL_CREATE);
 
 			if (aclresult != ACLCHECK_OK)
 				aclcheck_error(aclresult, OBJECT_DATABASE,

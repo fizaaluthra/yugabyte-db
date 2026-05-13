@@ -32,13 +32,14 @@
 #ifdef HAVE_SYS_PRCTL_H
 #include <sys/prctl.h>
 #endif
-#ifdef HAVE_SYS_RESOURCE_H
 #include <sys/resource.h>
-#endif
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
+#ifdef USE_ICU
+#include <unicode/ucol.h>
+#endif
 
 #include "access/heaptoast.h"
 #include "access/htup.h"
@@ -113,9 +114,10 @@
 #include "pgstat.h"
 #include "postmaster/interrupt.h"
 #include "replication/origin.h"
-#ifndef HAVE_GETRUSAGE
-#include "rusagestub.h"
-#endif
+/* YB_TODO_PG19MERGE: PG commit 36b3d52459a removed rusagestub.h
+ * (getrusage is universally available). */
+#include "access/attmap.h"
+#include "storage/fd.h"
 #include "storage/procarray.h"
 #include "tcop/utility.h"
 #include "utils/builtins.h"
@@ -128,6 +130,7 @@
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 #include "utils/snapshot.h"
+#include "utils/wait_event.h"
 #include "utils/spccache.h"
 #include "utils/syscache.h"
 #include "utils/uuid.h"
@@ -1185,7 +1188,11 @@ IpAddressToBytes(YbcPgAshConfig *ash_config)
 static uint16_t
 YbGetSessionReplicationOriginId(void)
 {
-	return replorigin_session_origin;
+	/* YB_TODO_PG19MERGE: PG19 made replorigin_session_origin static-internal.
+	 * Need to expose it (e.g. via a new replorigin_session_get_origin_id()
+	 * accessor) or thread the session origin through the YB callbacks
+	 * differently. Stub to InvalidReplOriginId (0) for now. */
+	return InvalidReplOriginId;
 }
 
 void
@@ -2410,7 +2417,7 @@ YbHeapTupleToStringWithIsOmitted(HeapTuple tuple, TupleDesc tupleDesc,
 	Assert(tuple != NULL);
 
 	const char *result;
-	TupleTableSlot *slot = MakeTupleTableSlot(tupleDesc, &TTSOpsHeapTuple);
+	TupleTableSlot *slot = MakeTupleTableSlot(tupleDesc, &TTSOpsHeapTuple, 0);
 
 	ExecStoreHeapTuple(tuple, slot, false);
 	result = YbSlotToStringWithIsOmitted(slot, is_omitted);
@@ -2526,7 +2533,7 @@ YBResetEnableSpecialDDLMode()
 static YbcStatus
 YbMemCtxReset(MemoryContext context)
 {
-	AssertArg(MemoryContextIsValid(context));
+	Assert(MemoryContextIsValid(context));
 	for (MemoryContext child = context->firstchild;
 		 child != NULL;
 		 child = child->nextchild)
@@ -2932,7 +2939,7 @@ YbTrackPgTxnInvalMessagesForAnalyze()
 		memcpy(currentInvalMessages + numCatCacheMsgs,
 			   relCacheInvalMessages,
 			   numRelCacheMsgs * sizeof(SharedInvalidationMessage));
-	if (log_min_messages <= DEBUG1 || yb_debug_log_catcache_events)
+	if (log_min_messages[MyBackendType] <= DEBUG1 || yb_debug_log_catcache_events)
 		YbLogInvalidationMessages(currentInvalMessages, nmsgs);
 	YbCatalogMessageList *current = (YbCatalogMessageList *)
 		MemoryContextAlloc(ddl_transaction_state.mem_context,
@@ -3293,7 +3300,7 @@ YBCommitTransactionContainingDDL()
 
 				msg->yb_header.yb_sender_pid = 0;
 			}
-		if (currentInvalMessages && log_min_messages <= DEBUG1)
+		if (currentInvalMessages && log_min_messages[MyBackendType] <= DEBUG1)
 			YbLogInvalidationMessages(currentInvalMessages, nmsgs);
 
 		CommandTag ddl_cmdtag = ddl_transaction_state.current_stmt_ddl_command_tag;
@@ -5263,7 +5270,6 @@ yb_database_clones(PG_FUNCTION_ARGS)
 #undef YB_DATABASE_CLONES_COLS
 
 	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -5484,7 +5490,7 @@ getSplitPointsInfo(Oid relid, YbcPgTableDesc yb_tabledesc,
 	bool		is_table = rel->rd_rel->relkind == RELKIND_RELATION ||
 		rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE;
 	Relation	index_rel = (is_table ?
-							 relation_open(RelationGetPrimaryKeyIndex(rel),
+							 relation_open(RelationGetPrimaryKeyIndex(rel, false),
 										   AccessShareLock) :
 							 rel);
 	Form_pg_index rd_index = index_rel->rd_index;
@@ -6080,7 +6086,6 @@ yb_local_tablets(PG_FUNCTION_ARGS)
 #undef YB_TABLET_INFO_COLS_V2
 
 	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -6090,8 +6095,9 @@ yb_local_tablets(PG_FUNCTION_ARGS)
 static Datum
 GetMetricsAsJsonbDatum(YbcMetricsInfo *metrics, size_t metricsCount)
 {
-	JsonbParseState *state = NULL;
-	JsonbValue	result;
+	/* YB_TODO_PG19MERGE: pushJsonbValue now takes JsonbInState * and writes
+	 * the final value into state.result on WJB_END_OBJECT. */
+	JsonbInState state = {0};
 	JsonbValue	key;
 	JsonbValue	value;
 
@@ -6108,8 +6114,8 @@ GetMetricsAsJsonbDatum(YbcMetricsInfo *metrics, size_t metricsCount)
 		value.val.string.len = strlen(metrics[j].value);
 		pushJsonbValue(&state, WJB_VALUE, &value);
 	}
-	result = *pushJsonbValue(&state, WJB_END_OBJECT, NULL);
-	Jsonb	   *jsonb = JsonbValueToJsonb(&result);
+	pushJsonbValue(&state, WJB_END_OBJECT, NULL);
+	Jsonb	   *jsonb = JsonbValueToJsonb(state.result);
 
 	return JsonbPGetDatum(jsonb);
 }
@@ -6185,7 +6191,6 @@ yb_servers_metrics(PG_FUNCTION_ARGS)
 #undef YB_SERVERS_METRICS_COLS
 
 	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
 
 	MemoryContextSwitchTo(oldcontext);
 
@@ -6329,42 +6334,21 @@ YBComputeNonCSortKey(Oid collation_id, const char *value, int64_t bytes)
 	memcpy(buf1, value, bytes);
 	buf1[buflen1] = '\0';
 
-#ifdef USE_ICU
-	int32_t		ulen = -1;
-	UChar	   *uchar = NULL;
-#endif
-
-#ifdef USE_ICU
-	/* When using ICU, convert string to UChar. */
-	if (locale && locale->provider == COLLPROVIDER_ICU)
-	{
-		is_icu_provider = true;
-		ulen = icu_to_uchar(&uchar, buf1, buflen1);
-	}
-#endif
+	/* YB_TODO_PG19MERGE: PG19 made pg_locale_struct opaque (removed .provider
+	 * and .info fields) and provides pg_strnxfrm()/pg_strxfrm_enabled() that
+	 * internally dispatch to the right provider. Reworked to use that API. */
+	(void) is_icu_provider;
 
 	/*
-	 * Loop: Call strxfrm() or ucol_getSortKey(), possibly enlarge buffer,
-	 * and try again. Both of these functions have the result buffer
-	 * content undefined if the result did not fit, so we need to retry
-	 * until everything fits.
+	 * Loop: Call pg_strnxfrm(), possibly enlarge buffer, and try again. The
+	 * function has the result buffer content undefined if the result did not
+	 * fit, so we need to retry until everything fits.
 	 */
 	for (;;)
 	{
-#ifdef USE_ICU
-		if (locale && locale->provider == COLLPROVIDER_ICU)
-		{
-			bsize = ucol_getSortKey(locale->info.icu.ucol,
-									uchar, ulen,
-									(uint8_t *) buf2, buflen2);
-		}
+		if (locale && pg_strxfrm_enabled(locale))
+			bsize = pg_strnxfrm(buf2, buflen2, buf1, buflen1, locale);
 		else
-#endif
-#ifdef HAVE_LOCALE_T
-		if (locale && locale->provider == COLLPROVIDER_LIBC)
-			bsize = strxfrm_l(buf2, buf1, buflen2, locale->info.lt);
-		else
-#endif
 			bsize = strxfrm(buf2, buf1, buflen2);
 
 		if (bsize < buflen2)
@@ -6378,10 +6362,8 @@ YBComputeNonCSortKey(Oid collation_id, const char *value, int64_t bytes)
 		buf2 = palloc(buflen2);
 	}
 
-#ifdef USE_ICU
-	if (uchar)
-		pfree(uchar);
-#endif
+	/* YB_TODO_PG19MERGE: uchar/icu_to_uchar path removed when ICU bits went
+	 * through pg_strnxfrm/pg_strxfrm_enabled above; no per-call free needed. */
 
 	pfree(buf1);
 	if (is_icu_provider)
@@ -6538,8 +6520,9 @@ YBRequiresCacheToCheckLocale(Oid collation)
 	 * not push down collations where DocDB would need to access the cache to
 	 * get information about the locale.
 	 */
+	/* YB_TODO_PG19MERGE: PG19 removed POSIX_COLLATION_OID (POSIX and C are equivalent). */
 	return OidIsValid(collation) && collation != DEFAULT_COLLATION_OID
-		&& collation != C_COLLATION_OID && collation != POSIX_COLLATION_OID;
+		&& collation != C_COLLATION_OID;
 }
 
 bool
@@ -7440,7 +7423,7 @@ YbGetSplitOptions(Relation rel)
 		rel->yb_table_properties->num_hash_key_columns > 0 ||
 		((rel->rd_rel->relkind == RELKIND_RELATION ||
 		  rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE) &&
-		 RelationGetPrimaryKeyIndex(rel) == InvalidOid) ? NUM_TABLETS :
+		 RelationGetPrimaryKeyIndex(rel, false) == InvalidOid) ? NUM_TABLETS :
 		SPLIT_POINTS;
 	split_options->num_tablets = rel->yb_table_properties->num_tablets;
 
@@ -7542,8 +7525,10 @@ YbIsConnectionMadeStickyUsingGUC()
 	 * the history stored in yb_ysql_conn_mgr_superuser_existed to be used on
 	 * priority.
 	 */
+	/* YB_TODO_PG19MERGE: PG19 removed session_auth_is_superuser global; check via
+	 * superuser_arg(GetSessionUserId()) instead. */
 	yb_ysql_conn_mgr_superuser_existed = yb_ysql_conn_mgr_superuser_existed ||
-		session_auth_is_superuser;
+		superuser_arg(GetSessionUserId());
 	return yb_ysql_conn_mgr_sticky_guc = yb_ysql_conn_mgr_sticky_guc ||
 		(YbIsSuperuserConnSticky() && yb_ysql_conn_mgr_superuser_existed);
 }
@@ -7717,7 +7702,8 @@ YbATCopyPrimaryKeyToCreateStmt(Relation rel, Relation pg_constraint,
 					 */
 					AttrMap    *att_map = build_attrmap_by_name(RelationGetDescr(rel),
 																RelationGetDescr(rel),
-																false /* yb_ignore_type_mismatch */ );
+																false /* missing_ok */,
+																false /* yb_ignore_type_mismatch */);
 
 					Relation	idx_rel =
 						index_open(con_form->conindid, AccessShareLock);
@@ -8285,7 +8271,7 @@ YbApplyInvalidationMessages(YbcCatalogMessageLists *message_lists)
 
 		size_t		nmsgs = msglist->num_bytes / sizeof(SharedInvalidationMessage);
 
-		if (log_min_messages <= DEBUG1 || yb_debug_log_catcache_events)
+		if (log_min_messages[MyBackendType] <= DEBUG1 || yb_debug_log_catcache_events)
 			YbLogInvalidationMessages(invalMessages, nmsgs);
 		for (size_t i = 0; i < nmsgs; ++i)
 			/*
@@ -8419,9 +8405,9 @@ YbIsAnyDependentGeneratedColPK(Relation rel, AttrNumber attnum)
 										target_cols,
 										NULL /* yb_generated_cols_source */ ,
 										rel);
-	int			bms_index;
+	int			bms_index = -1;
 
-	while ((bms_index = bms_first_member(dependent_generated_cols)) >= 0)
+	while ((bms_index = bms_next_member(dependent_generated_cols, bms_index)) >= 0)
 	{
 		AttrNumber	dependent_attnum = bms_index + offset;
 
@@ -8633,7 +8619,6 @@ yb_get_tablet_metadata(PG_FUNCTION_ARGS)
 	}
 
 	/* clean up and return the tuplestore */
-	tuplestore_donestoring(tupstore);
 
 	MemoryContextSwitchTo(oldcontext);
 	return (Datum) 0;

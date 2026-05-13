@@ -319,6 +319,10 @@ extern int	yb_calculate_distinct_prefixlen(PlannerInfo *root,
 											List *index_clauses);
 extern bool yb_has_sufficient_uniqkeys(PlannerInfo *root, Path *pathnode);
 extern List *yb_get_ecs_for_query_uniqkeys(PlannerInfo *root);
-extern Path *get_singleton_append_subpath(Path *path);
+/* YB_TODO_PG19MERGE: PG19 keeps get_singleton_append_subpath static with a
+ * 2-arg signature (Path *, List **). YB exported it for use elsewhere; sync
+ * the prototype to PG19's 2-arg form. */
+extern Path *get_singleton_append_subpath(Path *path,
+										  List **child_append_relid_sets);
 
 #endif							/* PATHS_H */

@@ -27,6 +27,7 @@
 #include "postgres.h"
 
 #include "commands/explain.h"
+#include "commands/explain_state.h"	/* YB_TODO_PG19MERGE: ExplainFormat moved out of commands/explain.h */
 #include "utils/guc.h"
 #include "utils/timestamp.h"
 

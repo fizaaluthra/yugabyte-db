@@ -99,9 +99,11 @@ MultiExecYbBitmapIndexScan(YbBitmapIndexScanState *node)
 		/*
 		* Initialize scan descriptor.
 		*/
+		/* YB_TODO_PG19MERGE: PG added IndexScanInstrumentation*; pass NULL to opt out. */
 		node->biss_ScanDesc =
 			index_beginscan_bitmap(node->biss_RelationDesc,
 								   estate->es_snapshot,
+								   NULL /* instrument */ ,
 								   node->biss_NumScanKeys);
 
 		node->biss_ScanDesc->xs_want_itup = true;

@@ -381,16 +381,16 @@ static JsonParseErrorType okeys_scalar(void *state, char *token, JsonTokenType t
 /* YB: semantic action functions for json_validate_object_keys */
 
 /* YB: Invoked whenever the parser encounters the start of a json object */
-static void validate_okeys_object_field_start(void *state, char *fname, bool isnull);
+static JsonParseErrorType validate_okeys_object_field_start(void *state, char *fname, bool isnull);
 
 /* YB: Invoked whenever the parser encounters a json array */
-static void validate_okeys_array_start(void *state);
+static JsonParseErrorType validate_okeys_array_start(void *state);
 
 /* YB: Invoked whenever a json scalar is encountered by the parser */
-static void validate_okeys_scalar(void *state, char *token, JsonTokenType tokentype);
+static JsonParseErrorType validate_okeys_scalar(void *state, char *token, JsonTokenType tokentype);
 
 /* YB: Invoked whenever a json object has been processed completely by the parser */
-static void validate_okeys_object_end(void *state);
+static JsonParseErrorType validate_okeys_object_end(void *state);
 
 /* semantic action functions for json_get* functions */
 static JsonParseErrorType get_object_start(void *state);
@@ -882,14 +882,14 @@ okeys_scalar(void *state, char *token, JsonTokenType tokentype)
 	return JSON_SUCCESS;
 }
 
-static void
+static JsonParseErrorType
 validate_okeys_object_field_start(void *state, char *fname, bool isnull)
 {
 	YbValidateOkeysState *_state = (YbValidateOkeysState *) state;
 
 	/* only verifying keys for the top level object */
 	if (_state->lex->lex_level != 1)
-		return;
+		return JSON_SUCCESS;
 
 	/* Verify whether fname matches a key in required_keys */
 	for (int i = 0; i < _state->num_required_keys; i++)
@@ -898,7 +898,7 @@ validate_okeys_object_field_start(void *state, char *fname, bool isnull)
 		{
 			/* This is a valid key. Mark that this key is found */
 			_state->found_key[i] = true;
-			return;
+			return JSON_SUCCESS;
 		}
 	}
 
@@ -908,23 +908,25 @@ validate_okeys_object_field_start(void *state, char *fname, bool isnull)
 		if (strcmp(fname, _state->optional_keys[i]) == 0)
 		{
 			/* This is a valid key */
-			return;
+			return JSON_SUCCESS;
 		}
 	}
 
 	ereport(ERROR,
 			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 			 errmsg("invalid key \"%s\" found in json object %s", fname, _state->json_text)));
+	return JSON_SUCCESS;
+
 }
 
-static void
+static JsonParseErrorType
 validate_okeys_object_end(void *state)
 {
 	YbValidateOkeysState *_state = (YbValidateOkeysState *) state;
 
 	/* Nothing to do for nested objects */
 	if (_state->lex->lex_level > 0)
-		return;
+		return JSON_SUCCESS;
 
 	/*
 	 * Since the entire object has been processed, check whether all required
@@ -939,9 +941,11 @@ validate_okeys_object_end(void *state)
 							_state->required_keys[i],
 							_state->json_text)));
 	}
+	return JSON_SUCCESS;
+
 }
 
-static void
+static JsonParseErrorType
 validate_okeys_array_start(void *state)
 {
 	YbValidateOkeysState *_state = (YbValidateOkeysState *) state;
@@ -952,9 +956,11 @@ validate_okeys_array_start(void *state)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("found unexpected JSON array in json object %s",
 						_state->json_text)));
+	return JSON_SUCCESS;
+
 }
 
-static void
+static JsonParseErrorType
 validate_okeys_scalar(void *state, char *token, JsonTokenType tokentype)
 {
 	YbValidateOkeysState *_state = (YbValidateOkeysState *) state;
@@ -965,6 +971,8 @@ validate_okeys_scalar(void *state, char *token, JsonTokenType tokentype)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("found unexpected JSON scalar in json object %s",
 						_state->json_text)));
+	return JSON_SUCCESS;
+
 }
 
 /*
@@ -6371,7 +6379,8 @@ validate_json_object_keys(text *json, char **required_keys, int num_required_key
 	JsonLexContext *lex;
 	JsonSemAction *sem;
 
-	lex = makeJsonLexContext(json, true);
+	/* YB_TODO_PG19MERGE: PG19 added a leading JsonLexContext * out-param. */
+	lex = makeJsonLexContext(NULL, json, true);
 	state = palloc0(sizeof(YbValidateOkeysState));
 	sem = palloc0(sizeof(JsonSemAction));
 

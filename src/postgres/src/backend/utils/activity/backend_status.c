@@ -26,6 +26,8 @@
 #include "utils/memutils.h"
 
 /* YB includes */
+#include "access/htup_details.h"		/* YB_TODO_PG19MERGE: GETSTRUCT */
+#include "catalog/pg_database.h"		/* YB_TODO_PG19MERGE: Form_pg_database */
 #include "pg_yb_utils.h"
 #include "utils/syscache.h"
 #include "yb/yql/pggate/ybc_gflags.h"
@@ -185,6 +187,9 @@ BackendStatusShmemInit(void *arg)
 	if (YBIsEnabledInPostgresEnvVar())
 	{
 		Size		DatabaseNameBufferSize;
+		/* YB_TODO_PG19MERGE: PG19 dropped the function-scope `found` var that
+		 * the YB block reused. Declare locally. */
+		bool		found;
 
 		DatabaseNameBufferSize = mul_size(NAMEDATALEN, NumBackendStatSlots);
 		DatabaseNameBuffer = (char *)
@@ -489,13 +494,14 @@ pgstat_bestart_final(void)
 	/* pgstats state must be initialized from pgstat_beinit() */
 	Assert(beentry != NULL);
 
+	/* YB_TODO_PG19MERGE: PG19 removed the lbeentry local copy; use beentry directly. */
 	/* We have userid for client-backends, wal-sender and bgworker processes */
 	if (MyBackendType == B_BACKEND
 		|| MyBackendType == B_WAL_SENDER
 		|| MyBackendType == B_BG_WORKER
-		|| lbeentry.st_backendType == YB_AUTO_ANALYZE_BACKEND
-		|| lbeentry.st_backendType == YB_YSQL_CONN_MGR
-		|| lbeentry.st_backendType == YB_YSQL_CONN_MGR_WAL_SENDER)
+		|| beentry->st_backendType == YB_AUTO_ANALYZE_BACKEND
+		|| beentry->st_backendType == YB_YSQL_CONN_MGR
+		|| beentry->st_backendType == YB_YSQL_CONN_MGR_WAL_SENDER)
 		userid = GetSessionUserId();
 	else
 		userid = InvalidOid;
@@ -521,19 +527,20 @@ pgstat_bestart_final(void)
 	if (application_name)
 		pgstat_report_appname(application_name);
 
-	if (YBIsEnabledInPostgresEnvVar() && lbeentry.st_databaseid > 0)
+	/* YB_TODO_PG19MERGE: lbeentry -> beentry. */
+	if (YBIsEnabledInPostgresEnvVar() && beentry->st_databaseid > 0)
 	{
 		HeapTuple	tuple;
 
-		tuple = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(lbeentry.st_databaseid));
+		tuple = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(beentry->st_databaseid));
 		Form_pg_database dbForm;
 
 		dbForm = (Form_pg_database) GETSTRUCT(tuple);
-		strcpy(lbeentry.st_databasename, dbForm->datname.data);
+		strcpy(beentry->st_databasename, dbForm->datname.data);
 		ReleaseSysCache(tuple);
 
 		/* Initialization of allocated memory measurement value */
-		lbeentry.yb_st_allocated_mem_bytes = PgMemTracker.backend_cur_allocated_mem_bytes;
+		beentry->yb_st_allocated_mem_bytes = PgMemTracker.backend_cur_allocated_mem_bytes;
 	}
 }
 
@@ -1473,8 +1480,8 @@ yb_pgstat_add_session_info(uint64_t session_id)
 	 */
 	if (MyBEEntry == NULL)
 	{
-		/* Must be an auxiliary process */
-		Assert(MyAuxProcType != NotAnAuxProcess);
+		/* Must be an auxiliary process (PG19 replaced MyAuxProcType with MyBackendType). */
+		Assert(MyBackendType != B_INVALID);
 		return;
 	}
 

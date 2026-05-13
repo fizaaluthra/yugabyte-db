@@ -13,6 +13,7 @@
 #ifndef EXPLAIN_STATE_H
 #define EXPLAIN_STATE_H
 
+#include "executor/instrument.h"		/* for YbPgRpcStats */
 #include "nodes/parsenodes.h"
 #include "nodes/plannodes.h"
 #include "parser/parse_node.h"

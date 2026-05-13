@@ -1552,7 +1552,7 @@ typedef struct IndexOptInfo
 	bool		yb_amhasgetbitmap;	/* does AM have yb_amgetbitmap interface? */
 	bool		yb_amiscopartitioned;	/* is AM for YB a copartitioned index? */
 	/* Used for YB base scans cost model */
-	int32_t		yb_cached_ybctid_size;
+	int32		yb_cached_ybctid_size;
 	char	   *ybIndexName pg_node_attr(read_write_ignore);
 	int			yb_num_decoded_pk_cols;	/* number of decoded pk columns in index */
 } IndexOptInfo;

@@ -741,7 +741,9 @@ YbIsCachedQueryValid(CachedPlanSource *plansource)
 		 * A search_path mismatch means the cached plan may resolve names
 		 * to wrong schemas, so treat the statement as invalid.
 		 */
-		if (!OverrideSearchPathMatchesCurrent(plansource->search_path))
+		/* YB_TODO_PG19MERGE: OverrideSearchPathMatchesCurrent renamed to
+		 * SearchPathMatchesCurrentEnvironment (catalog/namespace.h). */
+		if (!SearchPathMatchesCurrentEnvironment(plansource->search_path))
 			return false;
 	}
 

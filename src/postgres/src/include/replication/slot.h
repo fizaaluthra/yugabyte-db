@@ -435,7 +435,7 @@ extern bool StandbySlotsHaveCaughtup(XLogRecPtr wait_for_lsn, int elevel);
 extern void WaitForStandbyConfirmation(XLogRecPtr wait_for_lsn);
 
 /* YB */
-extern void ReplicationSlotCleanupForProc(PGPROC *proc);
+extern void ReplicationSlotCleanupForProc(PGPROC *proc, bool synced_only);
 extern char YBCGetReplicaIdentityForRelation(Oid relid);
 extern void YbReplicationSlotCreateForDB(const char *name, bool two_phase,
 										 const char *yb_plugin_name,

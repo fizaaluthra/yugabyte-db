@@ -39,6 +39,7 @@
 #include "access/tableam.h"
 #include "access/tupdesc_details.h"
 #include "access/xact.h"
+#include "tcop/backend_startup.h"
 #include "catalog/binary_upgrade.h"
 #include "catalog/catalog.h"
 #include "catalog/indexing.h"
@@ -1496,18 +1497,18 @@ YBLoadRelations(YbUpdateRelationCacheState *state)
 		relation->rd_refcnt = 0;
 		relation->rd_isnailed = false;
 		relation->rd_createSubid = InvalidSubTransactionId;
-		relation->rd_newRelfilenodeSubid = InvalidSubTransactionId;
+		relation->rd_newRelfilelocatorSubid = InvalidSubTransactionId;
 		switch (relation->rd_rel->relpersistence)
 		{
 			case RELPERSISTENCE_UNLOGGED:
 			case RELPERSISTENCE_PERMANENT:
-				relation->rd_backend = InvalidBackendId;
+				relation->rd_backend = INVALID_PROC_NUMBER;
 				relation->rd_islocaltemp = false;
 				break;
 			case RELPERSISTENCE_TEMP:
 				if (isTempOrTempToastNamespace(relation->rd_rel->relnamespace))
 				{
-					relation->rd_backend = BackendIdForTempRelations();
+					relation->rd_backend = ProcNumberForTempRelations();
 					relation->rd_islocaltemp = true;
 				}
 				else
@@ -1516,7 +1517,7 @@ YBLoadRelations(YbUpdateRelationCacheState *state)
 					 * If it's a temp table, but not one of ours,
 					 * we set rd_backend to the invalid backend id.
 					 */
-					relation->rd_backend = InvalidBackendId;
+					relation->rd_backend = INVALID_PROC_NUMBER;
 					relation->rd_islocaltemp = false;
 				}
 				break;
@@ -1915,7 +1916,7 @@ YbCompleteAttrProcessingImpl(const YbAttrProcessorState *state)
 	 * for attnum=1 that used to exist in fastgetattr() and index_getattr().
 	 */
 	if (RelationGetNumberOfAttributes(relation) > 0)
-		TupleDescAttr(RelationGetDescr(relation), 0)->attcacheoff = 0;
+		TupleDescCompactAttr(RelationGetDescr(relation), 0)->attcacheoff = 0;
 
 	/* Set up constraint/default info */
 	if (constr->has_not_null || ndef > 0 || attrmiss || relation->rd_rel->relchecks)
@@ -2993,7 +2994,7 @@ YbPreloadRelCacheImpl(YbRunWithPrefetcherContext *ctx)
 {
 	YbNumRelCachePreloads++;
 	int log_level =
-		(Log_connections ||
+		(log_connections ||
 		 yb_debug_log_catcache_events ||
 		 *(YBCGetGFlags()->ysql_enable_relcache_init_optimization)) ? LOG : DEBUG1;
 	elog(log_level, "Preloading relcache for database %u, session user id: %u, yb_read_time: %" PRIu64,
@@ -3469,7 +3470,7 @@ retry:
 
 		INSTR_TIME_SET_CURRENT(duration);
 		INSTR_TIME_SUBTRACT(duration, start);
-		elog(LOG, "Building relcache entry %p for %s (oid %u) took %ld us", relation,
+		elog(LOG, "Building relcache entry %p for %s (oid %u) took " INT64_FORMAT " us", relation,
 			 RelationGetRelationName(relation), RelationGetRelid(relation),
 			 INSTR_TIME_GET_MICROSEC(duration));
 	}
@@ -5299,7 +5300,7 @@ YbRelationCacheInvalidate()
 		Assert(RelationHasReferenceCountZero(relation));
 		Assert(!relation->rd_isnailed);
 		/* Delete this entry immediately */
-		RelationClearRelation(relation, false);
+		RelationClearRelation(relation);
 	}
 }
 
@@ -6105,7 +6106,7 @@ RelationSetNewRelfilenumber(Relation relation, char persistence,
 			 * This is not required for primary indexes, as they are
 			 * an implicit part of the base table.
 			 */
-			YbIndexSetNewRelfileNode(relation, newrelfilenode,
+			YbIndexSetNewRelfileNode(relation, newrelfilenumber,
 									 yb_copy_split_options, preserved_index_split_options);
 		else if (relation->rd_rel->relkind == RELKIND_RELATION ||
 				 relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
@@ -6117,7 +6118,7 @@ RelationSetNewRelfilenumber(Relation relation, char persistence,
 			 */
 			YBCDropTable(relation);
 			/* Create a new DocDB table for the relation. */
-			YbRelationSetNewRelfileNode(relation, newrelfilenode,
+			YbRelationSetNewRelfileNode(relation, newrelfilenumber,
 										yb_copy_split_options,
 										true /* is_truncate */ );
 		}
@@ -6684,7 +6685,7 @@ RelationCacheInitializePhase3(void)
 		 * very short of connections. Let's not bother with an extra internal
 		 * relcache init connection for the optimization.
 		 */
-		if (MaxConnections <= 3 && ReservedBackends == 0)
+		if (MaxConnections <= 3 && SuperuserReservedConnections == 0)
 			enable_relcache_init_optimization = false;
 
 		/*

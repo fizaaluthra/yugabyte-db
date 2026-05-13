@@ -1737,7 +1737,7 @@ yb_acquire_sample_rows(Relation onerel, int elevel,
 	/* Loop over the table blocks until sample is selected */
 	while (ybSampleNextBlock(ybSample))
 	{
-		vacuum_delay_point();
+		vacuum_delay_point(true /* is_analyze */ );
 	}
 
 	/* Fetch selected rows */
@@ -1903,7 +1903,8 @@ update_attstats(Oid relid, bool inh, int natts, VacAttrStats **vacattrstats)
 		{
 			/* No, insert new tuple */
 			stup = heap_form_tuple(RelationGetDescr(sd), values, nulls);
-			CatalogTupleInsertWithInfo(sd, stup, indstate);
+			CatalogTupleInsertWithInfo(sd, stup, indstate,
+									   false /* yb_shared_insert */ );
 		}
 
 		heap_freetuple(stup);

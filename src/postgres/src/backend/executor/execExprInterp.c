@@ -4438,7 +4438,8 @@ YBExecEvalRowArrayComparison(ExprState *state, ExprEvalStep *op)
 	bool		typbyval;
 	char		typalign;
 	char	   *s;
-	bits8	   *bitmap;
+	/* YB_TODO_PG19MERGE: bits8 typedef removed by PG commit bab2f27eaaa ("Remove bits* typedefs."); was equivalent to uint8. */
+	uint8	   *bitmap;
 	int			bitmask;
 
 	/*

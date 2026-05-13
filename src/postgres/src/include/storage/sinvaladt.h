@@ -24,6 +24,10 @@
 
 #include "storage/sinval.h"
 
+/* YB_TODO_PG19MERGE: forward-decl so PGPROC * appears in this header without
+ * dragging in storage/proc.h. */
+typedef struct PGPROC PGPROC;
+
 /*
  * prototypes for functions in sinvaladt.c
  */

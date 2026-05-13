@@ -59,6 +59,8 @@
 #include "catalog/pg_yb_tablegroup.h"
 #include "commands/defrem.h"
 #include "executor/spi.h"
+#include "storage/fd.h"				/* for BasicOpenFile */
+#include "storage/procnumber.h"		/* for ProcNumber, INVALID_PROC_NUMBER */
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
@@ -535,11 +537,11 @@ YbGetBackendOidFromRelPersistence(char relpersistence)
  *		True iff there is an existing file of the same name for this relation.
  */
 bool
-DoesRelFileExist(const RelFileNodeBackend *rnode)
+DoesRelFileExist(const RelFileLocatorBackend *rnode)
 {
 	bool		collides;
-	char	   *rpath = relpath(*rnode, MAIN_FORKNUM);
-	int			fd = BasicOpenFile(rpath, O_RDONLY | PG_BINARY);
+	RelPathStr	rpath = relpath(*rnode, MAIN_FORKNUM);
+	int			fd = BasicOpenFile(rpath.str, O_RDONLY | PG_BINARY);
 
 	if (fd >= 0)
 	{
@@ -563,7 +565,6 @@ DoesRelFileExist(const RelFileNodeBackend *rnode)
 		collides = false;
 	}
 
-	pfree(rpath);
 	return collides;
 }
 
@@ -762,7 +763,7 @@ YbGetAllRelfilenodes()
 		yb_is_calling_internal_sql_for_ddl = saved_yb_is_calling_internal_sql_for_ddl;
 		if (spirc != SPI_OK_SELECT)
 			elog(ERROR, "failed to get relfilenode tuple");
-		YBC_LOG_INFO("SPI_processed = %lu", SPI_processed);
+		YBC_LOG_INFO("SPI_processed = %llu", (unsigned long long) SPI_processed);
 	}
 	PG_CATCH();
 	{
@@ -831,6 +832,7 @@ RelFileNumber
 GetNewRelFileNumber(Oid reltablespace, Relation pg_class, char relpersistence)
 {
 	RelFileLocatorBackend rlocator;
+	ProcNumber	procNumber;
 
 	HTAB	   *htab = NULL;
 
@@ -887,8 +889,8 @@ GetNewRelFileNumber(Oid reltablespace, Relation pg_class, char relpersistence)
 		/*
 		 * YB: also check for existing relfilenode in the pg_class catalog table.
 		 */
-	} while (DoesRelFileExist(&rnode) ||
-			 YbDoesRelfilenodeExist(htab, rnode.node.relNode));
+	} while (DoesRelFileExist(&rlocator) ||
+			 YbDoesRelfilenodeExist(htab, rlocator.locator.relNumber));
 
 	return rlocator.locator.relNumber;
 }
@@ -1016,7 +1018,7 @@ IsTableOidUnused(Oid table_oid,
 				 Relation pg_class,
 				 char relpersistence)
 {
-	RelFileNodeBackend rnode;
+	RelFileLocatorBackend rlocator;
 	Oid			oidIndex;
 	bool		collides;
 
@@ -1051,20 +1053,20 @@ IsTableOidUnused(Oid table_oid,
 		 * that properly here to make sure that any collisions based on filename
 		 * are properly detected.
 		 */
-		rnode.backend = YbGetBackendOidFromRelPersistence(relpersistence);
+		rlocator.backend = YbGetBackendOidFromRelPersistence(relpersistence);
 
 		/* This logic should match RelationInitPhysicalAddr */
-		rnode.node.spcNode = (reltablespace ?
-							  reltablespace :
-							  MyDatabaseTableSpace);
-		rnode.node.dbNode = ((rnode.node.spcNode == GLOBALTABLESPACE_OID) ?
-							 InvalidOid :
-							 MyDatabaseId);
+		rlocator.locator.spcOid = (reltablespace ?
+								   reltablespace :
+								   MyDatabaseTableSpace);
+		rlocator.locator.dbOid = ((rlocator.locator.spcOid == GLOBALTABLESPACE_OID) ?
+								  InvalidOid :
+								  MyDatabaseId);
 
-		rnode.node.relNode = table_oid;
+		rlocator.locator.relNumber = table_oid;
 
 		/* Check for existing file of same name */
-		collides = DoesRelFileExist(&rnode);
+		collides = DoesRelFileExist(&rlocator);
 	}
 
 	return !collides;

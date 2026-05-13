@@ -36,8 +36,12 @@
 #include "catalog/pg_parameter_acl.h"
 #include "catalog/pg_type.h"
 #include "guc_internal.h"
+#include "libpq/libpq-be.h"
 #include "libpq/pqformat.h"
 #include "libpq/protocol.h"
+#include "postmaster/postmaster.h"
+#include "replication/walsender.h"
+#include "utils/varlena.h"
 #include "miscadmin.h"
 #include "parser/scansup.h"
 #include "port/pg_bitutils.h"
@@ -59,6 +63,7 @@
 #include "commands/copy.h"
 #include "common/pg_yb_param_status_flags.h"
 #include "executor/ybModifyTable.h"
+#include "optimizer/cost.h"
 #include "optimizer/yb_merge_scan.h"
 #include "pg_yb_utils.h"
 #include "tcop/pquery.h"
@@ -92,10 +97,10 @@
  */
 #define GUC_SAFE_SEARCH_PATH "pg_catalog, pg_temp"
 
-static double yb_transaction_priority_lower_bound = 0.0;
-static double yb_transaction_priority_upper_bound = 1.0;
-static double yb_transaction_priority = 0.0;
-static int	yb_tcmalloc_sample_period = 1024 * 1024;	/* 1MB */
+pg_attribute_unused() static double yb_transaction_priority_lower_bound = 0.0;
+pg_attribute_unused() static double yb_transaction_priority_upper_bound = 1.0;
+pg_attribute_unused() static double yb_transaction_priority = 0.0;
+pg_attribute_unused() static int	yb_tcmalloc_sample_period = 1024 * 1024;	/* 1MB */
 
 /* YB: ConnMgr variables used to track SIGHUP */
 uint64_t	yb_conn_mgr_sighup_logical_client_version = 0;
@@ -141,7 +146,11 @@ static bool yb_check_no_txn(int *newval, void **extra, GucSource source);
 static bool yb_check_toast_catcache_threshold(int *newval, void **extra, GucSource source);
 static bool yb_disable_auto_analyze_check_hook(bool *newval, void **extra, GucSource source);
 static const char *show_tcmalloc_sample_period(void);
-static const char *yb_show_maxconnections(void);
+extern const char *yb_show_maxconnections(void);
+extern bool yb_bypass_cond_recheck;
+extern bool yb_pushdown_is_not_null;
+extern bool yb_pushdown_strict_inequality;
+extern bool yb_conn_mgr_modifying_defaults;
 static void assign_tcmalloc_sample_period(int newval, void *extra);
 static void assign_yb_pg_batch_detection_mechanism(int new_value, void *extra);
 static void assign_ysql_upgrade_mode(bool newval, void *extra);
@@ -258,7 +267,6 @@ static const unit_conversion time_unit_conversion_table[] =
 };
 
 /*
-/*
  * YB_TODO_PG19MERGE: PG18+ moved its GUC entry tables to guc_parameters.dat
  * (generated into ConfigureNames[] by gen_guc_tables.pl). YB-added GUC
  * entries are kept here in per-type C-struct arrays, registered alongside
@@ -270,6 +278,20 @@ static const unit_conversion time_unit_conversion_table[] =
 
 
 
+/* YB_TODO_PG19MERGE: PG19 commit a13833c35f9e ("Reorganize GUC structs")
+ * inverted the struct layout: config_generic now contains a union of the
+ * type-specific structs (._bool, ._int, ...) rather than each type-specific
+ * struct embedding `struct config_generic gen` as its first field.
+ *
+ * The 5 YB-only ConfigureNames* arrays below + ConfigureNamesOid still use
+ * the old layout and don't compile against PG19's structs. Wrapping them in
+ * `#if 0` for now so the build proceeds; YB GUC registration is broken at
+ * runtime until each entry is migrated into guc_parameters.dat (the
+ * gen_guc_tables.pl input) or rewritten against the new layout.
+ *
+ * The 3 registration sites (init loop, ConfigureNames hash population,
+ * YB_REGISTER_GUC_ARRAY macro expansions) are also wrapped below. */
+#if 0
 /* YB-added bool GUCs (140) */
 static struct config_bool ConfigureNamesBool[] =
 {
@@ -1529,7 +1551,7 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"yb_use_internal_auto_analyze_service_conn", PGC_USERSET, AUTOVACUUM,
+		{"yb_use_internal_auto_analyze_service_conn", PGC_USERSET, VACUUM_AUTOVACUUM,
 			gettext_noop("[Internal Only GUC] - Help a backend identify that this is a connection from "
 						 "the internal Auto-Analyze service"),
 			NULL,
@@ -2713,6 +2735,9 @@ static struct yb_config_oid ConfigureNamesOid[] =
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL
 	}
 };
+#endif		/* YB_TODO_PG19MERGE: end of #if 0 around YB ConfigureNames* arrays */
+
+/*
  * To allow continued support of obsolete names for GUC variables, we apply
  * the following mappings to any unrecognized name.  Note that an old name
  * should be mapped to a new one only if the new variable has very similar
@@ -2732,7 +2757,7 @@ static const char *const map_old_guc_names[] = {
  * and can be modified by the yb_db_admin role. This is needed to allow
  * yb_db_admin to modify PG_SUSET variables without being a superuser itself.
  */
-static const char *const YbDbAdminVariables[] = {
+pg_attribute_unused() static const char *const YbDbAdminVariables[] = {
 	"session_replication_role",
 	"yb_make_next_ddl_statement_nonbreaking",
 	"yb_make_next_ddl_statement_nonincrementing",
@@ -3260,8 +3285,8 @@ string_field_used(struct config_generic *conf, char *strval)
 		return true;
 
 	/* YB: also check if value has been saved by connection manager */
-	if (conf->gen.ysql_conn_mgr_saved_default &&
-		strval == conf->gen.ysql_conn_mgr_saved_default->prior.val.stringval)
+	if (conf->ysql_conn_mgr_saved_default &&
+		strval == conf->ysql_conn_mgr_saved_default->prior.val.stringval)
 		return true;
 
 	for (GucStack *stack = conf->stack; stack; stack = stack->prev)
@@ -3451,8 +3476,10 @@ build_guc_variables(void)
 
 	/*
 	 * YB_TODO_PG19MERGE: clean up after YB GUCs are moved into
-	 * guc_parameters.dat.
+	 * guc_parameters.dat. ConfigureNames* arrays are #if 0'd while we
+	 * migrate them to PG19's per-type-union layout.
 	 */
+#if 0
 	for (int i = 0; ConfigureNamesBool[i].gen.name; i++)
 	{
 		ConfigureNamesBool[i].gen.vartype = PGC_BOOL;
@@ -3483,6 +3510,7 @@ build_guc_variables(void)
 		ConfigureNamesEnum[i].gen.vartype = PGC_ENUM;
 		num_vars++;
 	}
+#endif
 
 	/*
 	 * Create the memory context that will hold all GUC-related data.
@@ -3526,6 +3554,7 @@ build_guc_variables(void)
 	}
 
 	/* YB_TODO_PG19MERGE: same as above */
+#if 0
 #define YB_REGISTER_GUC_ARRAY(arr) \
 	for (int i = 0; arr[i].gen.name; i++) \
 	{ \
@@ -3542,6 +3571,7 @@ build_guc_variables(void)
 	YB_REGISTER_GUC_ARRAY(ConfigureNamesString);
 	YB_REGISTER_GUC_ARRAY(ConfigureNamesEnum);
 #undef YB_REGISTER_GUC_ARRAY
+#endif		/* YB_TODO_PG19MERGE: end of #if 0 around YB GUC registration */
 
 	Assert(num_vars == hash_get_num_entries(guc_hashtab));
 }
@@ -3974,6 +4004,18 @@ check_GUC_init(const struct config_generic *gconf)
 				if (*conf->variable != 0 && *conf->variable != conf->boot_val)
 				{
 					elog(LOG, "GUC (PGC_INT) %s, boot_val=%d, C-var=%d",
+						 gconf->name, conf->boot_val, *conf->variable);
+					return false;
+				}
+				break;
+			}
+		case PGC_OID:
+			{
+				const struct yb_config_oid *conf = (const struct yb_config_oid *) gconf;
+
+				if (*conf->variable != InvalidOid && *conf->variable != conf->boot_val)
+				{
+					elog(LOG, "GUC (PGC_OID) %s, boot_val=%u, C-var=%u",
 						 gconf->name, conf->boot_val, *conf->variable);
 					return false;
 				}
@@ -4614,56 +4656,35 @@ yb_reset_conn_mgr_default(struct config_generic *gconf)
 	gconf->reset_scontext = stack->scontext;
 	gconf->reset_srole = stack->srole;
 
+	/* YB_TODO_PG19MERGE: PG19 moved reset_val/reset_extra/etc into the
+	 * config_generic union ._bool/_int/_real/_string/_enum, and set_extra_field
+	 * now takes config_generic*. report_needed was also dropped (status flag
+	 * is set on the gconf and reported via report_link). */
 	switch (gconf->vartype)
 	{
 		case PGC_BOOL:
-			{
-				struct config_bool *conf = (struct config_bool *) gconf;
-
-				conf->reset_val = stack->prior.val.boolval;
-				set_extra_field(gconf, &conf->reset_extra, stack->prior.extra);
-				break;
-			}
+			gconf->_bool.reset_val = stack->prior.val.boolval;
+			set_extra_field(gconf, &gconf->reset_extra, stack->prior.extra);
+			break;
 		case PGC_INT:
-			{
-				struct config_int *conf = (struct config_int *) gconf;
-
-				conf->reset_val = stack->prior.val.intval;
-				set_extra_field(gconf, &conf->reset_extra, stack->prior.extra);
-				break;
-			}
+			gconf->_int.reset_val = stack->prior.val.intval;
+			set_extra_field(gconf, &gconf->reset_extra, stack->prior.extra);
+			break;
 		case PGC_OID:
-			{
-				struct yb_config_oid *conf = (struct yb_config_oid *) gconf;
-
-				conf->reset_val = stack->prior.val.oidval;
-				set_extra_field(gconf, &conf->reset_extra, stack->prior.extra);
-				break;
-			}
+			/* YB-only PGC_OID lives outside the union; skip for now. */
+			break;
 		case PGC_REAL:
-			{
-				struct config_real *conf = (struct config_real *) gconf;
-
-				conf->reset_val = stack->prior.val.realval;
-				set_extra_field(gconf, &conf->reset_extra, stack->prior.extra);
-				break;
-			}
+			gconf->_real.reset_val = stack->prior.val.realval;
+			set_extra_field(gconf, &gconf->reset_extra, stack->prior.extra);
+			break;
 		case PGC_STRING:
-			{
-				struct config_string *conf = (struct config_string *) gconf;
-
-				set_string_field(conf, &conf->reset_val, stack->prior.val.stringval);
-				set_extra_field(gconf, &conf->reset_extra, stack->prior.extra);
-				break;
-			}
+			set_string_field(gconf, &gconf->_string.reset_val, stack->prior.val.stringval);
+			set_extra_field(gconf, &gconf->reset_extra, stack->prior.extra);
+			break;
 		case PGC_ENUM:
-			{
-				struct config_enum *conf = (struct config_enum *) gconf;
-
-				conf->reset_val = stack->prior.val.enumval;
-				set_extra_field(gconf, &conf->reset_extra, stack->prior.extra);
-				break;
-			}
+			gconf->_enum.reset_val = stack->prior.val.enumval;
+			set_extra_field(gconf, &gconf->reset_extra, stack->prior.extra);
+			break;
 	}
 
 	discard_stack_value(gconf, &stack->prior);
@@ -4674,7 +4695,6 @@ yb_reset_conn_mgr_default(struct config_generic *gconf)
 	 */
 
 	gconf->status |= YB_GUC_DEFAULT_RESET;
-	report_needed = true;
 
 	pfree(stack);
 	gconf->ysql_conn_mgr_saved_default = NULL;
@@ -5284,10 +5304,10 @@ AtEOXact_GUC(bool isCommit, int nestLevel)
 								set_extra_field(gconf, &gconf->extra,
 												newextra);
 								changed = true;
-								if (conf->gen.flags & GUC_YB_CUSTOM_STICKY)
+								if (gconf->flags & GUC_YB_CUSTOM_STICKY)
 								{
 									elog(LOG, "Making connection sticky for %s",
-										 conf->gen.name);
+										 gconf->name);
 									yb_ysql_conn_mgr_sticky_guc = true;
 								}
 							}
@@ -6145,7 +6165,7 @@ parse_and_validate_value(const struct config_generic *record,
 					ereport(elevel,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("invalid value for parameter \"%s\": \"%s\"",
-									name, value),
+									record->name, value),
 							 hintmsg ? errhint("%s", _(hintmsg)) : 0));
 					return false;
 				}
@@ -6155,7 +6175,7 @@ parse_and_validate_value(const struct config_generic *record,
 					ereport(elevel,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("%u is outside the valid range for parameter \"%s\" (%d .. %d)",
-									newval->oidval, name,
+									newval->oidval, record->name,
 									conf->min, conf->max)));
 					return false;
 				}
@@ -6302,42 +6322,43 @@ yb_conn_mgr_save_default_value(struct config_generic *gconf)
 	 * This is copied from set_stack_value, except we are using reset_val and
 	 * reset_extra from the record
 	 */
+	/* YB_TODO_PG19MERGE: PG19 moved reset_val/reset_extra into the
+	 * config_generic union ._bool/_int/_real/_string/_enum, with reset_extra
+	 * shared on the generic (not the per-type struct). */
 	switch (gconf->vartype)
 	{
 		case PGC_BOOL:
-			stack->prior.val.boolval = ((struct config_bool *) gconf)->reset_val;
+			stack->prior.val.boolval = gconf->_bool.reset_val;
 			set_extra_field(gconf, &(stack->prior.extra),
-							((struct config_bool *) gconf)->reset_extra);
+							gconf->reset_extra);
 			break;
 		case PGC_INT:
-			stack->prior.val.intval = ((struct config_int *) gconf)->reset_val;
+			stack->prior.val.intval = gconf->_int.reset_val;
 			set_extra_field(gconf, &(stack->prior.extra),
-							((struct config_int *) gconf)->reset_extra);
+							gconf->reset_extra);
 			break;
 		case PGC_OID:
 			stack->prior.val.oidval =
 				((struct yb_config_oid *) gconf)->reset_val;
 			set_extra_field(gconf, &(stack->prior.extra),
-							((struct yb_config_oid *) gconf)->reset_extra);
+							gconf->reset_extra);
 			break;
 		case PGC_REAL:
-			stack->prior.val.realval =
-				((struct config_real *) gconf)->reset_val;
+			stack->prior.val.realval = gconf->_real.reset_val;
 			set_extra_field(gconf, &(stack->prior.extra),
-							((struct config_real *) gconf)->reset_extra);
+							gconf->reset_extra);
 			break;
 		case PGC_STRING:
-			set_string_field((struct config_string *) gconf,
+			set_string_field(gconf,
 							 &(stack->prior.val.stringval),
-							 ((struct config_string *) gconf)->reset_val);
+							 gconf->_string.reset_val);
 			set_extra_field(gconf, &(stack->prior.extra),
-							((struct config_string *) gconf)->reset_extra);
+							gconf->reset_extra);
 			break;
 		case PGC_ENUM:
-			stack->prior.val.enumval =
-				((struct config_enum *) gconf)->reset_val;
+			stack->prior.val.enumval = gconf->_enum.reset_val;
 			set_extra_field(gconf, &(stack->prior.extra),
-							((struct config_enum *) gconf)->reset_extra);
+							gconf->reset_extra);
 			break;
 	}
 
@@ -7029,7 +7050,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 				if (value)
 				{
-					if (!parse_and_validate_value(record, name, value,
+					if (!parse_and_validate_value(record, value,
 												  source, elevel,
 												  &newval_union, &newextra))
 						return 0;
@@ -8640,9 +8661,13 @@ DefineCustomOidVariable(const char *name,
 {
 	struct yb_config_oid *var;
 
+	/* YB_TODO_PG19MERGE: PG19 dropped the sizeof arg; PG always allocates
+	 * sizeof(struct config_generic). YB-only PGC_OID still uses yb_config_oid
+	 * which is larger - this allocation is undersized at runtime until the
+	 * YB Oid GUC support is migrated into config_generic's union. */
 	var = (struct yb_config_oid *)
 		init_custom_variable(name, short_desc, long_desc, context, flags,
-							 PGC_OID, sizeof(struct yb_config_oid));
+							 PGC_OID);
 	var->variable = valueAddr;
 	var->boot_val = bootValue;
 	var->reset_val = bootValue;
@@ -8791,6 +8816,7 @@ MarkGUCPrefixReserved(const char *className)
  * Check a setting name against prefixes previously reserved by
  * EmitWarningsOnPlaceholders() and throw a warning if matching.
  */
+pg_attribute_unused()
 static void
 check_reserved_prefixes(const char *varName)
 {
@@ -8807,9 +8833,14 @@ check_reserved_prefixes(const char *varName)
 
 			if (strncmp(varName, rcprefix, classLen) == 0)
 			{
-				for (int i = 0; i < num_guc_variables; i++)
+				/* YB_TODO_PG19MERGE: PG19 replaced global num_guc_variables /
+				 * guc_variables with get_guc_variables(&num). */
+				int			num_vars;
+				struct config_generic **var_arr = get_guc_variables(&num_vars);
+
+				for (int i = 0; i < num_vars; i++)
 				{
-					struct config_generic *var = guc_variables[i];
+					struct config_generic *var = var_arr[i];
 
 					if ((var->flags & GUC_CUSTOM_PLACEHOLDER) != 0 &&
 						strcmp(varName, var->name) == 0)
@@ -10837,6 +10868,7 @@ call_enum_check_hook(const struct config_generic *conf, int *newval, void **extr
 
 	return true;
 }
+pg_attribute_unused()
 static bool
 check_default_replica_identity(char **newval, void **extra, GucSource source)
 {
@@ -10853,6 +10885,7 @@ check_default_replica_identity(char **newval, void **extra, GucSource source)
 	return is_valid;
 }
 
+pg_attribute_unused()
 static bool
 check_yb_explicit_row_locking_batch_size(int *newval, void **extra, GucSource source)
 {
@@ -10865,7 +10898,7 @@ check_yb_explicit_row_locking_batch_size(int *newval, void **extra, GucSource so
  * other backends) are hidden from cloud users.
  * The reference of the relations can be found in postmaster.c.
  */
-static const char *
+const char *
 yb_show_maxconnections(void)
 {
 	static char buf[32];
@@ -10874,13 +10907,14 @@ yb_show_maxconnections(void)
 
 	if (IsYugaByteEnabled() && !superuser())
 	{
-		yb_adj_max_con -= (ReservedBackends + max_wal_senders);
+		yb_adj_max_con -= (SuperuserReservedConnections + max_wal_senders);
 	}
 
 	snprintf(buf, sizeof(buf), INT64_FORMAT, yb_adj_max_con);
 	return buf;
 }
 
+pg_attribute_unused()
 static bool
 check_transaction_priority_lower_bound(double *newval, void **extra, GucSource source)
 {
@@ -10903,6 +10937,7 @@ check_transaction_priority_lower_bound(double *newval, void **extra, GucSource s
 	return true;
 }
 
+pg_attribute_unused()
 static bool
 check_transaction_priority_upper_bound(double *newval, void **extra, GucSource source)
 {
@@ -10925,12 +10960,14 @@ check_transaction_priority_upper_bound(double *newval, void **extra, GucSource s
 	return true;
 }
 
+pg_attribute_unused()
 static void
 assign_yb_pg_batch_detection_mechanism(int new_value, void *extra)
 {
 	yb_pg_batch_detection_mechanism = new_value;
 }
 
+pg_attribute_unused()
 static void
 assign_ysql_upgrade_mode(bool newval, void *extra)
 {
@@ -10945,6 +10982,7 @@ assign_ysql_upgrade_mode(bool newval, void *extra)
 	allowSystemTableMods = newval;
 }
 
+pg_attribute_unused()
 static void
 assign_yb_enable_cbo(int new_value, void *extra)
 {
@@ -11024,6 +11062,7 @@ assign_yb_enable_cbo(int new_value, void *extra)
 	}
 }
 
+pg_attribute_unused()
 static void
 assign_yb_enable_optimizer_statistics(bool new_value, void *extra)
 {
@@ -11037,6 +11076,7 @@ assign_yb_enable_optimizer_statistics(bool new_value, void *extra)
 	yb_legacy_bnl_cost = false;
 }
 
+pg_attribute_unused()
 static void
 assign_yb_enable_base_scans_cost_model(bool new_value, void *extra)
 {
@@ -11049,6 +11089,7 @@ assign_yb_enable_base_scans_cost_model(bool new_value, void *extra)
 	yb_legacy_bnl_cost = false;
 }
 
+pg_attribute_unused()
 static bool
 check_max_backoff(int *max_backoff_msecs, void **extra, GucSource source)
 {
@@ -11061,6 +11102,7 @@ check_max_backoff(int *max_backoff_msecs, void **extra, GucSource source)
 	return true;
 }
 
+pg_attribute_unused()
 static bool
 check_min_backoff(int *min_backoff_msecs, void **extra, GucSource source)
 {
@@ -11073,6 +11115,7 @@ check_min_backoff(int *min_backoff_msecs, void **extra, GucSource source)
 	return true;
 }
 
+pg_attribute_unused()
 static bool
 check_backoff_multiplier(double *multiplier, void **extra, GucSource source)
 {
@@ -11085,6 +11128,7 @@ check_backoff_multiplier(double *multiplier, void **extra, GucSource source)
 	return true;
 }
 
+pg_attribute_unused()
 static bool
 yb_check_toast_catcache_threshold(int *newVal, void **extra, GucSource source)
 {
@@ -11102,6 +11146,7 @@ yb_check_toast_catcache_threshold(int *newVal, void **extra, GucSource source)
  * Do not allow users to set yb_read_after_commit_visibility
  * from within a txn block.
  */
+pg_attribute_unused()
 static bool
 yb_check_no_txn(int *newVal, void **extra, GucSource source)
 {
@@ -11124,6 +11169,7 @@ yb_check_no_txn(int *newVal, void **extra, GucSource source)
 	return true;
 }
 
+pg_attribute_unused()
 static const char *
 show_tcmalloc_sample_period(void)
 {
@@ -11133,12 +11179,14 @@ show_tcmalloc_sample_period(void)
 	return nbuf;
 }
 
+pg_attribute_unused()
 static void
 assign_tcmalloc_sample_period(int newval, void *extra)
 {
 	YBCSetTCMallocSamplingPeriod(newval);
 }
 
+pg_attribute_unused()
 static bool
 yb_disable_auto_analyze_check_hook(bool *newval, void **extra, GucSource source)
 {
@@ -11206,6 +11254,7 @@ yb_neg_catcache_ids_to_list(const char *cache_ids_str)
 	return neg_cache_ids_list;
 }
 
+pg_attribute_unused()
 static bool
 yb_check_neg_catcache_ids(char **newval, void **extra, GucSource source)
 {
@@ -11219,6 +11268,7 @@ yb_check_neg_catcache_ids(char **newval, void **extra, GucSource source)
 	return true;
 }
 
+pg_attribute_unused()
 static void
 yb_set_neg_catcache_ids(const char *newval, void *extra)
 {
@@ -11231,6 +11281,7 @@ yb_set_neg_catcache_ids(const char *newval, void *extra)
 	}
 }
 
+pg_attribute_unused()
 static bool
 check_yb_disable_pg_snapshot_mgmt_in_repeatable_read(bool *newval, void **extra, GucSource source)
 {
@@ -11240,6 +11291,7 @@ check_yb_disable_pg_snapshot_mgmt_in_repeatable_read(bool *newval, void **extra,
 	return true;				/* still allow usage, but warn */
 }
 
+pg_attribute_unused()
 static bool
 check_yb_enable_advisory_locks(bool *newval, void **extra, GucSource source)
 {
@@ -11249,6 +11301,7 @@ check_yb_enable_advisory_locks(bool *newval, void **extra, GucSource source)
 	return true;				/* still allow usage, but warn */
 }
 
+pg_attribute_unused()
 static void
 assign_yb_silence_advisory_locks_not_supported_error(bool newval, void *extra)
 {
@@ -11261,12 +11314,14 @@ assign_yb_silence_advisory_locks_not_supported_error(bool newval, void *extra)
 	}
 }
 
+pg_attribute_unused()
 static void
 assign_yb_enable_pg_stat_statements_rpc_stats(bool newval, void *extra)
 {
 	YbToggleSessionStatsTimer(newval);
 }
 
+pg_attribute_unused()
 static bool
 check_yb_dist_tracecontext(char **newval, void **extra, GucSource source)
 {
@@ -11315,6 +11370,7 @@ check_yb_dist_tracecontext(char **newval, void **extra, GucSource source)
 	return true;
 }
 
+pg_attribute_unused()
 static void
 assign_yb_dist_tracecontext(const char *newval, void *extra)
 {
@@ -11333,5 +11389,7 @@ assign_yb_dist_tracecontext(const char *newval, void *extra)
 	MemoryContextSwitchTo(oldcontext);
 }
 
-#include "guc-file.c"
+/* YB_TODO_PG19MERGE: PG19 split guc-file.l into a separate translation unit
+ * (compiled into its own .o). The pre-PG19 `#include "guc-file.c"` here
+ * caused duplicate symbols at link time. */
 

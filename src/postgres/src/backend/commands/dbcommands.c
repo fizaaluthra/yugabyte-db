@@ -769,7 +769,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	/* yb variables */
 	DefElem    *dcolocated = NULL;
 	DefElem    *dclonetime = NULL;
-	DefElem   **default_options[] = {&dtablespacename};
+	DefElem   **default_options[] = {&tablespacenameEl};
 	bool		dbcolocated = false;
 	int64		dbclonetime = 0;
 
@@ -1118,7 +1118,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 							"is_template option is not yet supported"),
 					 errhint("Please report the issue on "
 							 "https://github.com/YugaByte/yugabyte-db/issues."),
-					 parser_errposition(pstate, distemplate->location)));
+					 parser_errposition(pstate, istemplateEl->location)));
 
 		if (encoding >= 0 && encoding != PG_UTF8)
 			ereport(YBUnsupportedFeatureSignalLevel(),
@@ -1127,7 +1127,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 							"option is not yet supported"),
 					 errhint("Please report the issue on "
 							 "https://github.com/yugabyte/yugabyte-db/issues."),
-					 parser_errposition(pstate, dencoding->location)));
+					 parser_errposition(pstate, encodingEl->location)));
 	}
 
 	/*

@@ -52,6 +52,7 @@
 
 /* YB includes */
 #include "funcapi.h"
+#include "pg_yb_utils.h"
 
 
 /* fn_extra cache entry for one of the range I/O functions */

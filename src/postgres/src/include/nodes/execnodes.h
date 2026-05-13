@@ -42,6 +42,7 @@
 #include "utils/typcache.h"
 
 /* YB includes */
+#include "nodes/ybtidbitmap.h"		/* for YbTIDBitmap, YbTBMIterator, YbTBMIterateResult */
 #include "yb/yql/pggate/ybc_pg_typedefs.h"
 
 

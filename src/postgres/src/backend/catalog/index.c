@@ -1086,7 +1086,7 @@ index_create(Relation heapRelation,
 					   tableSpaceId,
 					   YbGetRelfileNodeId(indexRelation),
 					   InvalidOid /* oldRelfileNodeId */ ,
-					   classObjectId);
+					   opclassIds);
 	}
 
 	/*
@@ -3446,8 +3446,8 @@ yb_index_backfill(Relation heapRelation,
 	 * sanity checks
 	 */
 	Assert(RelationIsValid(indexRelation));
-	Assert(PointerIsValid(indexRelation->rd_indam));
-	Assert(PointerIsValid(indexRelation->rd_indam->yb_ambackfill));
+	Assert(indexRelation->rd_indam != NULL);
+	Assert(indexRelation->rd_indam->yb_ambackfill != NULL);
 
 	ereport(DEBUG1,
 			(errmsg("backfilling index \"%s\" on table \"%s\"",

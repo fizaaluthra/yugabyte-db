@@ -46,8 +46,11 @@
 #include "commands/event_trigger.h"
 #include "commands/tablespace.h"
 #include "commands/trigger.h"
+#include "commands/explain.h"
+#include "commands/explain_state.h"
 #include "commands/user.h"
 #include "commands/vacuum.h"
+#include "commands/variable.h"
 #include "common/file_utils.h"
 #include "common/scram-common.h"
 #include "jit/jit.h"
@@ -89,6 +92,7 @@
 #include "storage/procnumber.h"
 #include "storage/standby.h"
 #include "tcop/backend_startup.h"
+#include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
 #include "portability/instr_time.h"
 #include "tsearch/ts_cache.h"
@@ -540,7 +544,7 @@ const struct config_enum_entry yb_sampling_algorithm_options[] = {
 	{NULL, 0, false}
 };
 
-static const struct config_enum_entry yb_cost_model_options[] = {
+pg_attribute_unused() static const struct config_enum_entry yb_cost_model_options[] = {
 	{"off", YB_COST_MODEL_OFF, false},
 	{"on", YB_COST_MODEL_ON, false},
 	{"legacy_mode", YB_COST_MODEL_LEGACY, false},
@@ -557,7 +561,7 @@ static const struct config_enum_entry yb_cost_model_options[] = {
 	{NULL, 0, false}
 };
 
-static const struct config_enum_entry yb_qpm_track_options[] =
+pg_attribute_unused() static const struct config_enum_entry yb_qpm_track_options[] =
 {
 	{"none", YB_QPM_TRACK_NONE, false},
 	{"top", YB_QPM_TRACK_TOP, false},
@@ -565,14 +569,14 @@ static const struct config_enum_entry yb_qpm_track_options[] =
 	{NULL, 0, false}
 };
 
-static const struct config_enum_entry yb_cache_replacement_algorithm_options[] =
+pg_attribute_unused() static const struct config_enum_entry yb_cache_replacement_algorithm_options[] =
 {
 	{"simple_clock_lru", YB_QPM_SIMPLE_CLOCK_LRU, false},
 	{"true_lru", YB_QPM_TRUE_LRU, false},
 	{NULL, 0, false}
 };
 
-static const struct config_enum_entry yb_qpm_plan_format_options[] =
+pg_attribute_unused() static const struct config_enum_entry yb_qpm_plan_format_options[] =
 {
 	{"text", EXPLAIN_FORMAT_TEXT, false},
 	{"xml", EXPLAIN_FORMAT_XML, false},
@@ -740,15 +744,15 @@ bool		in_hot_standby_guc;
 /* YB globals */
 int			yb_log_min_backtraces = FATAL;
 bool		yb_enable_memory_tracking = true;
-static char *yb_effective_transaction_isolation_level_string;
-static char *yb_xcluster_consistency_level_string;
-static char *yb_read_time_string;
-static char *yb_neg_catcache_ids_string;
-static bool yb_conn_mgr_modifying_defaults = false;
+pg_attribute_unused() static char *yb_effective_transaction_isolation_level_string;
+pg_attribute_unused() static char *yb_xcluster_consistency_level_string;
+pg_attribute_unused() static char *yb_read_time_string;
+pg_attribute_unused() static char *yb_neg_catcache_ids_string;
+bool		yb_conn_mgr_modifying_defaults = false;
 bool		yb_test_skip_binding_scan_keys;
-static bool yb_bypass_cond_recheck;
-static bool yb_pushdown_is_not_null;
-static bool yb_pushdown_strict_inequality;
+bool		yb_bypass_cond_recheck;
+bool		yb_pushdown_is_not_null;
+bool		yb_pushdown_strict_inequality;
 
 /*
  * set default log_min_messages to WARNING for all process types

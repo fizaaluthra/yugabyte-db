@@ -333,7 +333,7 @@ YbCleanupInvalidationStateInternal(SISeg *segP, PGPROC *proc)
 
 	LWLockAcquire(SInvalWriteLock, LW_EXCLUSIVE);
 
-	stateP = &segP->procState[proc->procNumber];
+	stateP = &segP->procState[proc->vxid.procNumber /* YB_TODO_PG19MERGE: procNumber moved into vxid */];
 
 	/* Update next local transaction ID for next holder of this proc number */
 	stateP->nextLXID = nextLocalTransactionId;
@@ -346,7 +346,7 @@ YbCleanupInvalidationStateInternal(SISeg *segP, PGPROC *proc)
 
 	for (i = segP->numProcs - 1; i >= 0; i--)
 	{
-		if (segP->pgprocnos[i] == proc->procNumber)
+		if (segP->pgprocnos[i] == proc->vxid.procNumber /* YB_TODO_PG19MERGE: procNumber moved into vxid */)
 		{
 			if (i != segP->numProcs - 1)
 				segP->pgprocnos[i] = segP->pgprocnos[segP->numProcs - 1];

@@ -2602,7 +2602,7 @@ ExecGrant_Tablegroup(InternalGrant *istmt)
 		}
 
 		/* Determine ID to do the grant as, and available grant options */
-		select_best_grantor(GetUserId(), istmt->privileges,
+		select_best_grantor(istmt->grantor, istmt->privileges,
 							old_acl, ownerId,
 							&grantorId, &avail_goptions);
 
@@ -3308,7 +3308,7 @@ pg_aclmask(ObjectType objtype, Oid object_oid, AttrNumber attnum, Oid roleid,
 			/* not reached, but keep compiler quiet */
 			return ACL_NO_RIGHTS;
 		case OBJECT_YBTABLEGROUP:
-			return pg_tablegroup_aclmask(table_oid, roleid, mask, how);
+			return pg_tablegroup_aclmask(object_oid, roleid, mask, how);
 		case OBJECT_TABLESPACE:
 			return object_aclmask(TableSpaceRelationId, object_oid, roleid, mask, how);
 		case OBJECT_FDW:
@@ -5266,7 +5266,7 @@ ReplaceRoleInInitPriv(Oid oldroleid, Oid newroleid,
 	 */
 	if (new_acl == NULL || ACL_NUM(new_acl) == 0)
 	{
-		CatalogTupleDelete(rel, &oldtuple->t_self);
+		CatalogTupleDelete(rel, oldtuple);
 	}
 	else
 	{
@@ -5402,7 +5402,7 @@ RemoveRoleFromInitPriv(Oid roleid, Oid classid, Oid objid, int32 objsubid)
 	/* If we end with an empty ACL, delete the pg_init_privs entry. */
 	if (new_acl == NULL || ACL_NUM(new_acl) == 0)
 	{
-		CatalogTupleDelete(rel, &oldtuple->t_self);
+		CatalogTupleDelete(rel, oldtuple);
 	}
 	else
 	{

@@ -40,9 +40,13 @@
 #include "catalog/pg_type_d.h"
 #include "funcapi.h"
 #include "pg_yb_utils.h"
-#ifndef HAVE_GETRUSAGE
-#include "rusagestub.h"
-#endif
+/*
+ * YB_TODO_PG19MERGE: PG commit 36b3d52459aecd4f8bc39a4604e42186c48aa9d2
+ * ("Remove configure probe for sys/resource.h and refactor.") removed both
+ * the HAVE_GETRUSAGE macro and the rusagestub.h shim. sys/resource.h is now
+ * unconditionally available, so include it directly.
+ */
+#include <sys/resource.h>
 #include "utils/builtins.h"
 #include "yb/yql/pggate/ybc_pggate.h"
 
@@ -213,7 +217,7 @@ yb_mem_usage_sql(PG_FUNCTION_ARGS)
 	char		s[1024];
 	int64		usage = MemoryContextStatsUsage(TopMemoryContext, 100);
 
-	sprintf(s, "SQL layer memory usage = %ld bytes", usage);
+	sprintf(s, "SQL layer memory usage = %lld bytes", (long long) usage);
 	PG_RETURN_TEXT_P(cstring_to_text(s));
 }
 

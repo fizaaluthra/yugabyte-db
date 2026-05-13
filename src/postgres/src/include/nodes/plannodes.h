@@ -29,14 +29,14 @@
 /*
  * YB: info used by YbMergeScanInfo.
  */
-typedef struct
+typedef struct YbSortInfo
 {
 	NodeTag		type;
 	int			numCols;		/* number of sort-key columns */
-	AttrNumber *sortColIdx;		/* their indexes in the target list */
-	Oid		   *sortOperators;	/* OIDs of operators to sort them by */
-	Oid		   *collations;		/* OIDs of collations */
-	bool	   *nullsFirst;		/* NULLS FIRST/LAST directions */
+	AttrNumber *sortColIdx pg_node_attr(array_size(numCols));		/* their indexes in the target list */
+	Oid		   *sortOperators pg_node_attr(array_size(numCols));	/* OIDs of operators to sort them by */
+	Oid		   *collations pg_node_attr(array_size(numCols));		/* OIDs of collations */
+	bool	   *nullsFirst pg_node_attr(array_size(numCols));		/* NULLS FIRST/LAST directions */
 } YbSortInfo;
 
 /*
@@ -44,7 +44,7 @@ typedef struct
  *
  * Holds info used for merge scans.
  */
-typedef struct
+typedef struct YbMergeScanInfo
 {
 	NodeTag		type;
 	List	   *saop_cols;		/* List of YbMergeScanSaopColInfo */
@@ -383,7 +383,7 @@ typedef struct ProjectSet
  * from bookkeeping operations performed by an UPDATE or an INSERT ON CONFLICT
  * DO UPDATE query.
  */
-typedef enum
+typedef enum YbSkippableEntityType
 {
 	SKIP_PRIMARY_KEY,
 	SKIP_SECONDARY_INDEX,
@@ -398,7 +398,7 @@ typedef enum
  * example entities in the index_list need not be updated, constraints in the
  * ref*_fkey_list(s) need not be checked and so on).
  */
-typedef struct
+typedef struct YbSkippableEntities
 {
 	NodeTag		type;
 
@@ -433,7 +433,11 @@ typedef struct
  */
 typedef struct YbUpdateAffectedEntities
 {
-	pg_node_attr(custom_copy_equal, custom_read_write)
+	/* YB_TODO_PG19MERGE: added no_query_jumble because the embedded
+	 * struct YbUpdateEntity / YbUpdateColInfo definitions confuse
+	 * gen_node_support.pl's auto-jumble walker (it hoists their fields
+	 * as top-level fields of YbUpdateAffectedEntities). */
+	pg_node_attr(custom_copy_equal, custom_read_write, no_query_jumble)
 
 	NodeTag		type;
 	/*
@@ -742,7 +746,7 @@ typedef struct Scan
 	Index		scanrelid;
 
 	/* YB */
-	char	   *ybScannedObjectName pg_node_attr(read_write_ignore);
+	char	   *ybScannedObjectName pg_node_attr(read_write_ignore, read_as(NULL));
 } Scan;
 
 /* ----------------
@@ -1766,7 +1770,7 @@ typedef struct Hash
 	Cardinality rows_total;
 
 	/* YB specific fields */
-	char	   *ybSkewTableName pg_node_attr(read_write_ignore);
+	char	   *ybSkewTableName pg_node_attr(read_write_ignore, read_as(NULL));
 } Hash;
 
 /* ----------------

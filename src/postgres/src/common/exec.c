@@ -417,12 +417,24 @@ pclose_check(FILE *stream)
 
 
 /*
- * YugaByte needed functionality of executing system command and reading first line of output
+ * YugaByte needed functionality of executing system command and reading first line of output.
+ *
+ * PG19 (commit 5c7038d70bb9c4d28a80b0a2051f73fafab5af3f) reworked pipe_read_line() to
+ * return a freshly allocated buffer instead of taking a caller-supplied one. Preserve
+ * the YB callers' caller-supplied-buffer contract by copying the result into `line`
+ * (truncating to maxsize - 1) and freeing the allocated buffer.
  */
 char *
 exec_pipe_read_line(char *cmd, char *line, int maxsize)
 {
-	return pipe_read_line(cmd, line, maxsize);
+	char	   *result = pipe_read_line(cmd);
+
+	if (result == NULL)
+		return NULL;
+
+	strlcpy(line, result, maxsize);
+	free(result);
+	return line;
 }
 
 /*

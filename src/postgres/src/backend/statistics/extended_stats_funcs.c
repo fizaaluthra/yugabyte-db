@@ -1675,7 +1675,8 @@ delete_pg_statistic_ext_data(Oid stxoid, bool inherited)
 
 	if (HeapTupleIsValid(oldtup))
 	{
-		CatalogTupleDelete(sed, &oldtup->t_self);
+		/* YB_TODO_PG19MERGE: YB retains HeapTuple signature for CatalogTupleDelete. */
+		CatalogTupleDelete(sed, oldtup);
 		ReleaseSysCache(oldtup);
 		result = true;
 	}

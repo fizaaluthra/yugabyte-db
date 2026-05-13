@@ -37,9 +37,11 @@
 #include "executor/execdebug.h"
 #include "executor/executor.h"
 #include "executor/nodeYbBatchedNestloop.h"
+#include "executor/instrument.h"	/* for struct NodeInstrumentation full def (YB code touches it directly) */
 #include "miscadmin.h"
 #include "utils/memutils.h"
 #include "utils/tuplesort.h"
+#include "utils/tuplestore.h"		/* for tuplestore_* (was relied on via transitive include) */
 
 
 bool		yb_bnl_enable_hashing = true;
@@ -559,7 +561,9 @@ FlushTupleHash(YbBatchedNestLoopState *bnlstate, ExprContext *econtext)
 		entry = ScanTupleHashTable(bnlstate->hashtable, &bnlstate->hashiter);
 	while (entry != NULL)
 	{
-		YbNLBucketInfo *binfo = entry->additional;
+		/* YB_TODO_PG19MERGE: PG19 moved "additional" out-of-band; use helper. */
+		YbNLBucketInfo *binfo = (YbNLBucketInfo *)
+			TupleHashEntryGetAdditional(bnlstate->hashtable, entry);
 
 		while (binfo->current != NULL)
 		{
@@ -595,11 +599,15 @@ GetNewOuterTupleHash(YbBatchedNestLoopState *bnlstate, ExprContext *econtext)
 
 	TupleHashEntry data;
 
+	/* YB_TODO_PG19MERGE: PG19 FindTupleHashEntry takes ExprState *hashexpr (not FmgrInfo *),
+	 * and dropped the trailing keyAttrs parameter. The YB BNL hash plumbing predates this
+	 * refactor; YbBuildTupleHashTableExt is stubbed with elog(ERROR), so this path won't
+	 * actually run until reworked. */
 	data = FindTupleHashEntry(ht,
 							  inner,
 							  eq,
-							  bnlstate->innerHashFunctions,
-							  bnlstate->innerAttrs);
+							  NULL /* hashexpr */,
+							  NULL /* keyColIdx */);
 	if (data == NULL)
 	{
 		/* Inner plan returned a tuple that doesn't match with anything. */
@@ -607,7 +615,8 @@ GetNewOuterTupleHash(YbBatchedNestLoopState *bnlstate, ExprContext *econtext)
 		return false;
 	}
 
-	YbNLBucketInfo *binfo = (YbNLBucketInfo *) data->additional;
+	YbNLBucketInfo *binfo = (YbNLBucketInfo *)
+		TupleHashEntryGetAdditional(ht, data);
 
 	while (binfo->current != NULL)
 	{
@@ -686,16 +695,17 @@ AddTupleToOuterBatchHash(YbBatchedNestLoopState *bnlstate,
 
 	Assert(orig_data != NULL);
 	Assert(orig_data->firstTuple != NULL);
-	MemoryContext cxt = MemoryContextSwitchTo(ht->tablecxt);
+	/* YB_TODO_PG19MERGE: ht->tablecxt renamed to ht->tuplescxt in PG19. */
+	MemoryContext cxt = MemoryContextSwitchTo(ht->tuplescxt);
 	MinimalTuple tuple;
 
+	/* YB_TODO_PG19MERGE: PG19 auto-allocates additional storage based on the table's
+	 * additionalsize; the YB BNL hash construction must set additionalsize at build
+	 * time (YbBuildTupleHashTableExt is currently stubbed). */
 	if (isnew)
-	{
-		/* We must create a new bucket. */
-		orig_data->additional = palloc0(sizeof(YbNLBucketInfo));
 		tuple = orig_data->firstTuple;
-	}
-	YbNLBucketInfo *binfo = (YbNLBucketInfo *) orig_data->additional;
+	YbNLBucketInfo *binfo = (YbNLBucketInfo *)
+		TupleHashEntryGetAdditional(ht, orig_data);
 	List	   *tl = binfo->tuples;
 
 	if (!isnew)
@@ -724,7 +734,7 @@ FreeBatchHash(YbBatchedNestLoopState *bnlstate)
 	Assert(bnlstate->hashtable != NULL);
 	bnlstate->hashiterinit = false;
 	ResetTupleHashTable(bnlstate->hashtable);
-	MemoryContextReset(bnlstate->hashtable->tablecxt);
+	MemoryContextReset(bnlstate->hashtable->tuplescxt);
 	bnlstate->current_hash_entry = NULL;
 }
 
@@ -735,7 +745,7 @@ void
 EndHash(YbBatchedNestLoopState *bnlstate)
 {
 	(void) bnlstate;
-	MemoryContextDelete(bnlstate->hashtable->tablecxt);
+	MemoryContextDelete(bnlstate->hashtable->tuplescxt);
 	return;
 }
 
@@ -1138,15 +1148,8 @@ ExecEndYbBatchedNestLoop(YbBatchedNestLoopState *bnlstate)
 	EndSorting(bnlstate);
 	LOCAL_JOIN_FN(End, bnlstate);
 
-	/*
-	 * Free the exprcontext
-	 */
-	ExecFreeExprContext(&bnlstate->js.ps);
-
-	/*
-	 * clean out the tuple table
-	 */
-	ExecClearTuple(bnlstate->js.ps.ps_ResultTupleSlot);
+	/* YB_TODO_PG19MERGE: PG19 removed ExecFreeExprContext; per-node end
+	 * routines no longer free their exprcontext or clear tuple tables. */
 
 	/*
 	 * close down subplans

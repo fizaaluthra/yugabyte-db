@@ -2146,7 +2146,8 @@ expression_tree_walker_impl(Node *node,
 			/* primitive node types with no expression subnodes */
 			break;
 		case T_YbBatchedExpr:
-			return walker(((YbBatchedExpr *) node)->orig_expr, context);
+			/* YB_TODO_PG19MERGE: walker now takes Node *; cast Expr * through. */
+			return walker((Node *) ((YbBatchedExpr *) node)->orig_expr, context);
 		case T_WithCheckOption:
 			return WALK(((WithCheckOption *) node)->qual);
 		case T_Aggref:

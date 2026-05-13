@@ -222,7 +222,10 @@ repack_setup_logical_decoding(Oid relid)
 	 */
 	snprintf(NameStr(slotname), NAMEDATALEN, "repack_%d", MyProcPid);
 	ReplicationSlotCreate(NameStr(slotname), true, RS_TEMPORARY, false, true,
-						  false, false);
+						  false, false,
+						  NULL /* yb_plugin_name */ , CRS_NOEXPORT_SNAPSHOT,
+						  NULL /* yb_consistent_snapshot_time */ ,
+						  CRS_SEQUENCE, YB_CRS_TRANSACTION);
 
 	EnsureLogicalDecodingEnabled();
 

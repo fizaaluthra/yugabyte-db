@@ -2446,10 +2446,12 @@ yb_get_ecs_for_query_uniqkeys(PlannerInfo *root)
 		sortkey = (Expr *) get_sortgroupclause_expr(sortcl,
 													root->processed_tlist);
 		Assert(OidIsValid(sortcl->sortop));
+		/* YB_TODO_PG19MERGE: PG19 dropped the nullable_relids arg and added
+		 * reverse_sort; PathKey now carries pk_cmptype rather than pk_strategy. */
 		pathkey = make_pathkey_from_sortop(root,
 										   sortkey,
-										   root->nullable_baserels,
 										   sortcl->sortop,
+										   false /* reverse_sort */,
 										   sortcl->nulls_first,
 										   sortcl->tleSortGroupRef,
 										   false);

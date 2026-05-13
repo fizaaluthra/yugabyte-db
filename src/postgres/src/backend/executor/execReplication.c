@@ -736,7 +736,8 @@ FindConflictTuple(ResultRelInfo *resultRelInfo, EState *estate,
 retry:
 	if (ExecCheckIndexConstraints(resultRelInfo, slot, estate,
 								  &conflictTid, &slot->tts_tid,
-								  list_make1_oid(conflictindex)))
+								  list_make1_oid(conflictindex),
+								  NULL /* YB_TODO_PG19MERGE: ybConflictSlot */))
 	{
 		if (*conflictslot)
 			ExecDropSingleTupleTableSlot(*conflictslot);

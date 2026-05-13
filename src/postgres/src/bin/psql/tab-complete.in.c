@@ -4395,9 +4395,10 @@ match_previous_words(int pattern_id,
 
 /* DROP */
 	/* Complete DROP object with CASCADE / RESTRICT */
+	/* YB_TODO_PG19MERGE: keep mid-string YB comment off its own line so
+	 * gen_tabcomplete.pl can collapse this Matches() call cleanly. */
 	else if (Matches("DROP",
-					 "TABLEGROUP|"	/* YB */
-					 "COLLATION|CONVERSION|DOMAIN|EXTENSION|LANGUAGE|PUBLICATION|SCHEMA|SEQUENCE|SERVER|SUBSCRIPTION|STATISTICS|TABLE|TYPE|VIEW",
+					 "TABLEGROUP|COLLATION|CONVERSION|DOMAIN|EXTENSION|LANGUAGE|PUBLICATION|SCHEMA|SEQUENCE|SERVER|SUBSCRIPTION|STATISTICS|TABLE|TYPE|VIEW",
 					 MatchAny) ||
 			 Matches("DROP", "ACCESS", "METHOD", MatchAny) ||
 			 Matches("DROP", "EVENT", "TRIGGER", MatchAny) ||
@@ -5679,7 +5680,8 @@ match_previous_words(int pattern_id,
 	else if (TailMatchesCS("\\dF*"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_ts_configurations);
 
-	else if (TailMatchesCS("\\dgr*"))	/* YB */
+	/* YB: \dgr* -> tablegroup list */
+	else if (TailMatchesCS("\\dgr*"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_tablegroups);
 	else if (TailMatchesCS("\\di*"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_indexes);
