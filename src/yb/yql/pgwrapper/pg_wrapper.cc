@@ -680,14 +680,9 @@ Result<string> WritePostgresConfig(const PgProcessConf& conf) {
     metricsLibs.push_back("pg_stat_statements");
   }
   metricsLibs.push_back("yb_pg_metrics");
-  /*
-   * YB_TODO_PG19MERGE: pgaudit, pg_hint_plan, and yb_xcluster_ddl_replication
-   * are not currently built in the YB PG19 tree (YB_SKIP_THIRD_PARTY_EXTENSIONS
-   * + yb_xcluster_ddl_replication is explicitly dropped from
-   * src/postgres/yb-extensions/Makefile DIRS during PG19 bringup).  Postgres
-   * refuses to start with "could not access file" if a preload library is
-   * missing.  Re-add once contrib + yb-extensions are wired up.
-   */
+  // YB_TODO_PG19MERGE: pgaudit, pg_hint_plan, and yb_xcluster_ddl_replication
+  // are not currently built in the YB PG19 tree.
+  // Uncomment these lines when they are available.
   // metricsLibs.push_back("pgaudit");
   // metricsLibs.push_back("pg_hint_plan");
   // metricsLibs.push_back("yb_xcluster_ddl_replication");
