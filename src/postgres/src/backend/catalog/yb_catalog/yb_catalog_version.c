@@ -822,7 +822,8 @@ YbDeleteMasterDBInvalidationMessagesTableEntries(Oid db_oid)
 			elog(ERROR, "SPI_execute_plan failed for \"%s\"", query);
 		ereport((*YBCGetGFlags()->log_ysql_catalog_versions ? LOG : DEBUG1),
 				(errmsg("%s: deleted %llu invalidation messages for database %u",
-						__func__, SPI_processed, db_oid)));
+						__func__, (unsigned long long) SPI_processed,
+						db_oid)));
 	}
 	PG_CATCH();
 	{
