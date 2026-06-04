@@ -558,7 +558,7 @@ YbTidNext(TidScanState *node)
 		{
 			TupleDesc	tupdesc = CreateTemplateTupleDesc(list_length(node->yb_tss_aggrefs));
 
-			ExecInitScanTupleSlot(node->ss.ps.state, &node->ss, tupdesc, &TTSOpsVirtual, 0 /* flags */);
+			ExecInitScanTupleSlot(node->ss.ps.state, &node->ss, tupdesc, &TTSOpsVirtual, 0 /* flags */ );
 			slot = node->ss.ss_ScanTupleSlot;
 		}
 

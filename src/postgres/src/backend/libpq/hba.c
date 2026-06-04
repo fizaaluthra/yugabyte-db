@@ -1009,7 +1009,7 @@ yb_tokenize_line(const char *filename,
 		List	   *current_field;
 
 		current_field = next_field_expand(filename, &lineptr,
-										  elevel, 0 /* depth */, &err_msg);
+										  elevel, 0 /* depth */ , &err_msg);
 		/* add field to line, unless we are at EOL or comment start */
 		if (current_field != NIL)
 			current_line = lappend(current_line, current_field);

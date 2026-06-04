@@ -7686,8 +7686,8 @@ YbATCopyPrimaryKeyToCreateStmt(Relation rel, Relation pg_constraint,
 					 */
 					AttrMap    *att_map = build_attrmap_by_name(RelationGetDescr(rel),
 																RelationGetDescr(rel),
-																false /* missing_ok */,
-																false /* yb_ignore_type_mismatch */);
+																false,
+																false /* yb_ignore_type_mismatch */ );
 
 					Relation	idx_rel =
 						index_open(con_form->conindid, AccessShareLock);

@@ -643,7 +643,7 @@ double		log_statement_sample_rate = 1.0;
 double		log_xact_sample_rate = 0;
 char	   *backtrace_functions;
 
-int			temp_file_limit = 1024 * 1024;
+int			temp_file_limit = 1024 * 1024; /* YB: changed default */
 
 int			num_temp_buffers = 1024;
 
