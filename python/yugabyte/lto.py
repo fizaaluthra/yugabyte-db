@@ -574,7 +574,37 @@ class LinkHelper:
             self.new_args.extend([
                 '-L%s' % os.path.join(self.build_root, 'postgres', 'lib'),
                 '-l:libpgport.a',
-                '-l:libpq.a'
+                '-l:libpq.a',
+                # libpq.a's frontend objects (fe-connect.c, fe-exec.c) reference the PLAIN
+                # pg_encoding_to_char / pg_char_to_encoding. Per pg_wchar.h, libpgcommon.a and
+                # libpgcommon_srv.a only export the *_private names (built with
+                # USE_PRIVATE_ENCODING_FUNCS); the plain names are in libpgcommon_shlib.a,
+                # built without that define -- the lib libpq.so itself bundles (libpq Makefile
+                # SHLIB_LINK_INTERNAL = -lpgcommon_shlib). The bare libpq.a here drops it, so
+                # add libpgcommon_shlib.a. On-demand (-l:); its plain names don't collide with
+                # the server's _private ones.
+                '-l:libpgcommon_shlib.a',
+                # USE_PRIVATE_ENCODING_FUNCS renames only 5 functions; the encoding tables and
+                # helpers (pg_enc2name_tbl, pg_enc2gettext_tbl, pg_valid_client_encoding,
+                # is_encoding_supported_by_icu, get_encoding_name_for_icu) keep the same name in
+                # both builds. So encnames_shlib.o (pulled above for libpq's plain funcs) and the
+                # server's encnames_srv.o both define them -> duplicate symbols. Both objects are
+                # needed (plain vs _private function variants), and the shared definitions are
+                # byte-identical (same encnames.c), so let the linker keep one copy. Scoped to
+                # this server LTO link (libpq frontend + backend pgcommon flattened together).
+                '-Wl,--allow-multiple-definition',
+            ])
+            # PG16+ splits pqsignal() into a frontend build (pqsignal_fe, in libpgport.a
+            # above) and a server build (pqsignal_be, in libpgport_srv.a). Backend code
+            # linked into yb-server (e.g. fd.c's OpenPipeStream) references pqsignal_be, which
+            # only exists in the server variant, so the server libpgport must also be on the
+            # LTO link -- the same reason add_pgcommon_srv_library() pulls in libpgcommon_srv.a.
+            # libpgport_srv.a is not installed to postgres/lib, so reference its build dir.
+            # Linked on-demand (-l:), so only server-only objects (pqsignal_srv.o) are pulled.
+            self.new_args.extend([
+                '-L%s' % os.path.join(
+                    self.build_root, 'postgres_build', 'src', 'port'),
+                '-l:libpgport_srv.a',
             ])
 
         self.new_args.extend([
