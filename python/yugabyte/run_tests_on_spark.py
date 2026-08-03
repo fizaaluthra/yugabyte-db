@@ -91,7 +91,7 @@ TEST_TIMEOUT_UPPER_BOUND_SEC = 35 * 60
 
 # Default for maximum test failure threshold, after which the Spark job will be aborted
 # YB_TODO_PG19MERGE: bring this back down to 200 before merging into master.
-DEFAULT_MAX_NUM_TEST_FAILURES = 1000
+DEFAULT_MAX_NUM_TEST_FAILURES = 10000
 
 # Default for test artifact size limit to copy back to the build host, in bytes.
 MAX_ARTIFACT_SIZE_BYTES = 100 * 1024 * 1024
