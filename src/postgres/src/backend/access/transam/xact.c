@@ -2459,8 +2459,34 @@ StartTransaction(void)
 }
 
 /*
+ * Recreate transaction resource owners for s and its ancestors, parents before
+ * children. Sets TopTransactionResourceOwner when the root is created.
+ * Returns the resource owner created for s.
+ */
+static ResourceOwner
+YbRecreateTransactionResourceOwners(TransactionState s)
+{
+	ResourceOwner parent = NULL;
+	Assert(s != NULL);
+
+	if (s->parent == NULL)
+	{
+		s->curTransactionOwner = ResourceOwnerCreate(parent, "TopTransaction");
+		TopTransactionResourceOwner = s->curTransactionOwner;
+	}
+	else
+	{
+		parent = YbRecreateTransactionResourceOwners(s->parent);
+		s->curTransactionOwner = ResourceOwnerCreate(parent, "SubTransaction");
+	}
+
+	return s->curTransactionOwner;
+}
+
+/*
  * Recreates the state required to restart the write that received a transaction
  * conflict.
+ * Callers must invoke this function only after yb_clear_portal_before_restart.
  */
 void
 YBCRestartWriteTransaction()
@@ -2495,6 +2521,24 @@ YBCRestartWriteTransaction()
 		ResourceOwnerRelease(TopTransactionResourceOwner,
 							 RESOURCE_RELEASE_AFTER_LOCKS,
 							 false, true);
+
+		/*
+		 * When ResourceOwnerRelease() is invoked, a ResourceOwner is marked as
+		 * 'releasing' and further use is rejected. Vanilla postgres expects the
+		 * owners themselves to be deleted soon after. To support query layer
+		 * retries, delete (the now empty) and recreate the
+		 * TopTransactionResourceOwner stack so that owners can acquire
+		 * resources during the retry.
+		 * Marking globals as NULL guards against stale pointer accesses if
+		 * resource owner recreation fails for any reason.
+		 */
+		CurrentResourceOwner = NULL;
+		ResourceOwnerDelete(TopTransactionResourceOwner);
+		TopTransactionResourceOwner = NULL;
+		CurTransactionResourceOwner = NULL;
+
+		CurrentResourceOwner = YbRecreateTransactionResourceOwners(CurrentTransactionState);
+		CurTransactionResourceOwner = CurrentResourceOwner;
 	}
 	AtEOXact_SPI(false /* isCommit */ );
 	AtEOXact_Snapshot(false, true); /* and release the transaction's snapshots */
