@@ -1354,8 +1354,9 @@ pqConnectOptions2(PGconn *conn)
 			free(ch->host);
 
 /* YugaByte use localhost instead of local socket */
-#pragma push_macro("HAVE_UNIX_SOCKETS")
-#undef HAVE_UNIX_SOCKETS
+#pragma push_macro("DEFAULT_PGSOCKET_DIR")
+#undef DEFAULT_PGSOCKET_DIR
+#define DEFAULT_PGSOCKET_DIR ""
 
 			/*
 			 * This bit selects the default host location.  If you change
@@ -1372,7 +1373,7 @@ pqConnectOptions2(PGconn *conn)
 				ch->type = CHT_HOST_NAME;
 			}
 
-#pragma pop_macro("HAVE_UNIX_SOCKETS")
+#pragma pop_macro("DEFAULT_PGSOCKET_DIR")
 /* YugaByte end */
 
 			if (ch->host == NULL)
