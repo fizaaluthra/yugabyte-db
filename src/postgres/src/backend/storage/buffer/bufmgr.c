@@ -72,7 +72,7 @@
 #include "utils/wait_event.h"
 
 /* YB includes */
-#include "commands/sequence_xlog.h"
+#include "commands/sequence.h"
 #include "pg_yb_utils.h"
 
 
@@ -885,9 +885,6 @@ ReadBuffer(Relation reln, BlockNumber blockNum)
 	return ReadBufferExtended(reln, MAIN_FORKNUM, blockNum, RBM_NORMAL, NULL);
 }
 
-/* YB: Only here for sequence support */
-extern HeapTuple YBReadSequenceTuple(Relation seqrel);
-
 /*
  * ReadBufferExtended -- returns a buffer containing the requested
  *		block of the requested relation.  If the blknum
@@ -1387,8 +1384,6 @@ YbReadSequenceBuffer(ReadBuffersOperation *operation, BlockNumber blockNum,
 	bool		found;
 	Buffer		buf;
 	HeapTuple	seqtuple;
-	Page		dp;
-	OffsetNumber off;
 
 	buf = PinBufferForBlock(operation->rel, operation->smgr,
 							operation->persistence, operation->forknum,
@@ -1399,25 +1394,7 @@ YbReadSequenceBuffer(ReadBuffersOperation *operation, BlockNumber blockNum,
 
 	/* Zero, exclusively lock and mark the buffer valid, then fill it. */
 	ZeroAndLockBuffer(buf, RBM_ZERO_AND_LOCK, found);
-	dp = BufferGetPage(buf);
-	PageInit(dp, BLCKSZ, sizeof(sequence_magic));
-
-	/*
-	 * Set the magic number that a real sequence page would have, or
-	 * read_seq_tuple() rejects this page.
-	 *
-	 * YB_TODO_PG19MERGE: this page has no real LSN, so anything that asks for
-	 * a sequence's LSN (pg_get_sequence_data) just gets zero. Replicating
-	 * sequences needs a real value.
-	 */
-	((sequence_magic *) PageGetSpecialPointer(dp))->magic = SEQ_MAGIC;
-	PageSetAllVisible(dp);
-	off = PageAddItemExtended(dp, (const void *) seqtuple->t_data, seqtuple->t_len,
-							  InvalidOffsetNumber, PAI_IS_HEAP);
-	if (off == InvalidOffsetNumber)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("failed to add sequence tuple to page")));
+	YbFillSequencePage(BufferGetPage(buf), seqtuple);
 	LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 
 	return buf;

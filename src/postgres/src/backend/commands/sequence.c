@@ -466,6 +466,58 @@ fill_seq_fork_with_data(Relation rel, HeapTuple tuple, ForkNumber forkNum)
 }
 
 /*
+ * YB: Fill a sequence's page from its DocDB tuple.
+ *
+ * A YB sequence has no file; its state lives in DocDB. When a backend reads a
+ * sequence through the buffer manager, the buffer manager builds the page here
+ * instead. PG code reads it as a real sequence page, so it is laid out the way
+ * fill_seq_fork_with_data() writes one: the sequence magic number, and the
+ * tuple converted from the in-memory (t_datum) header that heap_form_tuple()
+ * produces to the on-page (t_heap) header that htup_details.h requires of any
+ * tuple stored on a page.
+ *
+ * Unlike fill_seq_fork_with_data(), this only fills the page: no relation
+ * extension, MarkBufferDirty() or WAL. The page is a read-only copy of the
+ * DocDB state, so its buffer must never be dirtied; there is no file to write
+ * it to.
+ *
+ * YB_TODO_PG19MERGE: this page has no real LSN, so anything that asks for a
+ * sequence's LSN (pg_get_sequence_data) just gets zero. Replicating sequences
+ * needs a real value.
+ */
+void
+YbFillSequencePage(Page page, HeapTuple tuple)
+{
+	sequence_magic *sm;
+	OffsetNumber offnum;
+
+	PageInit(page, BLCKSZ, sizeof(sequence_magic));
+	sm = (sequence_magic *) PageGetSpecialPointer(page);
+	sm->magic = SEQ_MAGIC;
+
+	HeapTupleHeaderSetXmin(tuple->t_data, FrozenTransactionId);
+	HeapTupleHeaderSetXminFrozen(tuple->t_data);
+	HeapTupleHeaderSetCmin(tuple->t_data, FirstCommandId);
+	HeapTupleHeaderSetXmax(tuple->t_data, InvalidTransactionId);
+	tuple->t_data->t_infomask |= HEAP_XMAX_INVALID;
+	ItemPointerSet(&tuple->t_data->t_ctid, 0, FirstOffsetNumber);
+
+	offnum = PageAddItemExtended(page, (const void *) tuple->t_data,
+								 tuple->t_len, InvalidOffsetNumber,
+								 PAI_IS_HEAP);
+	if (offnum == InvalidOffsetNumber)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("failed to add sequence tuple to page")));
+
+	/*
+	 * The tuple has a frozen xmin and no xmax, so it is visible to every
+	 * snapshot; this lets heap scans skip per-tuple visibility checks.
+	 */
+	PageSetAllVisible(page);
+}
+
+/*
  * AlterSequence
  *
  * Modify the definition of a sequence relation
