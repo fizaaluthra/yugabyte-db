@@ -115,7 +115,7 @@ main(int argc, char **argv)
 	if (user_opts.yb_working_dir != NULL)
 	{
 		if (chdir(user_opts.yb_working_dir) != 0)
-			pg_fatal("could not change to working directory \"%s\": %s\n",
+			pg_fatal("could not change to working directory \"%s\": %s",
 					 user_opts.yb_working_dir, strerror(errno));
 	}
 
@@ -176,6 +176,9 @@ main(int argc, char **argv)
 	setup(argv[0]);
 
 	output_check_banner();
+
+	/* YB: ahead of every check, so the output is not parsed as a check result */
+	yb_generate_schema_dump();
 
 	/*
 	 * YB: Socket directories are explicitly set from input arguments.
@@ -433,16 +436,16 @@ make_outputdirs(char *pgdata)
 			S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH;
 
 		if (chmod(pgdata, yb_dir_mode) != 0)
-			pg_fatal("could not set permissions on directory \"%s\": %m\n",
+			pg_fatal("could not set permissions on directory \"%s\": %m",
 					 pgdata);
 		if (chmod(log_opts.rootdir, yb_dir_mode) != 0)
-			pg_fatal("could not set permissions on directory \"%s\": %m\n",
+			pg_fatal("could not set permissions on directory \"%s\": %m",
 					 log_opts.rootdir);
 		if (chmod(log_opts.basedir, yb_dir_mode) != 0)
-			pg_fatal("could not set permissions on directory \"%s\": %m\n",
+			pg_fatal("could not set permissions on directory \"%s\": %m",
 					 log_opts.basedir);
 		if (chmod(log_opts.logdir, yb_dir_mode) != 0)
-			pg_fatal("could not set permissions on directory \"%s\": %m\n",
+			pg_fatal("could not set permissions on directory \"%s\": %m",
 					 log_opts.logdir);
 	}
 
@@ -1265,8 +1268,8 @@ yb_execute_extension_updates()
 			res = PQexec(conn, query);
 			if (!res || PQresultStatus(res) != PGRES_COMMAND_OK)
 			{
-				pg_log(PG_REPORT, "fatal\n");
-				pg_fatal("Unable to update extension %s\n\n", extension_name);
+				pg_log(PG_REPORT, "fatal");
+				pg_fatal("Unable to update extension %s", extension_name);
 			}
 		}
 
